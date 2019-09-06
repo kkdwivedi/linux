@@ -209,7 +209,23 @@ static inline int fair_policy(int policy)
 
 static inline int rt_policy(int policy)
 {
-	return policy == SCHED_FIFO || policy == SCHED_RR;
+	if (policy == SCHED_FIFO || policy == SCHED_RR || policy == SCHED_MICROQ)
+		return 1;
+	return 0;
+}
+
+static inline int rt_fiforr_policy(int policy)
+{
+	if (policy == SCHED_FIFO || policy == SCHED_RR)
+		return 1;
+	return 0;
+}
+
+static inline int microq_policy(int policy)
+{
+	if (policy == SCHED_MICROQ)
+		return 1;
+	return 0;
 }
 
 static inline int dl_policy(int policy)
@@ -231,6 +247,11 @@ static inline int task_has_idle_policy(struct task_struct *p)
 static inline int task_has_rt_policy(struct task_struct *p)
 {
 	return rt_policy(p->policy);
+}
+
+static inline int task_has_rt_fiforr_policy(struct task_struct *p)
+{
+	return rt_fiforr_policy(p->policy);
 }
 
 static inline int task_has_dl_policy(struct task_struct *p)
@@ -936,6 +957,37 @@ static inline long se_runnable(struct sched_entity *se)
 
 #endif /* !CONFIG_FAIR_GROUP_SCHED */
 
+#ifdef CONFIG_SCHED_CLASS_MICROQ
+
+/*
+ * If combined with a valid period, runtime == MICROQ_BANDWIDTH_UNDEFINED also
+ * indicates unlimited runtime
+ */
+#define MICROQ_BANDWIDTH_UNDEFINED (-1)
+#define MICROQ_MIN_RUNTIME (1000)
+#define MICROQ_MIN_PERIOD (2000)
+
+#define DEFAULT_MICROQ_RT_PRIORITY (0)
+
+/* Micro Quanta class */
+struct microq_rq {
+	struct list_head tasks;
+	unsigned int microq_nr_running;
+	int last_push_failed;
+	int microq_runtime;
+	int microq_period;
+	int microq_throttled;
+	u64 microq_time;
+	u64 microq_target_time;
+	struct hrtimer microq_period_timer; /* Nests inside the rq lock */
+	u64 quanta_start;
+	u64 delta_exec_uncharged;
+	u64 delta_exec_total;
+	unsigned int period_count;
+	unsigned int periods_to_jiffies;
+};
+#endif
+
 #ifdef CONFIG_SMP
 /*
  * XXX we want to get rid of these helpers and use the full load resolution.
@@ -1140,6 +1192,9 @@ struct rq {
 #endif
 
 	struct sched_dl_entity	fair_server;
+#ifdef CONFIG_SCHED_CLASS_MICROQ
+	struct microq_rq	microq;
+#endif
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	/* list of leaf cfs_rq on this CPU: */
@@ -2540,6 +2595,7 @@ extern struct sched_class __sched_class_lowest[];
 
 extern const struct sched_class stop_sched_class;
 extern const struct sched_class dl_sched_class;
+extern const struct sched_class microq_sched_class;
 extern const struct sched_class rt_sched_class;
 extern const struct sched_class fair_sched_class;
 extern const struct sched_class idle_sched_class;
@@ -3186,6 +3242,11 @@ static inline void resched_latency_warn(int cpu, u64 latency) { }
 extern void init_cfs_rq(struct cfs_rq *cfs_rq);
 extern void init_rt_rq(struct rt_rq *rt_rq);
 extern void init_dl_rq(struct dl_rq *dl_rq);
+
+#ifdef CONFIG_SCHED_CLASS_MICROQ
+extern void print_microq_stats(struct seq_file *m, int cpu);
+extern void init_microq_rq(struct microq_rq *microq_rq);
+#endif
 
 extern void cfs_bandwidth_usage_inc(void);
 extern void cfs_bandwidth_usage_dec(void);

@@ -719,6 +719,15 @@ struct sched_dl_entity {
 #endif
 };
 
+#ifdef CONFIG_SCHED_CLASS_MICROQ
+struct sched_microq_entity {
+	struct list_head run_list;
+	int sched_period;
+	int sched_runtime;
+	unsigned int time_slice;
+};
+#endif
+
 #ifdef CONFIG_UCLAMP_TASK
 /* Number of utilization clamp buckets (shorter alias) */
 #define UCLAMP_BUCKETS CONFIG_UCLAMP_BUCKETS_COUNT
@@ -847,6 +856,9 @@ struct task_struct {
 	struct sched_dl_entity		*dl_server;
 #ifdef CONFIG_SCHED_CLASS_EXT
 	struct sched_ext_entity		scx;
+#endif
+#ifdef CONFIG_SCHED_CLASS_MICROQ
+	struct sched_microq_entity	microq;
 #endif
 	const struct sched_class	*sched_class;
 

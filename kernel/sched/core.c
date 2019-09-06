@@ -7102,6 +7102,10 @@ EXPORT_SYMBOL(default_wake_function);
 
 const struct sched_class *__setscheduler_class(int policy, int prio)
 {
+#ifdef CONFIG_SCHED_CLASS_MICROQ
+	if (microq_policy(policy))
+		return &microq_sched_class;
+#endif
 	if (dl_prio(prio))
 		return &dl_sched_class;
 
@@ -8553,6 +8557,9 @@ void __init sched_init(void)
 		init_cfs_rq(&rq->cfs);
 		init_rt_rq(&rq->rt);
 		init_dl_rq(&rq->dl);
+#ifdef CONFIG_SCHED_CLASS_MICROQ
+		init_microq_rq(&rq->microq);
+#endif
 #ifdef CONFIG_FAIR_GROUP_SCHED
 		INIT_LIST_HEAD(&rq->leaf_cfs_rq_list);
 		rq->tmp_alone_branch = &rq->leaf_cfs_rq_list;

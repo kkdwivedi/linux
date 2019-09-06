@@ -5,6 +5,7 @@ int __update_load_avg_blocked_se(u64 now, struct sched_entity *se);
 int __update_load_avg_se(u64 now, struct cfs_rq *cfs_rq, struct sched_entity *se);
 int __update_load_avg_cfs_rq(u64 now, struct cfs_rq *cfs_rq);
 int update_rt_rq_load_avg(u64 now, struct rq *rq, int running);
+int update_rt_rq_load_avg_ratio(u64 now, u64 contrib_ratio, struct rq *rq, int running);
 int update_dl_rq_load_avg(u64 now, struct rq *rq, int running);
 bool update_other_load_avgs(struct rq *rq);
 
@@ -192,6 +193,11 @@ update_cfs_rq_load_avg(u64 now, struct cfs_rq *cfs_rq)
 
 static inline int
 update_rt_rq_load_avg(u64 now, struct rq *rq, int running)
+{
+	return 0;
+}
+
+int update_rt_rq_load_avg_ratio(u64 now, u64 contrib_ratio, struct rq *rq, int running)
 {
 	return 0;
 }

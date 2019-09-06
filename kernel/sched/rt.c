@@ -1696,7 +1696,7 @@ static inline void set_next_task_rt(struct rq *rq, struct task_struct *p, bool f
 	 * utilization. We only care of the case where we start to schedule a
 	 * rt task
 	 */
-	if (rq->donor->sched_class != &rt_sched_class)
+	if (rq->donor->sched_class != &rt_sched_class && rq->donor->sched_class != &microq_sched_class)
 		update_rt_rq_load_avg(rq_clock_pelt(rq), rq, 0);
 
 	rt_queue_push_tasks(rq);

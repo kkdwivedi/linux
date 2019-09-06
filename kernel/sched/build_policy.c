@@ -63,4 +63,8 @@
 # include "ext.c"
 #endif
 
+#ifdef CONFIG_SCHED_CLASS_MICROQ
+# include "microq.c"
+#endif
+
 #include "syscalls.c"
