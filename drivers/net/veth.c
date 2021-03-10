@@ -1579,6 +1579,19 @@ static int veth_xdp_set(struct net_device *dev, struct bpf_prog *prog,
 		bpf_prog_put(old_prog);
 	}
 
+	if (old_prog && !prog) {
+		xdp_features_clear_redirect_target(&dev->xdp_features);
+		if (peer)
+			xdp_features_clear_redirect_target(&peer->xdp_features);
+	} else if (!old_prog && prog) {
+		struct veth_priv *peer_priv = netdev_priv(peer);
+
+		if (peer_priv->_xdp_prog) {
+			xdp_features_set_redirect_target(&dev->xdp_features);
+			xdp_features_set_redirect_target(&peer->xdp_features);
+		}
+	}
+
 	if ((!!old_prog ^ !!prog) && peer)
 		netdev_update_features(peer);
 
@@ -1652,6 +1665,8 @@ static void veth_setup(struct net_device *dev)
 	dev->hw_enc_features = VETH_FEATURES;
 	dev->mpls_features = NETIF_F_HW_CSUM | NETIF_F_GSO_SOFTWARE;
 	netif_set_tso_max_size(dev, GSO_MAX_SIZE);
+
+	dev->xdp_features = XDP_F_FULL | XDP_F_TX_LOCK;
 }
 
 /*

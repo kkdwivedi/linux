@@ -7,6 +7,7 @@
 #define __LINUX_NET_XDP_H__
 
 #include <linux/skbuff.h> /* skb_shared_info */
+#include <linux/xdp_features.h>
 
 /**
  * DOC: XDP RX-queue information
@@ -406,6 +407,30 @@ struct xdp_attachment_info {
 struct netdev_bpf;
 void xdp_attachment_setup(struct xdp_attachment_info *info,
 			  struct netdev_bpf *bpf);
+
+#if defined(CONFIG_NET) && defined(CONFIG_BPF_SYSCALL)
+
+static inline void xdp_features_set_redirect_target(xdp_features_t *xdp_features)
+{
+	WRITE_ONCE(*xdp_features, *xdp_features | XDP_F_REDIRECT_TARGET);
+}
+
+static inline void xdp_features_clear_redirect_target(xdp_features_t *xdp_features)
+{
+	WRITE_ONCE(*xdp_features, *xdp_features & ~XDP_F_REDIRECT_TARGET);
+}
+
+#else
+
+static inline void xdp_features_set_redirect_target(xdp_features_t *xdp_features)
+{
+}
+
+static inline void xdp_features_clear_redirect_target(xdp_features_t *xdp_features)
+{
+}
+
+#endif
 
 #define DEV_MAP_BULK_SIZE XDP_BULK_QUEUE_SIZE
 

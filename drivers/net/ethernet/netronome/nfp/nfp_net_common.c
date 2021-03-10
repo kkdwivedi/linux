@@ -2557,6 +2557,8 @@ int nfp_net_init(struct nfp_net *nn)
 	if (nn->dp.netdev) {
 		nfp_net_netdev_init(nn);
 
+		nn->dp.netdev->xdp_features = XDP_F_BASIC | XDP_F_HW_OFFLOAD;
+
 		err = nfp_ccm_mbox_init(nn);
 		if (err)
 			return err;

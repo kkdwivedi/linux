@@ -4625,7 +4625,7 @@ static int ixgbevf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	netdev->features |= NETIF_F_HW_VLAN_CTAG_FILTER |
 			    NETIF_F_HW_VLAN_CTAG_RX |
 			    NETIF_F_HW_VLAN_CTAG_TX;
-
+	netdev->xdp_features = XDP_F_BASIC;
 	netdev->priv_flags |= IFF_UNICAST_FLT;
 
 	/* MTU range: 68 - 1504 or 9710 */
