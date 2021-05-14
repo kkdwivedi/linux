@@ -1732,6 +1732,10 @@ void __init alternative_instructions(void)
 
 	apply_alternatives(__alt_instructions, __alt_instructions_end, NULL);
 
+#if defined(CONFIG_NUMA_AWARE_SPINLOCKS)
+	cna_configure_spin_lock_slowpath();
+#endif
+
 	/*
 	 * Now all calls are established. Apply the call thunks if
 	 * required.
