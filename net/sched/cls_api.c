@@ -3925,13 +3925,13 @@ subsys_initcall(tc_filter_init);
 int bpf_tc_link_attach(union bpf_attr *attr, struct bpf_prog *prog)
 {
 	struct net *net = current->nsproxy->net_ns;
+	u32 chain_index, prio, protocol, parent;
 	struct tcf_chain_info chain_info;
-	u32 chain_index, prio, protocol;
 	struct tcf_block *block;
 	struct tcf_chain *chain;
-	int err, tp_created = 0;
 	struct tcf_proto *tp;
-	unsigned long cl = 0;
+	int err, tp_created;
+	unsigned long cl;
 	struct Qdisc *q;
 	void *fh;
 
@@ -3944,32 +3944,34 @@ int bpf_tc_link_attach(union bpf_attr *attr, struct bpf_prog *prog)
 	    !tc_flags_valid(attr->link_create.tc.gen_flags))
 		return -EINVAL;
 
+replay:
+	tp_created = 0;
+	cl = 0;
 	protocol = htons(ETH_P_ALL);
 	chain_index = 0;
-
+	parent = attr->link_create.tc.parent;
 	prio = attr->link_create.tc.priority;
 	prio <<= 16;
 
-replay:
 	/* Address this when cls_bpf switches to RTNL_FLAG_DOIT_UNLOCKED */
 	rtnl_lock();
 
-	block = tcf_block_find(net, &q, &attr->link_create.tc.parent, &cl,
-			       attr->link_create.target_ifindex,
-			       attr->link_create.tc.parent, NULL);
+	block = tcf_block_find(net, &q, &parent, &cl,
+			       attr->link_create.target_ifindex, parent, NULL);
 	if (IS_ERR(block)) {
 		err = PTR_ERR(block);
 		goto out_unlock;
 	}
-	block->classid = attr->link_create.tc.parent;
+	block->classid = parent;
 
 	chain = tcf_chain_get(block, chain_index, true);
 	if (!chain) {
 		err = -ENOMEM;
-		goto out_unlock;
+		goto out_block;
 	}
 
 	mutex_lock(&chain->filter_chain_lock);
+
 	tp = tcf_chain_tp_find(chain, &chain_info, protocol,
 			       prio ?: TC_H_MAKE(0x80000000U, 0U),
 			       !prio);
@@ -3980,6 +3982,11 @@ replay:
 
 	if (!tp) {
 		struct tcf_proto *tp_new = NULL;
+
+		if (chain->flushing) {
+			err = -EAGAIN;
+			goto out_chain_unlock;
+		}
 
 		if (!prio)
 			prio = tcf_auto_prio(tcf_chain_tp_prev(chain,
@@ -3999,7 +4006,7 @@ replay:
 						true);
 		if (IS_ERR(tp)) {
 			err = PTR_ERR(tp);
-			goto out;
+			goto out_chain;
 		}
 	} else {
 		mutex_unlock(&chain->filter_chain_lock);
@@ -4021,11 +4028,15 @@ out:
 		tcf_chain_tp_delete_empty(chain, tp, true, NULL);
 out_chain:
 	if (chain) {
-		if (tp && !IS_ERR(tp))
+		if (!IS_ERR_OR_NULL(tp))
 			tcf_proto_put(tp, true, NULL);
+		/* Chain reference only kept for tp creation
+		 * to pair with tcf_chain_put from tcf_proto_destroy
+		 */
 		if (!tp_created)
 			tcf_chain_put(chain);
 	}
+out_block:
 	tcf_block_release(q, block, true);
 out_unlock:
 	rtnl_unlock();
