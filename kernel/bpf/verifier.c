@@ -5577,6 +5577,11 @@ static int check_map_func_compatibility(struct bpf_verifier_env *env,
 		    func_id != BPF_FUNC_task_storage_delete)
 			goto error;
 		break;
+	case BPF_MAP_TYPE_FILE_STORAGE:
+		if (func_id != BPF_FUNC_file_storage_get &&
+		    func_id != BPF_FUNC_file_storage_delete)
+			goto error;
+		break;
 	default:
 		break;
 	}
@@ -5664,6 +5669,11 @@ static int check_map_func_compatibility(struct bpf_verifier_env *env,
 	case BPF_FUNC_task_storage_get:
 	case BPF_FUNC_task_storage_delete:
 		if (map->map_type != BPF_MAP_TYPE_TASK_STORAGE)
+			goto error;
+		break;
+	case BPF_FUNC_file_storage_get:
+	case BPF_FUNC_file_storage_delete:
+		if (map->map_type != BPF_MAP_TYPE_FILE_STORAGE)
 			goto error;
 		break;
 	default:
