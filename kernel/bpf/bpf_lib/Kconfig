@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+menuconfig BPF_LIB
+	bool "Enable BPF Stable Library"
+	depends on BPF
+	depends on BPF_SYSCALL
+	select BPF_ITER_LIB
+	help
+	  Enables compilation of BPF objects that can be used as a stable
+	  iterface to the various BPF iterator hooks. These require static
+	  linking with another BPF object providing symbols they reference
+	  before they can be loaded.
+
+	  If you are unsure how to answer this question, answer N.
+
+if BPF_LIB
+config BPF_ITER_LIB
+	bool "Enable BPF Stable Iterator Library"
+	depends on BPF
+	depends on BPF_SYSCALL
+	default n
+endif
