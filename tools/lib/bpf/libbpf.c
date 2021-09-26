@@ -4884,12 +4884,11 @@ static void bpf_core_free_cands(struct bpf_core_cand_list *cands)
 	free(cands);
 }
 
-static int bpf_core_add_cands(struct bpf_core_cand *local_cand,
-			      size_t local_essent_len,
-			      const struct btf *targ_btf,
-			      const char *targ_btf_name,
-			      int targ_start_id,
-			      struct bpf_core_cand_list *cands)
+static int __bpf_core_add_cands(struct bpf_core_cand *local_cand,
+				size_t local_essent_len,
+				const struct btf *targ_btf,
+				const char *targ_btf_name, int targ_start_id,
+				struct bpf_core_cand_list *cands, bool user_btf)
 {
 	struct bpf_core_cand *new_cands, *cand;
 	const struct btf_type *t;
@@ -4899,6 +4898,10 @@ static int bpf_core_add_cands(struct bpf_core_cand *local_cand,
 
 	n = btf__get_nr_types(targ_btf);
 	for (i = targ_start_id; i <= n; i++) {
+		/* skip ourselves for user BTF CO-RE */
+		if (user_btf && i == local_cand->id)
+			continue;
+
 		t = btf__type_by_id(targ_btf, i);
 		if (btf_kind(t) != btf_kind(local_cand->t))
 			continue;
@@ -4909,6 +4912,9 @@ static int bpf_core_add_cands(struct bpf_core_cand *local_cand,
 
 		targ_essent_len = bpf_core_essential_name_len(targ_name);
 		if (targ_essent_len != local_essent_len)
+			continue;
+
+		if (user_btf && targ_essent_len < strlen(targ_name))
 			continue;
 
 		if (strncmp(local_cand->name, targ_name, local_essent_len) != 0)
@@ -4933,6 +4939,26 @@ static int bpf_core_add_cands(struct bpf_core_cand *local_cand,
 		cands->len++;
 	}
 	return 0;
+}
+
+static int bpf_core_add_cands(struct bpf_core_cand *local_cand,
+			      size_t local_essent_len,
+			      const struct btf *targ_btf,
+			      const char *targ_btf_name, int targ_start_id,
+			      struct bpf_core_cand_list *cands)
+{
+	return __bpf_core_add_cands(local_cand, local_essent_len, targ_btf,
+				    targ_btf_name, targ_start_id, cands, false);
+}
+
+static int bpf_core_add_cands_user(struct bpf_core_cand *local_cand,
+				   size_t local_essent_len,
+				   const struct btf *targ_btf,
+				   const char *targ_btf_name, int targ_start_id,
+				   struct bpf_core_cand_list *cands)
+{
+	return __bpf_core_add_cands(local_cand, local_essent_len, targ_btf,
+				    targ_btf_name, targ_start_id, cands, true);
 }
 
 static int load_module_btfs(struct bpf_object *obj)
@@ -5037,6 +5063,7 @@ bpf_core_find_cands(struct bpf_object *obj, const struct btf *local_btf, __u32 l
 	int err, i;
 
 	local_cand.btf = local_btf;
+	local_cand.id = local_type_id;
 	local_cand.t = btf__type_by_id(local_btf, local_type_id);
 	if (!local_cand.t)
 		return ERR_PTR(-EINVAL);
@@ -5075,6 +5102,14 @@ bpf_core_find_cands(struct bpf_object *obj, const struct btf *local_btf, __u32 l
 					 obj->btf_modules[i].name,
 					 btf__get_nr_types(obj->btf_vmlinux) + 1,
 					 cands);
+		if (err)
+			goto err_out;
+	}
+
+	/* XXX: Make this dependent on BTF tag presence */
+	if (!cands->len) {
+		err = bpf_core_add_cands_user(&local_cand, local_essent_len,
+					      obj->btf, obj->name, 1, cands);
 		if (err)
 			goto err_out;
 	}
