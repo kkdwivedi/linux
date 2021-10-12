@@ -4843,6 +4843,12 @@ void generic_xdp_tx(struct sk_buff *skb, struct bpf_prog *xdp_prog)
 
 static DEFINE_STATIC_KEY_FALSE(generic_xdp_needed_key);
 
+static inline void xdp_do_flush_generic(void)
+{
+	if (static_branch_unlikely(&generic_xdp_needed_key))
+		__cpu_map_flush();
+}
+
 int do_xdp_generic(struct bpf_prog *xdp_prog, struct sk_buff *skb)
 {
 	if (xdp_prog) {
@@ -5461,8 +5467,8 @@ int netif_receive_skb_core(struct sk_buff *skb)
 
 	rcu_read_lock();
 	ret = __netif_receive_skb_one_core(skb, false);
+	xdp_do_flush_generic();
 	rcu_read_unlock();
-
 	return ret;
 }
 EXPORT_SYMBOL(netif_receive_skb_core);
@@ -5597,6 +5603,7 @@ static int generic_xdp_install(struct net_device *dev, struct netdev_bpf *xdp)
 			bpf_prog_put(old);
 
 		if (old && !new) {
+			synchronize_rcu_expedited();
 			static_branch_dec(&generic_xdp_needed_key);
 		} else if (new && !old) {
 			static_branch_inc(&generic_xdp_needed_key);
@@ -5636,6 +5643,7 @@ static int netif_receive_skb_internal(struct sk_buff *skb)
 	}
 #endif
 	ret = __netif_receive_skb(skb);
+	xdp_do_flush_generic();
 	rcu_read_unlock();
 	return ret;
 }
@@ -5670,6 +5678,7 @@ static void netif_receive_skb_list_internal(struct list_head *head)
 	}
 #endif
 	__netif_receive_skb_list(head);
+	xdp_do_flush_generic();
 	rcu_read_unlock();
 }
 
@@ -6426,6 +6435,7 @@ static int process_backlog(struct napi_struct *napi, int quota)
 		while ((skb = __skb_dequeue(&sd->process_queue))) {
 			rcu_read_lock();
 			__netif_receive_skb(skb);
+			xdp_do_flush_generic();
 			rcu_read_unlock();
 			input_queue_head_incr(sd);
 			if (++work >= quota)

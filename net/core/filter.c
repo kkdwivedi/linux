@@ -4049,9 +4049,7 @@ static int xdp_do_generic_redirect_map(struct net_device *dev,
 		consume_skb(skb);
 		break;
 	case BPF_MAP_TYPE_CPUMAP:
-		err = cpu_map_generic_redirect(fwd, skb);
-		if (unlikely(err))
-			goto err;
+		cpu_map_generic_redirect(fwd, skb);
 		break;
 	default:
 		err = -EBADRQC;

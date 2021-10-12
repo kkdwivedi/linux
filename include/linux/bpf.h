@@ -1611,8 +1611,8 @@ int dev_map_redirect_multi(struct net_device *dev, struct sk_buff *skb,
 void __cpu_map_flush(void);
 int cpu_map_enqueue(struct bpf_cpu_map_entry *rcpu, struct xdp_buff *xdp,
 		    struct net_device *dev_rx);
-int cpu_map_generic_redirect(struct bpf_cpu_map_entry *rcpu,
-			     struct sk_buff *skb);
+void cpu_map_generic_redirect(struct bpf_cpu_map_entry *rcpu,
+			      struct sk_buff *skb);
 
 /* Return map's numa specified by userspace */
 static inline int bpf_map_attr_numa_node(const union bpf_attr *attr)

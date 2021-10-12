@@ -701,13 +701,18 @@ static void bq_flush_to_queue(struct xdp_bulk_queue *bq)
 	spin_lock(&q->producer_lock);
 
 	for (i = 0; i < bq->count; i++) {
-		struct xdp_frame *xdpf = bq->q[i];
+		void *frame = bq->q[i];
 		int err;
 
-		err = __ptr_ring_produce(q, xdpf);
+		err = __ptr_ring_produce(q, frame);
 		if (err) {
 			drops++;
-			xdp_return_frame_rx_napi(xdpf);
+			if (unlikely(__ptr_test_bit(0, &frame))) {
+				__ptr_clear_bit(0, &frame);
+				kfree_skb(frame);
+			} else {
+				xdp_return_frame_rx_napi(frame);
+			}
 		}
 		processed++;
 	}
@@ -723,7 +728,7 @@ static void bq_flush_to_queue(struct xdp_bulk_queue *bq)
 /* Runs under RCU-read-side, plus in softirq under NAPI protection.
  * Thus, safe percpu variable access.
  */
-static void bq_enqueue(struct bpf_cpu_map_entry *rcpu, struct xdp_frame *xdpf)
+static void bq_enqueue(struct bpf_cpu_map_entry *rcpu, void *frame)
 {
 	struct list_head *flush_list = this_cpu_ptr(&cpu_map_flush_list);
 	struct xdp_bulk_queue *bq = this_cpu_ptr(rcpu->bulkq);
@@ -740,7 +745,7 @@ static void bq_enqueue(struct bpf_cpu_map_entry *rcpu, struct xdp_frame *xdpf)
 	 * Queue time is very short, as driver will invoke flush
 	 * operation, when completing napi->poll call.
 	 */
-	bq->q[bq->count++] = xdpf;
+	bq->q[bq->count++] = frame;
 
 	if (!bq->flush_node.prev)
 		list_add(&bq->flush_node, flush_list);
@@ -762,23 +767,15 @@ int cpu_map_enqueue(struct bpf_cpu_map_entry *rcpu, struct xdp_buff *xdp,
 	return 0;
 }
 
-int cpu_map_generic_redirect(struct bpf_cpu_map_entry *rcpu,
-			     struct sk_buff *skb)
+void cpu_map_generic_redirect(struct bpf_cpu_map_entry *rcpu,
+			      struct sk_buff *skb)
 {
-	int ret;
-
 	__skb_pull(skb, skb->mac_len);
 	skb_set_redirected(skb, false);
 	__ptr_set_bit(0, &skb);
 
-	ret = ptr_ring_produce(rcpu->queue, skb);
-	if (ret < 0)
-		goto trace;
-
-	wake_up_process(rcpu->kthread);
-trace:
-	trace_xdp_cpumap_enqueue(rcpu->map_id, !ret, !!ret, rcpu->cpu);
-	return ret;
+	bq_enqueue(rcpu, skb);
+	return;
 }
 
 void __cpu_map_flush(void)
