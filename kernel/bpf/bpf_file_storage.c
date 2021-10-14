@@ -179,6 +179,8 @@ BPF_CALL_4(bpf_file_storage_get, struct bpf_map *, map, struct file *, file,
 	if (sdata)
 		return (unsigned long)sdata->data;
 
+	if (!get_file_rcu(file))
+		return (unsigned long)NULL;
 	/* This helper must only called from where the file is guaranteed
 	 * to have a refcount and cannot be freed.
 	 */
@@ -186,22 +188,29 @@ BPF_CALL_4(bpf_file_storage_get, struct bpf_map *, map, struct file *, file,
 		sdata = bpf_local_storage_update(
 			file, (struct bpf_local_storage_map *)map, value,
 			BPF_NOEXIST);
+		fput(file);
 		return IS_ERR(sdata) ? (unsigned long)NULL :
 					     (unsigned long)sdata->data;
 	}
 
+	fput(file);
 	return (unsigned long)NULL;
 }
 
 BPF_CALL_2(bpf_file_storage_delete, struct bpf_map *, map, struct file *, file)
 {
+	int ret;
+
 	if (!file)
 		return -EINVAL;
-
+	if (!get_file_rcu(file))
+		return -ENOENT;
 	/* This helper must only called from where the file is guaranteed
 	 * to have a refcount and cannot be freed.
 	 */
-	return file_storage_delete(file, map);
+	ret = file_storage_delete(file, map);
+	fput(file);
+	return ret;
 }
 
 static int notsupp_get_next_key(struct bpf_map *map, void *key, void *next_key)
