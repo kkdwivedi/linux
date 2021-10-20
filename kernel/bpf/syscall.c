@@ -4754,6 +4754,23 @@ static const struct bpf_func_proto bpf_sys_close_proto = {
 	.arg1_type	= ARG_ANYTHING,
 };
 
+BPF_CALL_2(bpf_override_creds, struct map *, cred_map, u64, flags)
+{
+	if (flags)
+		return -EINVAL;
+
+	override_creds(cred);
+	return 0;
+}
+
+static const struct bpf_func_proto bpf_override_creds_proto = {
+	.func		= bpf_override_creds,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_CONST_MAP_PTR,
+	.arg2_type	= ARG_ANYTHING,
+};
+
 static const struct bpf_func_proto *
 syscall_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -4764,6 +4781,8 @@ syscall_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_btf_find_by_name_kind_proto;
 	case BPF_FUNC_sys_close:
 		return &bpf_sys_close_proto;
+	case BPF_FUNC_override_creds:
+		return &bpf_override_creds_proto;
 	default:
 		return tracing_prog_func_proto(func_id, prog);
 	}
