@@ -4984,6 +4984,14 @@ union bpf_attr {
  *	Return
  *		The number of loops performed, **-EINVAL** for invalid **flags**,
  *		**-E2BIG** if **nr_loops** exceeds the maximum number of loops.
+ *
+ * long bpf_page_to_pfn(struct page *page)
+ *	Description
+ *		Obtain the page frame number (PFN) for the given *struct page*
+ *		pointer.
+ *	Return
+ *		Page Frame Number corresponding to the page pointed to by the
+ *		*struct page* pointer, or U64_MAX if pointer is NULL.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5168,6 +5176,7 @@ union bpf_attr {
 	FN(kallsyms_lookup_name),	\
 	FN(find_vma),			\
 	FN(loop),			\
+	FN(page_to_pfn),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
