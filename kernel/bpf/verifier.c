@@ -9699,6 +9699,16 @@ static int check_return_code(struct bpf_verifier_env *env)
 	case BPF_PROG_TYPE_SK_LOOKUP:
 		range = tnum_range(SK_DROP, SK_PASS);
 		break;
+	case BPF_PROG_TYPE_DEQUEUE:
+		if (!register_is_null(reg) && reg->type != PTR_TO_QUEUED_PKT) {
+			verbose(env, "At program exit register R0 is not null or %s\n",
+				reg_type_str[reg->type]);
+			return -EINVAL;
+		}
+		/* return release the reference */
+		if (reg->type == PTR_TO_QUEUED_PKT)
+			return release_reference(env, reg->ref_obj_id);
+		return 0;
 	case BPF_PROG_TYPE_EXT:
 		/* freplace program can return anything as its return value
 		 * depends on the to-be-replaced kernel func or bpf program.
@@ -11484,11 +11494,11 @@ static int do_check(struct bpf_verifier_env *env)
 					continue;
 				}
 
-				err = check_reference_leak(env);
+				err = check_return_code(env);
 				if (err)
 					return err;
 
-				err = check_return_code(env);
+				err = check_reference_leak(env);
 				if (err)
 					return err;
 process_bpf_exit:
