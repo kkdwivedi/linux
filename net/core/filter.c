@@ -4426,6 +4426,8 @@ static const struct bpf_func_proto bpf_xdp_redirect_map_proto = {
 	.arg3_type      = ARG_ANYTHING,
 };
 
+BTF_ID_LIST_SINGLE(xdp_md_btf_ids, struct, xdp_md)
+
 BPF_CALL_3(bpf_packet_dequeue, struct dequeue_data *, ctx, struct bpf_map *, map,
 	   u64, flags)
 {
@@ -4435,7 +4437,8 @@ BPF_CALL_3(bpf_packet_dequeue, struct dequeue_data *, ctx, struct bpf_map *, map
 static const struct bpf_func_proto bpf_packet_dequeue_proto = {
 	.func           = bpf_packet_dequeue,
 	.gpl_only       = false,
-	.ret_type       = RET_PTR_TO_QUEUED_PKT_OR_NULL,
+	.ret_type       = RET_PTR_TO_BTF_ID_OR_NULL,
+	.ret_btf_id	= xdp_md_btf_ids,
 	.arg1_type      = ARG_PTR_TO_CTX,
 	.arg2_type      = ARG_CONST_MAP_PTR,
 	.arg3_type      = ARG_ANYTHING,
@@ -4452,25 +4455,9 @@ static const struct bpf_func_proto bpf_packet_drop_proto = {
 	.gpl_only       = false,
 	.ret_type       = RET_INTEGER,
 	.arg1_type      = ARG_PTR_TO_CTX,
-	.arg2_type      = ARG_PTR_TO_QUEUED_PKT,
+	.arg2_type      = ARG_PTR_TO_BTF_ID,
+	.arg2_btf_id	= xdp_md_btf_ids,
 };
-
-BPF_CALL_2(bpf_packet_return, struct dequeue_data *, ctx, struct xdp_frame *, pkt)
-{
-	if (ctx->dequeued_pkt)
-		xdp_return_frame(ctx->dequeued_pkt);
-	ctx->dequeued_pkt = pkt;
-	return 0;
-}
-
-static const struct bpf_func_proto bpf_packet_return_proto = {
-	.func           = bpf_packet_return,
-	.gpl_only       = false,
-	.ret_type       = RET_INTEGER,
-	.arg1_type      = ARG_PTR_TO_CTX,
-	.arg2_type      = ARG_PTR_TO_QUEUED_PKT,
-};
-
 
 static unsigned long bpf_skb_copy(void *dst_buff, const void *skb,
 				  unsigned long off, unsigned long len)
@@ -7860,8 +7847,6 @@ dequeue_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	switch (func_id) {
 	case BPF_FUNC_packet_dequeue:
 		return &bpf_packet_dequeue_proto;
-	case BPF_FUNC_packet_return:
-		return &bpf_packet_return_proto;
 	case BPF_FUNC_packet_drop:
 		return &bpf_packet_drop_proto;
 	default:
