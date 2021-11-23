@@ -78,7 +78,6 @@ struct xdp_buff {
 
 struct dequeue_data {
 	struct xdp_txq_info *txq;
-	struct xdp_frame *dequeued_pkt;
 };
 
 
