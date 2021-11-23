@@ -88,7 +88,7 @@ reset:
 }
 
 static int bpf_test_run(struct bpf_prog *prog, void *ctx, u32 repeat,
-			u32 *retval, u32 *time, bool xdp)
+			u64 *retval, u32 *time, bool xdp)
 {
 	struct bpf_prog_array_item item = {.prog = prog};
 	struct bpf_run_ctx *old_ctx;
@@ -566,15 +566,15 @@ int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
 			  union bpf_attr __user *uattr)
 {
 	bool is_l2 = false, is_direct_pkt_access = false;
+	u32 size = kattr->test.data_size_in, duration;
 	struct net *net = current->nsproxy->net_ns;
 	struct net_device *dev = net->loopback_dev;
-	u32 size = kattr->test.data_size_in;
 	u32 repeat = kattr->test.repeat;
 	struct __sk_buff *ctx = NULL;
-	u32 retval, duration;
 	int hh_len = ETH_HLEN;
 	struct sk_buff *skb;
 	struct sock *sk;
+	u64 retval;
 	void *data;
 	int ret;
 
@@ -758,14 +758,14 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 			  union bpf_attr __user *uattr)
 {
 	u32 tailroom = SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
-	u32 headroom = XDP_PACKET_HEADROOM;
+	u32 headroom = XDP_PACKET_HEADROOM, duration;
 	u32 size = kattr->test.data_size_in;
 	u32 repeat = kattr->test.repeat;
 	struct netdev_rx_queue *rxqueue;
 	struct xdp_buff xdp = {};
-	u32 retval, duration;
 	struct xdp_md *ctx;
 	u32 max_data_sz;
+	u64 retval;
 	void *data;
 	int ret = -EINVAL;
 
@@ -840,10 +840,12 @@ int bpf_prog_test_run_dequeue(struct bpf_prog *prog, const union bpf_attr *kattr
 			      union bpf_attr __user *uattr)
 {
 	struct xdp_txq_info txq = { .dev = current->nsproxy->net_ns->loopback_dev };
+	u32 repeat = kattr->test.repeat, duration, size;
 	struct dequeue_data ctx = { .txq = &txq };
-	u32 repeat = kattr->test.repeat;
-	u32 retval, duration;
+	struct xdp_buff xdp = {};
+	struct xdp_frame *pkt;
 	int ret = -EINVAL;
+	u64 retval;
 
 	if (prog->expected_attach_type)
 		return -EINVAL;
@@ -854,25 +856,18 @@ int bpf_prog_test_run_dequeue(struct bpf_prog *prog, const union bpf_attr *kattr
 
 	ret = bpf_test_run(prog, &ctx, repeat, &retval, &duration, true);
 	if (ret)
-		goto out;
+		return ret;
+	if (!retval)
+		return bpf_test_finish(kattr, uattr, NULL, 0, retval, duration);
 
-	if (ctx.dequeued_pkt) {
-		struct xdp_buff xdp = {};
-		u32 size;
-
-		xdp_convert_frame_to_buff(ctx.dequeued_pkt, &xdp);
-		size = xdp.data_end - xdp.data_meta;
-
-		ret = bpf_test_finish(kattr, uattr, xdp.data_meta, size,
-				      retval, duration);
-		xdp_return_frame(ctx.dequeued_pkt);
-	} else {
-		ret = bpf_test_finish(kattr, uattr, NULL, 0, retval, duration);
-	}
-out:
+	pkt = (void *)retval;
+	xdp_convert_frame_to_buff(pkt, &xdp);
+	size = xdp.data_end - xdp.data_meta;
+	/* retval == 1 if pkt != NULL, otherwise 0 */
+	ret = bpf_test_finish(kattr, uattr, xdp.data_meta, size, !!retval, duration);
+	xdp_return_frame(pkt);
 	return ret;
 }
-
 
 static int verify_user_bpf_flow_keys(struct bpf_flow_keys *ctx)
 {
