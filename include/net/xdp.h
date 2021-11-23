@@ -87,7 +87,6 @@ struct xdp_buff {
 
 struct dequeue_data {
 	struct xdp_txq_info *txq;
-	struct xdp_frame *dequeued_pkt;
 };
 
 static __always_inline bool xdp_buff_has_frags(struct xdp_buff *xdp)
