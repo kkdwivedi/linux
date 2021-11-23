@@ -495,8 +495,7 @@ static bool is_release_function(enum bpf_func_id func_id)
 	return func_id == BPF_FUNC_sk_release ||
 	       func_id == BPF_FUNC_ringbuf_submit ||
 	       func_id == BPF_FUNC_ringbuf_discard ||
-	       func_id == BPF_FUNC_packet_drop ||
-	       func_id == BPF_FUNC_packet_return;
+	       func_id == BPF_FUNC_packet_drop;
 }
 
 static bool may_be_acquire_function(enum bpf_func_id func_id)

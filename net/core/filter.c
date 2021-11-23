@@ -4176,23 +4176,6 @@ static const struct bpf_func_proto bpf_packet_drop_proto = {
 	.arg2_type      = ARG_PTR_TO_QUEUED_PKT,
 };
 
-BPF_CALL_2(bpf_packet_return, struct dequeue_data *, ctx, struct xdp_frame *, pkt)
-{
-	if (ctx->dequeued_pkt)
-		xdp_return_frame(ctx->dequeued_pkt);
-	ctx->dequeued_pkt = pkt;
-	return 0;
-}
-
-static const struct bpf_func_proto bpf_packet_return_proto = {
-	.func           = bpf_packet_return,
-	.gpl_only       = false,
-	.ret_type       = RET_INTEGER,
-	.arg1_type      = ARG_PTR_TO_CTX,
-	.arg2_type      = ARG_PTR_TO_QUEUED_PKT,
-};
-
-
 static unsigned long bpf_skb_copy(void *dst_buff, const void *skb,
 				  unsigned long off, unsigned long len)
 {
@@ -7553,8 +7536,6 @@ dequeue_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	switch (func_id) {
 	case BPF_FUNC_packet_dequeue:
 		return &bpf_packet_dequeue_proto;
-	case BPF_FUNC_packet_return:
-		return &bpf_packet_return_proto;
 	case BPF_FUNC_packet_drop:
 		return &bpf_packet_drop_proto;
 	default:
