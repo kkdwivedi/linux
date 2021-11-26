@@ -580,7 +580,7 @@ struct bpf_prog {
 	u8			tag[BPF_TAG_SIZE];
 	struct bpf_prog_stats __percpu *stats;
 	int __percpu		*active;
-	unsigned int		(*bpf_func)(const void *ctx,
+	u64			(*bpf_func)(const void *ctx,
 					    const struct bpf_insn *insn);
 	struct bpf_prog_aux	*aux;		/* Auxiliary fields */
 	struct sock_fprog_kern	*orig_prog;	/* Original BPF program */
@@ -599,16 +599,16 @@ struct sk_filter {
 
 DECLARE_STATIC_KEY_FALSE(bpf_stats_enabled_key);
 
-typedef unsigned int (*bpf_dispatcher_fn)(const void *ctx,
-					  const struct bpf_insn *insnsi,
-					  unsigned int (*bpf_func)(const void *,
-								   const struct bpf_insn *));
+typedef u64 (*bpf_dispatcher_fn)(const void *ctx,
+				 const struct bpf_insn *insnsi,
+				 u64 (*bpf_func)(const void *,
+						 const struct bpf_insn *));
 
-static __always_inline u32 __bpf_prog_run(const struct bpf_prog *prog,
+static __always_inline u64 __bpf_prog_run(const struct bpf_prog *prog,
 					  const void *ctx,
 					  bpf_dispatcher_fn dfunc)
 {
-	u32 ret;
+	u64 ret;
 
 	cant_migrate();
 	if (static_branch_unlikely(&bpf_stats_enabled_key)) {
@@ -628,7 +628,7 @@ static __always_inline u32 __bpf_prog_run(const struct bpf_prog *prog,
 	return ret;
 }
 
-static __always_inline u32 bpf_prog_run(const struct bpf_prog *prog, const void *ctx)
+static __always_inline u64 bpf_prog_run(const struct bpf_prog *prog, const void *ctx)
 {
 	return __bpf_prog_run(prog, ctx, bpf_dispatcher_nop_func);
 }
@@ -740,13 +740,13 @@ static inline u8 *bpf_skb_cb(const struct sk_buff *skb)
 }
 
 /* Must be invoked with migration disabled */
-static inline u32 __bpf_prog_run_save_cb(const struct bpf_prog *prog,
+static inline u64 __bpf_prog_run_save_cb(const struct bpf_prog *prog,
 					 const void *ctx)
 {
 	const struct sk_buff *skb = ctx;
 	u8 *cb_data = bpf_skb_cb(skb);
 	u8 cb_saved[BPF_SKB_CB_LEN];
-	u32 res;
+	u64 res;
 
 	if (unlikely(prog->cb_access)) {
 		memcpy(cb_saved, cb_data, sizeof(cb_saved));
