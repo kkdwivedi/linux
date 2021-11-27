@@ -9700,13 +9700,13 @@ static int check_return_code(struct bpf_verifier_env *env)
 		range = tnum_range(SK_DROP, SK_PASS);
 		break;
 	case BPF_PROG_TYPE_DEQUEUE:
-		if (!register_is_null(reg) && reg->type != PTR_TO_QUEUED_PKT) {
+		if (!register_is_null(reg) && reg->type != PTR_TO_BTF_ID) {
 			verbose(env, "At program exit register R0 is not null or %s\n",
 				reg_type_str[reg->type]);
 			return -EINVAL;
 		}
 		/* return release the reference */
-		if (reg->type == PTR_TO_QUEUED_PKT)
+		if (reg->type == PTR_TO_BTF_ID)
 			return release_reference(env, reg->ref_obj_id);
 		return 0;
 	case BPF_PROG_TYPE_EXT:
