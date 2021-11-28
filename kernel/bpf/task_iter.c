@@ -125,12 +125,37 @@ static const struct seq_operations task_seq_ops = {
 	.show	= task_seq_show,
 };
 
+static int task_iter_attach(struct bpf_prog *prog,
+			    union bpf_iter_link_info *linfo,
+			    struct bpf_iter_aux_info *aux)
+{
+	struct task_struct *task;
+	unsigned int flags;
+
+	/* fd 0 is used to indicate unset pidfd */
+	if (!linfo->task_file.pidfd)
+		return 0;
+	task = pidfd_get_task(linfo->task_file.pidfd, &flags);
+	if (IS_ERR(task))
+		return PTR_ERR(task);
+	aux->task = task;
+	return 0;
+}
+
+static void task_iter_detach(struct bpf_iter_aux_info *aux)
+{
+	put_task_struct(aux->task);
+}
+
 struct bpf_iter_seq_task_file_info {
 	/* The first field must be struct bpf_iter_seq_task_common.
 	 * this is assumed by {init, fini}_seq_pidns() callback functions.
+	 * The second and third field must be struct task_struct and bool, this
+	 * is assumed by task_iter_init_seq.
 	 */
 	struct bpf_iter_seq_task_common common;
 	struct task_struct *task;
+	bool single_task;
 	u32 tid;
 	u32 fd;
 };
@@ -189,6 +214,9 @@ again:
 	put_task_struct(curr_task);
 	info->task = NULL;
 	info->fd = 0;
+	/* do not iterate further if attached to single task */
+	if (info->single_task)
+		return NULL;
 	curr_tid = ++(info->tid);
 	goto again;
 }
@@ -198,7 +226,8 @@ static void *task_file_seq_start(struct seq_file *seq, loff_t *pos)
 	struct bpf_iter_seq_task_file_info *info = seq->private;
 	struct file *file;
 
-	info->task = NULL;
+	if (!info->single_task)
+		info->task = NULL;
 	file = task_file_seq_get_next(info);
 	if (file && *pos == 0)
 		++*pos;
@@ -280,6 +309,18 @@ static void fini_seq_pidns(void *priv_data)
 	put_pid_ns(common->ns);
 }
 
+static int task_iter_init_seq(void *priv_data, struct bpf_iter_aux_info *aux)
+{
+	struct bpf_iter_seq_task_file_info *info = priv_data;
+
+	if (aux->task) {
+		info->single_task = true;
+		/* this will be released by seq_ops for task_file and task_vma */
+		info->task = get_task_struct(aux->task);
+	}
+	return init_seq_pidns(priv_data, aux);
+}
+
 static const struct seq_operations task_file_seq_ops = {
 	.start	= task_file_seq_start,
 	.next	= task_file_seq_next,
@@ -290,9 +331,12 @@ static const struct seq_operations task_file_seq_ops = {
 struct bpf_iter_seq_task_vma_info {
 	/* The first field must be struct bpf_iter_seq_task_common.
 	 * this is assumed by {init, fini}_seq_pidns() callback functions.
+	 * The second and third field must be struct task_struct and bool, this
+	 * is assumed by task_iter_init_seq.
 	 */
 	struct bpf_iter_seq_task_common common;
 	struct task_struct *task;
+	bool single_task;
 	struct vm_area_struct *vma;
 	u32 tid;
 	unsigned long prev_vm_start;
@@ -433,6 +477,9 @@ again:
 next_task:
 	put_task_struct(curr_task);
 	info->task = NULL;
+	/* do not iterate further if attached to single task */
+	if (info->single_task)
+		return NULL;
 	curr_tid++;
 	goto again;
 
@@ -545,13 +592,15 @@ static struct bpf_iter_reg task_reg_info = {
 
 static const struct bpf_iter_seq_info task_file_seq_info = {
 	.seq_ops		= &task_file_seq_ops,
-	.init_seq_private	= init_seq_pidns,
+	.init_seq_private	= task_iter_init_seq,
 	.fini_seq_private	= fini_seq_pidns,
 	.seq_priv_size		= sizeof(struct bpf_iter_seq_task_file_info),
 };
 
 static struct bpf_iter_reg task_file_reg_info = {
 	.target			= "task_file",
+	.attach_target		= task_iter_attach,
+	.detach_target		= task_iter_detach,
 	.feature		= BPF_ITER_RESCHED,
 	.ctx_arg_info_size	= 2,
 	.ctx_arg_info		= {
@@ -565,13 +614,15 @@ static struct bpf_iter_reg task_file_reg_info = {
 
 static const struct bpf_iter_seq_info task_vma_seq_info = {
 	.seq_ops		= &task_vma_seq_ops,
-	.init_seq_private	= init_seq_pidns,
+	.init_seq_private	= task_iter_init_seq,
 	.fini_seq_private	= fini_seq_pidns,
 	.seq_priv_size		= sizeof(struct bpf_iter_seq_task_vma_info),
 };
 
 static struct bpf_iter_reg task_vma_reg_info = {
 	.target			= "task_vma",
+	.attach_target		= task_iter_attach,
+	.detach_target		= task_iter_detach,
 	.feature		= BPF_ITER_RESCHED,
 	.ctx_arg_info_size	= 2,
 	.ctx_arg_info		= {

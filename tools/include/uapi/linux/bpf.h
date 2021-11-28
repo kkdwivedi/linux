@@ -91,6 +91,13 @@ union bpf_iter_link_info {
 	struct {
 		__u32	map_fd;
 	} map;
+	/* both task_file and task_vma need to have pidfd as first member */
+	struct {
+		__u32	pidfd;
+	} task_file;
+	struct {
+		__u32	pidfd;
+	} task_vma;
 };
 
 /* BPF syscall commands, see bpf(2) man-page for more details. */

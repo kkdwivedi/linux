@@ -1511,6 +1511,7 @@ int bpf_obj_get_user(const char __user *pathname, int flags);
 
 struct bpf_iter_aux_info {
 	struct bpf_map *map;
+	struct task_struct *task;
 };
 
 typedef int (*bpf_iter_attach_target_t)(struct bpf_prog *prog,
