@@ -495,6 +495,12 @@ struct bpf_prog_ops {
 			union bpf_attr __user *uattr);
 };
 
+typedef u32 (*bpf_convert_ctx_access_t)(enum bpf_access_type type,
+					const struct bpf_insn *src,
+					struct bpf_insn *dst,
+					struct bpf_prog *prog,
+					u32 *target_size);
+
 struct bpf_verifier_ops {
 	/* return eBPF function prototype for verification */
 	const struct bpf_func_proto *
@@ -521,6 +527,9 @@ struct bpf_verifier_ops {
 				 enum bpf_access_type atype,
 				 u32 *next_btf_id);
 	bool (*check_kfunc_call)(u32 kfunc_btf_id, struct module *owner);
+	bpf_convert_ctx_access_t (*get_convert_ctx_access)(struct bpf_verifier_log *log,
+							   const struct btf *btf,
+							   u32 btf_id);
 };
 
 struct bpf_prog_offload_ops {
@@ -1133,11 +1142,6 @@ const struct bpf_func_proto *bpf_get_trace_vprintk_proto(void);
 
 typedef unsigned long (*bpf_ctx_copy_t)(void *dst, const void *src,
 					unsigned long off, unsigned long len);
-typedef u32 (*bpf_convert_ctx_access_t)(enum bpf_access_type type,
-					const struct bpf_insn *src,
-					struct bpf_insn *dst,
-					struct bpf_prog *prog,
-					u32 *target_size);
 
 u64 bpf_event_output(struct bpf_map *map, u64 flags, void *meta, u64 meta_size,
 		     void *ctx, u64 ctx_size, bpf_ctx_copy_t ctx_copy);

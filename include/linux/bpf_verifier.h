@@ -126,6 +126,13 @@ struct bpf_reg_state {
 	 * are not NULL, they are the same ptr with different
 	 * reg->type.  In particular, bpf_sk_release(tp) is also
 	 * allowed and has the same effect as bpf_sk_release(sk).
+	 *
+	 * This is also used in dequeue prog to invalidate packet
+	 * pointers originating from a referenced PTR_TO_BTF_ID.
+	 * We cannot use clear_all_pkt_pointers as there may be
+	 * more than one pointer packet all pointing into different
+	 * XDP frames. Hence to do selective invalidation, an idea
+	 * similar to bpf_sock case explained above is used.
 	 */
 	u32 ref_obj_id;
 	/* This is set for pointers which are derived from referenced
