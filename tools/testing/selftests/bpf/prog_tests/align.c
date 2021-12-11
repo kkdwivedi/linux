@@ -161,13 +161,13 @@ static struct bpf_align_test tests[] = {
 		},
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.matches = {
-			{7, "R0_w=pkt(id=0,off=8,r=8,imm=0)"},
+			{7, "R0_w=pkt(id=0,parent_ref_obj_id=0,off=8,r=8,imm=0)"},
 			{7, "R3_w=inv(id=0,umax_value=255,var_off=(0x0; 0xff))"},
 			{8, "R3_w=inv(id=0,umax_value=510,var_off=(0x0; 0x1fe))"},
 			{9, "R3_w=inv(id=0,umax_value=1020,var_off=(0x0; 0x3fc))"},
 			{10, "R3_w=inv(id=0,umax_value=2040,var_off=(0x0; 0x7f8))"},
 			{11, "R3_w=inv(id=0,umax_value=4080,var_off=(0x0; 0xff0))"},
-			{18, "R3=pkt_end(id=0,off=0,imm=0)"},
+			{18, "R3=pkt_end(id=0,parent_ref_obj_id=0,off=0,imm=0)"},
 			{18, "R4_w=inv(id=0,umax_value=255,var_off=(0x0; 0xff))"},
 			{19, "R4_w=inv(id=0,umax_value=8160,var_off=(0x0; 0x1fe0))"},
 			{20, "R4_w=inv(id=0,umax_value=4080,var_off=(0x0; 0xff0))"},
@@ -234,11 +234,11 @@ static struct bpf_align_test tests[] = {
 		},
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.matches = {
-			{4, "R5_w=pkt(id=0,off=0,r=0,imm=0)"},
-			{5, "R5_w=pkt(id=0,off=14,r=0,imm=0)"},
-			{6, "R4_w=pkt(id=0,off=14,r=0,imm=0)"},
-			{10, "R2=pkt(id=0,off=0,r=18,imm=0)"},
-			{10, "R5=pkt(id=0,off=14,r=18,imm=0)"},
+			{4, "R5_w=pkt(id=0,parent_ref_obj_id=0,off=0,r=0,imm=0)"},
+			{5, "R5_w=pkt(id=0,parent_ref_obj_id=0,off=14,r=0,imm=0)"},
+			{6, "R4_w=pkt(id=0,parent_ref_obj_id=0,off=14,r=0,imm=0)"},
+			{10, "R2=pkt(id=0,parent_ref_obj_id=0,off=0,r=18,imm=0)"},
+			{10, "R5=pkt(id=0,parent_ref_obj_id=0,off=14,r=18,imm=0)"},
 			{10, "R4_w=inv(id=0,umax_value=255,var_off=(0x0; 0xff))"},
 			{14, "R4_w=inv(id=0,umax_value=65535,var_off=(0x0; 0xffff))"},
 			{15, "R4_w=inv(id=0,umax_value=65535,var_off=(0x0; 0xffff))"},
@@ -296,59 +296,59 @@ static struct bpf_align_test tests[] = {
 			/* Calculated offset in R6 has unknown value, but known
 			 * alignment of 4.
 			 */
-			{8, "R2_w=pkt(id=0,off=0,r=8,imm=0)"},
+			{8, "R2_w=pkt(id=0,parent_ref_obj_id=0,off=0,r=8,imm=0)"},
 			{8, "R6_w=inv(id=0,umax_value=1020,var_off=(0x0; 0x3fc))"},
 			/* Offset is added to packet pointer R5, resulting in
 			 * known fixed offset, and variable offset from R6.
 			 */
-			{11, "R5_w=pkt(id=1,off=14,r=0,umax_value=1020,var_off=(0x0; 0x3fc))"},
+			{11, "R5_w=pkt(id=1,parent_ref_obj_id=0,off=14,r=0,umax_value=1020,var_off=(0x0; 0x3fc))"},
 			/* At the time the word size load is performed from R5,
 			 * it's total offset is NET_IP_ALIGN + reg->off (0) +
 			 * reg->aux_off (14) which is 16.  Then the variable
 			 * offset is considered using reg->aux_off_align which
 			 * is 4 and meets the load's requirements.
 			 */
-			{15, "R4=pkt(id=1,off=18,r=18,umax_value=1020,var_off=(0x0; 0x3fc))"},
-			{15, "R5=pkt(id=1,off=14,r=18,umax_value=1020,var_off=(0x0; 0x3fc))"},
+			{15, "R4=pkt(id=1,parent_ref_obj_id=0,off=18,r=18,umax_value=1020,var_off=(0x0; 0x3fc))"},
+			{15, "R5=pkt(id=1,parent_ref_obj_id=0,off=14,r=18,umax_value=1020,var_off=(0x0; 0x3fc))"},
 			/* Variable offset is added to R5 packet pointer,
 			 * resulting in auxiliary alignment of 4.
 			 */
-			{18, "R5_w=pkt(id=2,off=0,r=0,umax_value=1020,var_off=(0x0; 0x3fc))"},
+			{18, "R5_w=pkt(id=2,parent_ref_obj_id=0,off=0,r=0,umax_value=1020,var_off=(0x0; 0x3fc))"},
 			/* Constant offset is added to R5, resulting in
 			 * reg->off of 14.
 			 */
-			{19, "R5_w=pkt(id=2,off=14,r=0,umax_value=1020,var_off=(0x0; 0x3fc))"},
+			{19, "R5_w=pkt(id=2,parent_ref_obj_id=0,off=14,r=0,umax_value=1020,var_off=(0x0; 0x3fc))"},
 			/* At the time the word size load is performed from R5,
 			 * its total fixed offset is NET_IP_ALIGN + reg->off
 			 * (14) which is 16.  Then the variable offset is 4-byte
 			 * aligned, so the total offset is 4-byte aligned and
 			 * meets the load's requirements.
 			 */
-			{23, "R4=pkt(id=2,off=18,r=18,umax_value=1020,var_off=(0x0; 0x3fc))"},
-			{23, "R5=pkt(id=2,off=14,r=18,umax_value=1020,var_off=(0x0; 0x3fc))"},
+			{23, "R4=pkt(id=2,parent_ref_obj_id=0,off=18,r=18,umax_value=1020,var_off=(0x0; 0x3fc))"},
+			{23, "R5=pkt(id=2,parent_ref_obj_id=0,off=14,r=18,umax_value=1020,var_off=(0x0; 0x3fc))"},
 			/* Constant offset is added to R5 packet pointer,
 			 * resulting in reg->off value of 14.
 			 */
-			{26, "R5_w=pkt(id=0,off=14,r=8"},
+			{26, "R5_w=pkt(id=0,parent_ref_obj_id=0,off=14,r=8"},
 			/* Variable offset is added to R5, resulting in a
 			 * variable offset of (4n).
 			 */
-			{27, "R5_w=pkt(id=3,off=14,r=0,umax_value=1020,var_off=(0x0; 0x3fc))"},
+			{27, "R5_w=pkt(id=3,parent_ref_obj_id=0,off=14,r=0,umax_value=1020,var_off=(0x0; 0x3fc))"},
 			/* Constant is added to R5 again, setting reg->off to 18. */
-			{28, "R5_w=pkt(id=3,off=18,r=0,umax_value=1020,var_off=(0x0; 0x3fc))"},
+			{28, "R5_w=pkt(id=3,parent_ref_obj_id=0,off=18,r=0,umax_value=1020,var_off=(0x0; 0x3fc))"},
 			/* And once more we add a variable; resulting var_off
 			 * is still (4n), fixed offset is not changed.
 			 * Also, we create a new reg->id.
 			 */
-			{29, "R5_w=pkt(id=4,off=18,r=0,umax_value=2040,var_off=(0x0; 0x7fc)"},
+			{29, "R5_w=pkt(id=4,parent_ref_obj_id=0,off=18,r=0,umax_value=2040,var_off=(0x0; 0x7fc)"},
 			/* At the time the word size load is performed from R5,
 			 * its total fixed offset is NET_IP_ALIGN + reg->off (18)
 			 * which is 20.  Then the variable offset is (4n), so
 			 * the total offset is 4-byte aligned and meets the
 			 * load's requirements.
 			 */
-			{33, "R4=pkt(id=4,off=22,r=22,umax_value=2040,var_off=(0x0; 0x7fc)"},
-			{33, "R5=pkt(id=4,off=18,r=22,umax_value=2040,var_off=(0x0; 0x7fc)"},
+			{33, "R4=pkt(id=4,parent_ref_obj_id=0,off=22,r=22,umax_value=2040,var_off=(0x0; 0x7fc)"},
+			{33, "R5=pkt(id=4,parent_ref_obj_id=0,off=18,r=22,umax_value=2040,var_off=(0x0; 0x7fc)"},
 		},
 	},
 	{
@@ -386,20 +386,20 @@ static struct bpf_align_test tests[] = {
 			/* Calculated offset in R6 has unknown value, but known
 			 * alignment of 4.
 			 */
-			{8, "R2_w=pkt(id=0,off=0,r=8,imm=0)"},
+			{8, "R2_w=pkt(id=0,parent_ref_obj_id=0,off=0,r=8,imm=0)"},
 			{8, "R6_w=inv(id=0,umax_value=1020,var_off=(0x0; 0x3fc))"},
 			/* Adding 14 makes R6 be (4n+2) */
 			{9, "R6_w=inv(id=0,umin_value=14,umax_value=1034,var_off=(0x2; 0x7fc))"},
 			/* Packet pointer has (4n+2) offset */
-			{11, "R5_w=pkt(id=1,off=0,r=0,umin_value=14,umax_value=1034,var_off=(0x2; 0x7fc)"},
-			{13, "R4=pkt(id=1,off=4,r=0,umin_value=14,umax_value=1034,var_off=(0x2; 0x7fc)"},
+			{11, "R5_w=pkt(id=1,parent_ref_obj_id=0,off=0,r=0,umin_value=14,umax_value=1034,var_off=(0x2; 0x7fc)"},
+			{13, "R4=pkt(id=1,parent_ref_obj_id=0,off=4,r=0,umin_value=14,umax_value=1034,var_off=(0x2; 0x7fc)"},
 			/* At the time the word size load is performed from R5,
 			 * its total fixed offset is NET_IP_ALIGN + reg->off (0)
 			 * which is 2.  Then the variable offset is (4n+2), so
 			 * the total offset is 4-byte aligned and meets the
 			 * load's requirements.
 			 */
-			{15, "R5=pkt(id=1,off=0,r=4,umin_value=14,umax_value=1034,var_off=(0x2; 0x7fc)"},
+			{15, "R5=pkt(id=1,parent_ref_obj_id=0,off=0,r=4,umin_value=14,umax_value=1034,var_off=(0x2; 0x7fc)"},
 			/* Newly read value in R6 was shifted left by 2, so has
 			 * known alignment of 4.
 			 */
@@ -407,15 +407,15 @@ static struct bpf_align_test tests[] = {
 			/* Added (4n) to packet pointer's (4n+2) var_off, giving
 			 * another (4n+2).
 			 */
-			{19, "R5_w=pkt(id=2,off=0,r=0,umin_value=14,umax_value=2054,var_off=(0x2; 0xffc)"},
-			{21, "R4=pkt(id=2,off=4,r=0,umin_value=14,umax_value=2054,var_off=(0x2; 0xffc)"},
+			{19, "R5_w=pkt(id=2,parent_ref_obj_id=0,off=0,r=0,umin_value=14,umax_value=2054,var_off=(0x2; 0xffc)"},
+			{21, "R4=pkt(id=2,parent_ref_obj_id=0,off=4,r=0,umin_value=14,umax_value=2054,var_off=(0x2; 0xffc)"},
 			/* At the time the word size load is performed from R5,
 			 * its total fixed offset is NET_IP_ALIGN + reg->off (0)
 			 * which is 2.  Then the variable offset is (4n+2), so
 			 * the total offset is 4-byte aligned and meets the
 			 * load's requirements.
 			 */
-			{23, "R5=pkt(id=2,off=0,r=4,umin_value=14,umax_value=2054,var_off=(0x2; 0xffc)"},
+			{23, "R5=pkt(id=2,parent_ref_obj_id=0,off=0,r=4,umin_value=14,umax_value=2054,var_off=(0x2; 0xffc)"},
 		},
 	},
 	{
@@ -448,7 +448,7 @@ static struct bpf_align_test tests[] = {
 		.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 		.result = REJECT,
 		.matches = {
-			{4, "R5_w=pkt_end(id=0,off=0,imm=0)"},
+			{4, "R5_w=pkt_end(id=0,parent_ref_obj_id=0,off=0,imm=0)"},
 			/* (ptr - ptr) << 2 == unknown, (4n) */
 			{6, "R5_w=inv(id=0,smax_value=9223372036854775804,umax_value=18446744073709551612,var_off=(0x0; 0xfffffffffffffffc)"},
 			/* (4n) + 14 == (4n+2).  We blow our bounds, because
@@ -458,8 +458,8 @@ static struct bpf_align_test tests[] = {
 			/* Checked s>=0 */
 			{9, "R5=inv(id=0,umin_value=2,umax_value=9223372036854775806,var_off=(0x2; 0x7ffffffffffffffc)"},
 			/* packet pointer + nonnegative (4n+2) */
-			{11, "R6_w=pkt(id=1,off=0,r=0,umin_value=2,umax_value=9223372036854775806,var_off=(0x2; 0x7ffffffffffffffc)"},
-			{13, "R4_w=pkt(id=1,off=4,r=0,umin_value=2,umax_value=9223372036854775806,var_off=(0x2; 0x7ffffffffffffffc)"},
+			{11, "R6_w=pkt(id=1,parent_ref_obj_id=0,off=0,r=0,umin_value=2,umax_value=9223372036854775806,var_off=(0x2; 0x7ffffffffffffffc)"},
+			{13, "R4_w=pkt(id=1,parent_ref_obj_id=0,off=4,r=0,umin_value=2,umax_value=9223372036854775806,var_off=(0x2; 0x7ffffffffffffffc)"},
 			/* NET_IP_ALIGN + (4n+2) == (4n), alignment is fine.
 			 * We checked the bounds, but it might have been able
 			 * to overflow if the packet pointer started in the
@@ -467,7 +467,7 @@ static struct bpf_align_test tests[] = {
 			 * So we did not get a 'range' on R6, and the access
 			 * attempt will fail.
 			 */
-			{15, "R6_w=pkt(id=1,off=0,r=0,umin_value=2,umax_value=9223372036854775806,var_off=(0x2; 0x7ffffffffffffffc)"},
+			{15, "R6_w=pkt(id=1,parent_ref_obj_id=0,off=0,r=0,umin_value=2,umax_value=9223372036854775806,var_off=(0x2; 0x7ffffffffffffffc)"},
 		}
 	},
 	{
@@ -502,7 +502,7 @@ static struct bpf_align_test tests[] = {
 			/* Calculated offset in R6 has unknown value, but known
 			 * alignment of 4.
 			 */
-			{7, "R2_w=pkt(id=0,off=0,r=8,imm=0)"},
+			{7, "R2_w=pkt(id=0,parent_ref_obj_id=0,off=0,r=8,imm=0)"},
 			{9, "R6_w=inv(id=0,umax_value=1020,var_off=(0x0; 0x3fc))"},
 			/* Adding 14 makes R6 be (4n+2) */
 			{10, "R6_w=inv(id=0,umin_value=14,umax_value=1034,var_off=(0x2; 0x7fc))"},
@@ -518,7 +518,7 @@ static struct bpf_align_test tests[] = {
 			 * the total offset is 4-byte aligned and meets the
 			 * load's requirements.
 			 */
-			{20, "R5=pkt(id=2,off=0,r=4,umin_value=2,umax_value=1034,var_off=(0x2; 0x7fc)"},
+			{20, "R5=pkt(id=2,parent_ref_obj_id=0,off=0,r=4,umin_value=2,umax_value=1034,var_off=(0x2; 0x7fc)"},
 
 		},
 	},
@@ -556,23 +556,23 @@ static struct bpf_align_test tests[] = {
 			/* Calculated offset in R6 has unknown value, but known
 			 * alignment of 4.
 			 */
-			{7, "R2_w=pkt(id=0,off=0,r=8,imm=0)"},
+			{7, "R2_w=pkt(id=0,parent_ref_obj_id=0,off=0,r=8,imm=0)"},
 			{10, "R6_w=inv(id=0,umax_value=60,var_off=(0x0; 0x3c))"},
 			/* Adding 14 makes R6 be (4n+2) */
 			{11, "R6_w=inv(id=0,umin_value=14,umax_value=74,var_off=(0x2; 0x7c))"},
 			/* Subtracting from packet pointer overflows ubounds */
-			{13, "R5_w=pkt(id=2,off=0,r=8,umin_value=18446744073709551542,umax_value=18446744073709551602,var_off=(0xffffffffffffff82; 0x7c)"},
+			{13, "R5_w=pkt(id=2,parent_ref_obj_id=0,off=0,r=8,umin_value=18446744073709551542,umax_value=18446744073709551602,var_off=(0xffffffffffffff82; 0x7c)"},
 			/* New unknown value in R7 is (4n), >= 76 */
 			{15, "R7_w=inv(id=0,umin_value=76,umax_value=1096,var_off=(0x0; 0x7fc))"},
 			/* Adding it to packet pointer gives nice bounds again */
-			{16, "R5_w=pkt(id=3,off=0,r=0,umin_value=2,umax_value=1082,var_off=(0x2; 0xfffffffc)"},
+			{16, "R5_w=pkt(id=3,parent_ref_obj_id=0,off=0,r=0,umin_value=2,umax_value=1082,var_off=(0x2; 0xfffffffc)"},
 			/* At the time the word size load is performed from R5,
 			 * its total fixed offset is NET_IP_ALIGN + reg->off (0)
 			 * which is 2.  Then the variable offset is (4n+2), so
 			 * the total offset is 4-byte aligned and meets the
 			 * load's requirements.
 			 */
-			{20, "R5=pkt(id=3,off=0,r=4,umin_value=2,umax_value=1082,var_off=(0x2; 0xfffffffc)"},
+			{20, "R5=pkt(id=3,parent_ref_obj_id=0,off=0,r=4,umin_value=2,umax_value=1082,var_off=(0x2; 0xfffffffc)"},
 		},
 	},
 };
