@@ -155,6 +155,21 @@ struct bpf_map_ops {
 	const struct bpf_iter_seq_info *iter_seq_info;
 };
 
+enum {
+	BPF_MAP_VALUE_OFF_MAX = 32,
+};
+
+struct bpf_map_value_off_desc {
+	u32 offset;
+	u32 btf_id;
+	struct btf *btf;
+};
+
+struct bpf_map_value_off {
+	u32 nr_off;
+	struct bpf_map_value_off_desc off[];
+};
+
 struct bpf_map {
 	/* The first two cachelines with read-mostly members of which some
 	 * are also accessed in fast-path (e.g. ops, max_entries).
@@ -171,6 +186,7 @@ struct bpf_map {
 	u64 map_extra; /* any per-map-type extra fields */
 	u32 map_flags;
 	int spin_lock_off; /* >=0 valid offset, <0 error */
+	struct bpf_map_value_off *ptr_off_tab;
 	int timer_off; /* >=0 valid offset, <0 error */
 	u32 id;
 	int numa_node;
@@ -184,7 +200,7 @@ struct bpf_map {
 	char name[BPF_OBJ_NAME_LEN];
 	bool bypass_spec_v1;
 	bool frozen; /* write-once; write-protected by freeze_mutex */
-	/* 14 bytes hole */
+	/* 6 bytes hole */
 
 	/* The 3rd and 4th cacheline with misc members to avoid false sharing
 	 * particularly with refcounting.
@@ -217,6 +233,11 @@ static inline bool map_value_has_timer(const struct bpf_map *map)
 	return map->timer_off >= 0;
 }
 
+static inline bool map_value_has_ptr_to_btf_id(const struct bpf_map *map)
+{
+	return map->ptr_off_tab != NULL;
+}
+
 static inline void check_and_init_map_value(struct bpf_map *map, void *dst)
 {
 	if (unlikely(map_value_has_spin_lock(map)))
@@ -225,6 +246,13 @@ static inline void check_and_init_map_value(struct bpf_map *map, void *dst)
 	if (unlikely(map_value_has_timer(map)))
 		*(struct bpf_timer *)(dst + map->timer_off) =
 			(struct bpf_timer){};
+	if (unlikely(map_value_has_ptr_to_btf_id(map))) {
+		struct bpf_map_value_off *tab = map->ptr_off_tab;
+		int i;
+
+		for (i = 0; i < tab->nr_off; i++)
+			*(u64 *)(dst + tab->off[i].offset) = 0;
+	}
 }
 
 /* copy everything but bpf_spin_lock and bpf_timer. There could be one of each. */
@@ -239,6 +267,8 @@ static inline void copy_map_value(struct bpf_map *map, void *dst, void *src)
 		t_off = map->timer_off;
 		t_sz = sizeof(struct bpf_timer);
 	}
+
+	// XXX: PTR_TO_BTF_ID support
 
 	if (unlikely(s_sz || t_sz)) {
 		if (s_off < t_off || !s_sz) {
@@ -1489,6 +1519,9 @@ void bpf_prog_put(struct bpf_prog *prog);
 
 void bpf_prog_free_id(struct bpf_prog *prog, bool do_idr_lock);
 void bpf_map_free_id(struct bpf_map *map, bool do_idr_lock);
+
+struct bpf_map_value_off_desc *bpf_map_ptr_off_contains(struct bpf_map *map, u32 offset);
+void bpf_map_free_ptr_off_tab(struct bpf_map *map);
 
 struct bpf_map *bpf_map_get(u32 ufd);
 struct bpf_map *bpf_map_get_with_uref(u32 ufd);

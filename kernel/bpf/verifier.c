@@ -3494,6 +3494,32 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 			return -EACCES;
 		}
 	}
+	if (map_value_has_ptr_to_btf_id(map)) {
+		struct bpf_map_value_off *tab = map->ptr_off_tab;
+		bool known_off = tnum_is_const(reg->var_off);
+		int i;
+
+		for (i = 0; i < tab->nr_off; i++) {
+			u32 p = tab->off[i].offset;
+
+			if (reg->smin_value + off < p + sizeof(u64) &&
+			    p < reg->umax_value + off + size) {
+				if (!known_off) {
+					verbose(env, "btf_id pointer cannot be accessed by variable offset load/store\n");
+					return -EACCES;
+				}
+				if (p != off + reg->var_off.value) {
+					verbose(env, "btf_id pointer offset incorrect\n");
+					return -EACCES;
+				}
+				if (size != sizeof(u64)) {
+					verbose(env, "btf_id pointer load/store size must be 8\n");
+					return -EACCES;
+				}
+				break;
+			}
+		}
+	}
 	return err;
 }
 
@@ -4396,12 +4422,17 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 			return err;
 		err = check_map_access(env, regno, off, size, false);
 		if (!err && t == BPF_READ && value_regno >= 0) {
+			struct bpf_map_value_off_desc *off_desc;
 			struct bpf_map *map = reg->map_ptr;
 
-			/* if map is read-only, track its contents as scalars */
 			if (tnum_is_const(reg->var_off) &&
-			    bpf_map_is_rdonly(map) &&
-			    map->ops->map_direct_value_addr) {
+			    (off_desc = bpf_map_ptr_off_contains(map, off + reg->var_off.value))) {
+				/* We are reading a PTR_TO_BTF_ID embedded in map value */
+				mark_btf_ld_reg(env, regs, value_regno, PTR_TO_BTF_ID,
+						off_desc->btf, off_desc->btf_id);
+			} else if (tnum_is_const(reg->var_off) && bpf_map_is_rdonly(map) &&
+				   map->ops->map_direct_value_addr) {
+				/* if map is read-only, track its contents as scalars */
 				int map_off = off + reg->var_off.value;
 				u64 val = 0;
 

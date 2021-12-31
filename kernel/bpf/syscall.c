@@ -6,6 +6,7 @@
 #include <linux/bpf_trace.h>
 #include <linux/bpf_lirc.h>
 #include <linux/bpf_verifier.h>
+#include <linux/bsearch.h>
 #include <linux/btf.h>
 #include <linux/syscalls.h>
 #include <linux/slab.h>
@@ -472,12 +473,57 @@ static void bpf_map_release_memcg(struct bpf_map *map)
 }
 #endif
 
+static int bpf_map_ptr_off_cmp(const void *a, const void *b)
+{
+	const struct bpf_map_value_off_desc *off_desc1 = a, *off_desc2 = b;
+
+	if (off_desc1->offset < off_desc2->offset)
+		return -1;
+	else if (off_desc1->offset > off_desc2->offset)
+		return 1;
+	return 0;
+}
+
+struct bpf_map_value_off_desc *bpf_map_ptr_off_contains(struct bpf_map *map, u32 offset)
+{
+	/* TODO(review): Since members are iterated in btf_find_field in
+	 * increasing order, offsets appended to ptr_off_tab are in increasing
+	 * order, so we can do bsearch to find exact match.
+	 */
+	struct bpf_map_value_off *tab;
+
+	if (!map_value_has_ptr_to_btf_id(map))
+		return NULL;
+	tab = map->ptr_off_tab;
+	return bsearch(&offset, tab->off, tab->nr_off, sizeof(tab->off[0]), bpf_map_ptr_off_cmp);
+}
+
+void bpf_map_free_ptr_off_tab(struct bpf_map *map)
+{
+	struct bpf_map_value_off *tab = map->ptr_off_tab;
+	int i;
+
+	if (!tab)
+		return;
+	for (i = 0; i < tab->nr_off; i++) {
+		struct btf *btf = tab->off[i].btf;
+		/* off[i].btf is obtained from bpf_btf_find_by_name_kind_all,
+		 * which only takes reference for module BTF, not vmlinux BTF.
+		 */
+		if (btf_is_module(btf))
+			btf_put(btf);
+	}
+	kfree(tab);
+	map->ptr_off_tab = NULL;
+}
+
 /* called from workqueue */
 static void bpf_map_free_deferred(struct work_struct *work)
 {
 	struct bpf_map *map = container_of(work, struct bpf_map, work);
 
 	security_bpf_map_free(map);
+	bpf_map_free_ptr_off_tab(map);
 	bpf_map_release_memcg(map);
 	/* implementation dependent freeing */
 	map->ops->map_free(map);
@@ -819,9 +865,32 @@ static int map_check_btf(struct bpf_map *map, const struct btf *btf,
 			return -EOPNOTSUPP;
 	}
 
-	if (map->ops->map_check_btf)
-		ret = map->ops->map_check_btf(map, btf, key_type, value_type);
+	ret = btf_find_ptr_to_btf_id(btf, value_type, map);
+	if (ret < 0)
+		return ret;
+	if (map_value_has_ptr_to_btf_id(map)) {
+		if (map->map_flags & BPF_F_RDONLY_PROG) {
+			ret = -EACCES;
+			goto free_map_tab;
+		}
+		/* XXX: We can add a lot more maps */
+		if (map->map_type != BPF_MAP_TYPE_HASH &&
+		    map->map_type != BPF_MAP_TYPE_LRU_HASH &&
+		    map->map_type != BPF_MAP_TYPE_ARRAY) {
+			ret = -EOPNOTSUPP;
+			goto free_map_tab;
+		}
+	}
 
+	if (map->ops->map_check_btf) {
+		ret = map->ops->map_check_btf(map, btf, key_type, value_type);
+		if (ret < 0)
+			goto free_map_tab;
+	}
+
+	return ret;
+free_map_tab:
+	bpf_map_free_ptr_off_tab(map);
 	return ret;
 }
 
@@ -913,7 +982,7 @@ static int map_create(union bpf_attr *attr)
 
 	err = security_bpf_map_alloc(map);
 	if (err)
-		goto free_map;
+		goto free_map_tab;
 
 	err = bpf_map_alloc_id(map);
 	if (err)
@@ -937,6 +1006,8 @@ static int map_create(union bpf_attr *attr)
 
 free_map_sec:
 	security_bpf_map_free(map);
+free_map_tab:
+	bpf_map_free_ptr_off_tab(map);
 free_map:
 	btf_put(map->btf);
 	map->ops->map_free(map);

@@ -490,6 +490,11 @@ static bool btf_type_is_decl_tag_target(const struct btf_type *t)
 	       btf_type_is_var(t) || btf_type_is_typedef(t);
 }
 
+static bool btf_type_is_type_tag(const struct btf_type *t)
+{
+	return BTF_INFO_KIND(t->info) == BTF_KIND_TYPE_TAG;
+}
+
 u32 btf_nr_types(const struct btf *btf)
 {
 	u32 total = 0;
@@ -3241,6 +3246,85 @@ int btf_find_timer(const struct btf *btf, const struct btf_type *t)
 	if (ret < 0)
 		return ret;
 	return off;
+}
+
+static s32 btf_find_by_name_kind_all(const char *name, u32 kind, struct btf **btfp);
+
+static int btf_find_ptr_to_btf_id_cb(const struct btf *btf, const struct btf_type *t,
+				     u32 off, void *data)
+{
+	struct bpf_map_value_off *tab;
+	struct bpf_map *map = data;
+	struct btf *kernel_btf;
+	int nr_off, ret;
+	s32 id;
+
+	if (!btf_type_is_ptr(t))
+		return 0;
+	t = btf_type_by_id(btf, t->type);
+	if (!btf_type_is_type_tag(t))
+		return 0;
+	if (strcmp("btf_id", __btf_name_by_offset(btf, t->name_off)))
+		return 0;
+	t = btf_type_skip_modifiers(btf, t->type, NULL);
+	/* pointer to void is not permitted */
+	if (btf_type_is_void(t)) {
+		ret = -EINVAL;
+		goto end;
+	}
+
+	id = btf_find_by_name_kind_all(__btf_name_by_offset(btf, t->name_off),
+				       BTF_INFO_KIND(t->info), &kernel_btf);
+	if (id < 0) {
+		ret = id;
+		goto end;
+	}
+
+	nr_off = map->ptr_off_tab ? map->ptr_off_tab->nr_off : 0;
+	if (nr_off == BPF_MAP_VALUE_OFF_MAX) {
+		ret = -E2BIG;
+		goto end_btf;
+	}
+
+	tab = krealloc(map->ptr_off_tab, offsetof(struct bpf_map_value_off, off[nr_off + 1]),
+		       GFP_KERNEL | __GFP_NOWARN);
+	if (!tab) {
+		ret = -ENOMEM;
+		goto end_btf;
+	}
+	/* Initialize nr_off for newly allocated ptr_off_tab */
+	if (!map->ptr_off_tab)
+		tab->nr_off = 0;
+	map->ptr_off_tab = tab;
+
+	tab->off[nr_off].offset = off;
+	tab->off[nr_off].btf_id = id;
+	tab->off[nr_off].btf = kernel_btf;
+	tab->nr_off++;
+
+	return 0;
+end_btf:
+	/* Reference is only raised for module BTF */
+	if (btf_is_module(kernel_btf))
+		btf_put(kernel_btf);
+end:
+	bpf_map_free_ptr_off_tab(map);
+	return ret;
+}
+
+int btf_find_ptr_to_btf_id(const struct btf *btf, const struct btf_type *t,
+			   struct bpf_map *map)
+{
+	int ret;
+
+	ret = btf_find_field(btf, t, NULL, sizeof(u64), __alignof__(u64),
+			     btf_find_ptr_to_btf_id_cb, map);
+	/* While callback cleans up after itself, later iterations can still
+	 * return error without calling cb, so call free function again.
+	 */
+	if (ret < 0)
+		bpf_map_free_ptr_off_tab(map);
+	return ret;
 }
 
 static void __btf_struct_show(const struct btf *btf, const struct btf_type *t,
