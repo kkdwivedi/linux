@@ -185,8 +185,8 @@ end:
 	return ret;
 }
 
-BPF_CALL_4(bpf_inode_storage_get, struct bpf_map *, map, struct inode *, inode,
-	   void *, value, u64, flags)
+BPF_CALL_5(bpf_inode_storage_get, struct bpf_map *, map, struct inode *, inode,
+	   void *, value, u64, flags, bool, ref)
 {
 	struct bpf_local_storage_data *sdata;
 
@@ -210,11 +210,12 @@ BPF_CALL_4(bpf_inode_storage_get, struct bpf_map *, map, struct inode *, inode,
 	 * to have a refcount and cannot be freed.
 	 */
 	if (flags & BPF_LOCAL_STORAGE_GET_F_CREATE &&
-	    bpf_inode_refcount_inc_not_zero(inode)) {
+	    (ref || bpf_inode_refcount_inc_not_zero(inode))) {
 		sdata = bpf_local_storage_update(
 			inode, (struct bpf_local_storage_map *)map, value,
 			BPF_NOEXIST);
-		iput(inode);
+		if (!ref)
+			iput(inode);
 		return IS_ERR(sdata) ? (unsigned long)NULL :
 					     (unsigned long)sdata->data;
 	}
@@ -222,8 +223,8 @@ BPF_CALL_4(bpf_inode_storage_get, struct bpf_map *, map, struct inode *, inode,
 	return (unsigned long)NULL;
 }
 
-BPF_CALL_2(bpf_inode_storage_delete,
-	   struct bpf_map *, map, struct inode *, inode)
+BPF_CALL_3(bpf_inode_storage_delete,
+	   struct bpf_map *, map, struct inode *, inode, bool, ref)
 {
 	WARN_ON_ONCE(!bpf_rcu_lock_held());
 	if (!inode)
@@ -232,11 +233,12 @@ BPF_CALL_2(bpf_inode_storage_delete,
 	/* This helper must only called from where the inode is guaranteed
 	 * to have a refcount and cannot be freed.
 	 */
-	if (bpf_inode_refcount_inc_not_zero(inode)) {
+	if (ref || bpf_inode_refcount_inc_not_zero(inode)) {
 		int err;
 
 		err = inode_storage_delete(inode, map);
-		iput(inode);
+		if (!ref)
+			iput(inode);
 		return err;
 	}
 

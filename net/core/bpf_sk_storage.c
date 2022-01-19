@@ -255,8 +255,8 @@ out:
 	return ret;
 }
 
-BPF_CALL_4(bpf_sk_storage_get, struct bpf_map *, map, struct sock *, sk,
-	   void *, value, u64, flags)
+BPF_CALL_5(bpf_sk_storage_get, struct bpf_map *, map, struct sock *, sk,
+	   void *, value, u64, flags, bool, ref)
 {
 	struct bpf_local_storage_data *sdata;
 
@@ -274,14 +274,15 @@ BPF_CALL_4(bpf_sk_storage_get, struct bpf_map *, map, struct sock *, sk,
 	     * (and also other memory issues during map
 	     *  destruction).
 	     */
-	    refcount_inc_not_zero(&sk->sk_refcnt)) {
+	    (ref || refcount_inc_not_zero(&sk->sk_refcnt))) {
 		sdata = bpf_local_storage_update(
 			sk, (struct bpf_local_storage_map *)map, value,
 			BPF_NOEXIST);
 		/* sk must be a fullsock (guaranteed by verifier),
 		 * so sock_gen_put() is unnecessary.
 		 */
-		sock_put(sk);
+		if (!ref)
+			sock_put(sk);
 		return IS_ERR(sdata) ?
 			(unsigned long)NULL : (unsigned long)sdata->data;
 	}
@@ -289,17 +290,19 @@ BPF_CALL_4(bpf_sk_storage_get, struct bpf_map *, map, struct sock *, sk,
 	return (unsigned long)NULL;
 }
 
-BPF_CALL_2(bpf_sk_storage_delete, struct bpf_map *, map, struct sock *, sk)
+BPF_CALL_3(bpf_sk_storage_delete, struct bpf_map *, map, struct sock *, sk,
+	   bool, ref)
 {
 	WARN_ON_ONCE(!bpf_rcu_lock_held());
 	if (!sk || !sk_fullsock(sk))
 		return -EINVAL;
 
-	if (refcount_inc_not_zero(&sk->sk_refcnt)) {
+	if (ref || refcount_inc_not_zero(&sk->sk_refcnt)) {
 		int err;
 
 		err = bpf_sk_storage_del(sk, map);
-		sock_put(sk);
+		if (!ref)
+			sock_put(sk);
 		return err;
 	}
 
