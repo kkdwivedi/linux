@@ -5040,10 +5040,13 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	info->btf_id = t->type;
 	t = btf_type_by_id(btf, t->type);
 
-	if (btf_type_is_type_tag(t)) {
+	while (btf_type_is_type_tag(t)) {
 		tag_value = __btf_name_by_offset(btf, t->name_off);
 		if (strcmp(tag_value, "user") == 0)
 			info->reg_type |= MEM_USER;
+		else if (strcmp(tag_value, "bpf_ref") == 0)
+			info->reg_type |= PTR_BPF_REF;
+		t = btf_type_by_id(btf, t->type);
 	}
 
 	/* skip modifiers */

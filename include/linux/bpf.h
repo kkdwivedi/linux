@@ -335,7 +335,10 @@ enum bpf_type_flag {
 	/* MEM is in user address space. */
 	MEM_USER		= BIT(3 + BPF_BASE_TYPE_BITS),
 
-	__BPF_TYPE_LAST_FLAG	= MEM_USER,
+	/* PTR is annotated with __bpf_ref, i.e. always refcounted. */
+	PTR_BPF_REF		= BIT(4 + BPF_BASE_TYPE_BITS),
+
+	__BPF_TYPE_LAST_FLAG	= PTR_BPF_REF,
 };
 
 /* Max number of base types. */

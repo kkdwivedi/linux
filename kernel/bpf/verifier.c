@@ -6492,6 +6492,23 @@ record_func_key(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	return 0;
 }
 
+static int record_local_storage_ref(struct bpf_verifier_env *env,
+				    struct bpf_call_arg_meta *meta, int func_id,
+				    int insn_idx)
+{
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[insn_idx];
+	struct bpf_reg_state *regs = cur_regs(env);
+
+	if (func_id != BPF_FUNC_sk_storage_get &&
+	    func_id != BPF_FUNC_sk_storage_delete &&
+	    func_id != BPF_FUNC_inode_storage_get &&
+	    func_id != BPF_FUNC_inode_storage_delete)
+		return 0;
+
+	aux->ls_arg_ref = regs[BPF_REG_2].type & PTR_BPF_REF;
+	return 0;
+}
+
 static int check_reference_leak(struct bpf_verifier_env *env)
 {
 	struct bpf_func_state *state = cur_func(env);
@@ -6632,6 +6649,10 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		return err;
 
 	err = record_func_key(env, &meta, func_id, insn_idx);
+	if (err)
+		return err;
+
+	err = record_local_storage_ref(env, &meta, func_id, insn_idx);
 	if (err)
 		return err;
 
@@ -13529,6 +13550,35 @@ patch_map_ops_generic:
 				continue;
 			}
 
+			goto patch_call_imm;
+		}
+
+		/* Elide refcount bump by passing a hidden parameter to local
+		 * storage helper that indicates whether the parameter was
+		 * annotated using __bpf_ref, which means it has a guaranteed
+		 * refcount across local storage helper call.
+		 */
+		if (insn->imm == BPF_FUNC_sk_storage_get ||
+		    insn->imm == BPF_FUNC_sk_storage_delete ||
+		    insn->imm == BPF_FUNC_inode_storage_get ||
+		    insn->imm == BPF_FUNC_inode_storage_delete) {
+			/* Get helpers use 4 args, delete helpers use 2 */
+			int regno = (insn->imm == BPF_FUNC_sk_storage_get ||
+				     insn->imm == BPF_FUNC_inode_storage_get) ?
+				     BPF_REG_5 : BPF_REG_3;
+
+			aux = &env->insn_aux_data[i + delta];
+			insn_buf[0] = BPF_MOV64_IMM(regno, aux->ls_arg_ref);
+			insn_buf[1] = *insn;
+			cnt = 2;
+
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta    += cnt - 1;
+			env->prog = prog = new_prog;
+			insn      = new_prog->insnsi + i + delta;
 			goto patch_call_imm;
 		}
 

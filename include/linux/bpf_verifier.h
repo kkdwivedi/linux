@@ -337,7 +337,11 @@ struct bpf_insn_aux_data {
 	union {
 		enum bpf_reg_type ptr_type;	/* pointer type for load/store insns */
 		unsigned long map_ptr_state;	/* pointer/poison value for maps */
-		s32 call_imm;			/* saved imm field of call insn */
+		struct {
+			/* XXX: Can we not use struct here? */
+			s32 call_imm;		/* saved imm field of call insn */
+			bool ls_arg_ref;	/* local storage helper arg is refcounted */
+		};
 		u32 alu_limit;			/* limit for add/sub register with pointer */
 		struct {
 			u32 map_index;		/* index into used_maps[] */
