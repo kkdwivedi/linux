@@ -109,31 +109,31 @@ LSM_HOOK(int, 0, path_chroot, const struct path *path)
 /* Needed for inode based security check */
 LSM_HOOK(int, 0, path_notify, const struct path *path, u64 mask,
 	 unsigned int obj_type)
-LSM_HOOK(int, 0, inode_alloc_security, struct inode *inode)
-LSM_HOOK(void, LSM_RET_VOID, inode_free_security, struct inode *inode)
-LSM_HOOK(int, 0, inode_init_security, struct inode *inode,
-	 struct inode *dir, const struct qstr *qstr, const char **name,
+LSM_HOOK(int, 0, inode_alloc_security, struct inode __bpf_ref *inode)
+LSM_HOOK(void, LSM_RET_VOID, inode_free_security, struct inode __bpf_ref *inode)
+LSM_HOOK(int, 0, inode_init_security, struct inode __bpf_ref *inode,
+	 struct inode __bpf_ref *dir, const struct qstr *qstr, const char **name,
 	 void **value, size_t *len)
-LSM_HOOK(int, 0, inode_init_security_anon, struct inode *inode,
-	 const struct qstr *name, const struct inode *context_inode)
-LSM_HOOK(int, 0, inode_create, struct inode *dir, struct dentry *dentry,
+LSM_HOOK(int, 0, inode_init_security_anon, struct inode __bpf_ref *inode,
+	 const struct qstr *name, const struct inode __bpf_ref *context_inode)
+LSM_HOOK(int, 0, inode_create, struct inode __bpf_ref *dir, struct dentry *dentry,
 	 umode_t mode)
-LSM_HOOK(int, 0, inode_link, struct dentry *old_dentry, struct inode *dir,
+LSM_HOOK(int, 0, inode_link, struct dentry *old_dentry, struct inode __bpf_ref *dir,
 	 struct dentry *new_dentry)
-LSM_HOOK(int, 0, inode_unlink, struct inode *dir, struct dentry *dentry)
-LSM_HOOK(int, 0, inode_symlink, struct inode *dir, struct dentry *dentry,
+LSM_HOOK(int, 0, inode_unlink, struct inode __bpf_ref *dir, struct dentry *dentry)
+LSM_HOOK(int, 0, inode_symlink, struct inode __bpf_ref *dir, struct dentry *dentry,
 	 const char *old_name)
-LSM_HOOK(int, 0, inode_mkdir, struct inode *dir, struct dentry *dentry,
+LSM_HOOK(int, 0, inode_mkdir, struct inode __bpf_ref *dir, struct dentry *dentry,
 	 umode_t mode)
-LSM_HOOK(int, 0, inode_rmdir, struct inode *dir, struct dentry *dentry)
-LSM_HOOK(int, 0, inode_mknod, struct inode *dir, struct dentry *dentry,
+LSM_HOOK(int, 0, inode_rmdir, struct inode __bpf_ref *dir, struct dentry *dentry)
+LSM_HOOK(int, 0, inode_mknod, struct inode __bpf_ref *dir, struct dentry *dentry,
 	 umode_t mode, dev_t dev)
-LSM_HOOK(int, 0, inode_rename, struct inode *old_dir, struct dentry *old_dentry,
-	 struct inode *new_dir, struct dentry *new_dentry)
+LSM_HOOK(int, 0, inode_rename, struct inode __bpf_ref *old_dir, struct dentry *old_dentry,
+	 struct inode __bpf_ref *new_dir, struct dentry *new_dentry)
 LSM_HOOK(int, 0, inode_readlink, struct dentry *dentry)
-LSM_HOOK(int, 0, inode_follow_link, struct dentry *dentry, struct inode *inode,
+LSM_HOOK(int, 0, inode_follow_link, struct dentry *dentry, struct inode __bpf_ref *inode,
 	 bool rcu)
-LSM_HOOK(int, 0, inode_permission, struct inode *inode, int mask)
+LSM_HOOK(int, 0, inode_permission, struct inode __bpf_ref *inode, int mask)
 LSM_HOOK(int, 0, inode_setattr, struct dentry *dentry, struct iattr *attr)
 LSM_HOOK(int, 0, inode_getattr, const struct path *path)
 LSM_HOOK(int, 0, inode_setxattr, struct user_namespace *mnt_userns,
@@ -149,12 +149,12 @@ LSM_HOOK(int, 0, inode_need_killpriv, struct dentry *dentry)
 LSM_HOOK(int, 0, inode_killpriv, struct user_namespace *mnt_userns,
 	 struct dentry *dentry)
 LSM_HOOK(int, -EOPNOTSUPP, inode_getsecurity, struct user_namespace *mnt_userns,
-	 struct inode *inode, const char *name, void **buffer, bool alloc)
-LSM_HOOK(int, -EOPNOTSUPP, inode_setsecurity, struct inode *inode,
+	 struct inode __bpf_ref *inode, const char *name, void **buffer, bool alloc)
+LSM_HOOK(int, -EOPNOTSUPP, inode_setsecurity, struct inode __bpf_ref *inode,
 	 const char *name, const void *value, size_t size, int flags)
-LSM_HOOK(int, 0, inode_listsecurity, struct inode *inode, char *buffer,
+LSM_HOOK(int, 0, inode_listsecurity, struct inode __bpf_ref *inode, char *buffer,
 	 size_t buffer_size)
-LSM_HOOK(void, LSM_RET_VOID, inode_getsecid, struct inode *inode, u32 *secid)
+LSM_HOOK(void, LSM_RET_VOID, inode_getsecid, struct inode __bpf_ref *inode, u32 *secid)
 LSM_HOOK(int, 0, inode_copy_up, struct dentry *src, struct cred **new)
 LSM_HOOK(int, -EOPNOTSUPP, inode_copy_up_xattr, const char *name)
 LSM_HOOK(int, 0, kernfs_init_security, struct kernfs_node *kn_dir,
