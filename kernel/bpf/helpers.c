@@ -1429,6 +1429,8 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 		return &bpf_loop_proto;
 	case BPF_FUNC_strncmp:
 		return &bpf_strncmp_proto;
+	case BPF_FUNC_move_ptr:
+		return &bpf_move_ptr_proto;
 	default:
 		break;
 	}

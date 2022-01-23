@@ -3176,6 +3176,31 @@ static void mark_reg_stack_read(struct bpf_verifier_env *env,
 	state->regs[dst_regno].live |= REG_LIVE_WRITTEN;
 }
 
+static struct bpf_reg_state *
+get_stack_spilled_reg(struct bpf_verifier_env *env,
+		      struct bpf_reg_state *reg_stack, int regno)
+{
+	struct bpf_func_state *reg_state = func(env, reg_stack);
+	int off = reg_stack->off, slot, spi;
+
+	if (!tnum_is_const(reg_stack->var_off)) {
+		verbose(env, "cannot obtain spilled reg state for R%d=%s with variable offset\n",
+			regno, reg_type_str(env, PTR_TO_STACK));
+		return NULL;
+	}
+
+	off += reg_stack->var_off.value;
+	slot = -off - 1;
+	spi = slot / BPF_REG_SIZE;
+
+	if (!is_spilled_reg(&reg_state->stack[spi])) {
+		verbose(env, "R%d=%s at fixed offset %d doesn't have spilled reg\n", regno,
+			reg_type_str(env, PTR_TO_STACK), off);
+		return NULL;
+	}
+	return &reg_state->stack[spi].spilled_ptr;
+}
+
 /* Read the stack at 'off' and put the results into the register indicated by
  * 'dst_regno'. It handles reg filling if the addressed stack slot is a
  * spilled reg.
@@ -3581,10 +3606,16 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 		int i;
 
 		for (i = 0; i < tab->nr_off; i++) {
+			bool btf_id_ref = tab->off[i].flags & BPF_MAP_VALUE_OFF_F_REF;
 			u32 p = tab->off[i].offset;
 
 			if (reg->smin_value + off < p + sizeof(u64) &&
 			    p < reg->umax_value + off + size) {
+				/* XXX: Disambiguate ACCESS_HELPER vs ACCESS_DIRECT */
+				if (btf_id_ref) {
+					verbose(env, "btf_id_ref pointer cannot be acessed directly\n");
+					return -EACCES;
+				}
 				if (!known_off) {
 					verbose(env, "btf_id pointer cannot be accessed by variable offset load/store\n");
 					return -EACCES;
@@ -4510,7 +4541,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 			    (off_desc = bpf_map_ptr_off_contains(map, off + reg->var_off.value))) {
 				/* We are reading a PTR_TO_BTF_ID embedded in map value */
 				mark_btf_ld_reg(env, regs, value_regno, PTR_TO_BTF_ID,
-						off_desc->btf, off_desc->btf_id);
+						off_desc->btf, off_desc->btf_id, 0);
 			} else if (tnum_is_const(reg->var_off) && bpf_map_is_rdonly(map) &&
 				   map->ops->map_direct_value_addr) {
 				/* if map is read-only, track its contents as scalars */
@@ -6674,6 +6705,83 @@ static int check_get_func_ip(struct bpf_verifier_env *env)
 	return -ENOTSUPP;
 }
 
+static const struct bpf_func_proto *
+resolve_func_overload(struct bpf_verifier_env *env, int insn_idx,
+		      const struct bpf_func_proto *fn, int func_id)
+{
+	struct bpf_reg_state *reg1 = &cur_regs(env)[BPF_REG_1], *map_reg, *stack_reg;
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[insn_idx];
+	struct bpf_reg_state *reg2 = &cur_regs(env)[BPF_REG_2];
+	struct bpf_map_value_off_desc *off_desc;
+	int err;
+
+	if (func_id != BPF_FUNC_move_ptr)
+		return fn;
+	/* XXX: Make this more proper */
+	if (reg1->type == PTR_TO_MAP_VALUE && reg2->type == PTR_TO_STACK) {
+		fn = &bpf_move_ptr_to_map_proto;
+	} else if (reg1->type == PTR_TO_STACK && reg2->type == PTR_TO_MAP_VALUE) {
+		fn = &bpf_move_ptr_from_map_proto;
+	} else {
+		verbose(env, "R%d, R%d type=(%s, %s) expected=(%s,%s or %s,%s)\n",
+			BPF_REG_1, BPF_REG_2, reg_type_str(env, reg1->type),
+			reg_type_str(env, reg2->type), reg_type_str(env, PTR_TO_MAP_VALUE),
+			reg_type_str(env, PTR_TO_STACK), reg_type_str(env, PTR_TO_STACK),
+			reg_type_str(env, PTR_TO_MAP_VALUE));
+		fn = NULL;
+	}
+
+	map_reg = reg1->type == PTR_TO_MAP_VALUE ? reg1 : reg2;
+	if (!tnum_is_const(map_reg->var_off))
+		goto fail_ptr;
+	off_desc = bpf_map_ptr_off_contains(map_reg->map_ptr,
+					    map_reg->off + map_reg->var_off.value);
+	if (!off_desc)
+		goto fail_ptr;
+	if (reg1->type == PTR_TO_MAP_VALUE) {
+		stack_reg = get_stack_spilled_reg(env, reg2, BPF_REG_2);
+		// Is this correct, I mean the stack_reg->off?
+		if (!stack_reg || stack_reg->off) {
+			verbose(env, "R2=%s must point to spilled PTR_TO_BTF_ID with 0 offset\n",
+				reg_type_str(env, PTR_TO_STACK));
+			return NULL;
+		}
+
+		// XXX: Check if pointer is refcounted
+		if (base_type(stack_reg->type) != PTR_TO_BTF_ID) {
+			verbose(env, "R2=%s must point to refcounted spilled PTR_TO_BTF_ID\n",
+				reg_type_str(env, PTR_TO_STACK));
+			return NULL;
+		}
+
+		err = release_reference(env, stack_reg->ref_obj_id);
+		if (err < 0) {
+			verbose(env, "R2=%s does not point to refcounted PTR_TO_BTF_ID\n",
+				reg_type_str(env, PTR_TO_STACK));
+			return NULL;
+		}
+
+		// XXX: Check if offset is zero and reject, otherwise we need to
+		// restore offset as well
+		if (!btf_struct_ids_match(&env->log, stack_reg->btf,
+					  stack_reg->btf_id, 0 /* off */,
+					  off_desc->btf, off_desc->btf_id)) {
+			verbose(env, "type of PTR_TO_BTF_ID being moved into map dost not match\n");
+			return NULL;
+		}
+
+		aux->move_ptr_call.btf = off_desc->btf;
+		aux->move_ptr_call.btf_id = off_desc->btf_id;
+	}
+	aux->move_ptr_call.overload = fn;
+	return fn;
+fail_ptr:
+	verbose(env, "R%d type=%s off=%d does not correspond to btf_id pointer\n",
+		map_reg == reg1 ? BPF_REG_1 : BPF_REG_2, reg_type_str(env, map_reg->type),
+		map_reg->off);
+	return NULL;
+}
+
 static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			     int *insn_idx_p)
 {
@@ -6698,6 +6806,13 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		fn = env->ops->get_func_proto(func_id, env->prog);
 	if (!fn) {
 		verbose(env, "unknown func %s#%d\n", func_id_name(func_id),
+			func_id);
+		return -EINVAL;
+	}
+
+	fn = resolve_func_overload(env, insn_idx, fn, func_id);
+	if (!fn) {
+		verbose(env, "failed to resolve overloaded func %s#%d\n", func_id_name(func_id),
 			func_id);
 		return -EINVAL;
 	}
@@ -13749,6 +13864,83 @@ patch_map_ops_generic:
 
 			env->prog = prog = new_prog;
 			insn      = new_prog->insnsi + i + delta;
+			continue;
+		}
+
+		/* Implement bpf_move_ptr inline */
+		if (insn->imm == BPF_FUNC_move_ptr) {
+			const struct bpf_func_proto *fn_overload;
+			int tmp_cnt = 0;
+
+			aux = &env->insn_aux_data[i + delta];
+			fn_overload = aux->move_ptr_call.overload;
+
+			/* bpf_move_ptr is translated into the following if r1
+			 * is map value, and r2 is fp
+			 *
+			 * r1 = &map->saved_ptr_ref
+			 * r2 = &local_ref
+			 * bpf_move_ptr(r1, r2)
+			 *	rAX = r1
+			 *	r1  = *(r1 + 0)
+			 *	if (r1)
+			 *		r0 = ptr_destructor(r1, r2)
+			 *		r2 = r0 // r2 is returned as r0
+			 *	r1 = rAX
+			 *	r0 = *(r2 + 0)
+			 *	*(r1 + 0) = r0
+			 *
+			 * r1 = &local_ref
+			 * r2 = &map->saved_ptr_ref
+			 * bpf_move_ptr(r1, r2)
+			 *	r0 = *(r2 + 0)  // read from map ptr
+			 *	r1 = r0		// write to local variable
+			 *	*(r2 + 0) = 0	// write NULL to map ptr
+			 */
+
+			/* If moving into map, we have to free old object */
+			if (fn_overload->arg1_type == ARG_PTR_TO_MAP_VALUE) {
+				struct bpf_insn kfunc_call_insn;
+				u32 kfunc_btf_id;
+
+				/* XXX: Get destructor BTF ID */
+				kfunc_btf_id = btf_kfunc_id_set_contains(aux->move_ptr_call.btf,
+									 0, 0, aux->move_ptr_call.btf_id);
+				if (kfunc_btf_id < 0) {
+					verbose(env, "cannot find destructor kfunc for BTF ID %d\n",
+						aux->move_ptr_call.btf_id);
+				}
+
+				insn_buf[tmp_cnt++] = BPF_MOV64_REG(BPF_REG_AX, BPF_REG_1);
+				insn_buf[tmp_cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_1, 0);
+				insn_buf[tmp_cnt++] = BPF_JMP_IMM(BPF_JEQ, BPF_REG_1, 0, 2 /* Modify me */);
+				/* XXX: Let's try to emit direct call to destructor
+				 * here. We'd need a kfunc call insn to be
+				 * synthesized in check_helper_call, do
+				 * add_kfunc_call and check_kfunc_call for it,
+				 * then patch it in here and do a
+				 * fixup_kfunc_call for it. This will also bind
+				 * module BTF to prog and ensure module stays
+				 * alive as long as we need it.
+				 */
+				//insn_buf[tmp_cnt++] = BPF_EMIT_CALL(bpf_map_ptr_free);
+				insn_buf[tmp_cnt++] = BPF_MOV64_REG(BPF_REG_2, BPF_REG_0);
+				/* jmp */
+				insn_buf[tmp_cnt++] = BPF_MOV64_REG(BPF_REG_1, BPF_REG_AX);
+			}
+			insn_buf[tmp_cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_2, 0);
+			insn_buf[tmp_cnt++] = BPF_STX_MEM(BPF_DW, BPF_REG_1, BPF_REG_0, 0);
+			if (fn_overload->arg2_type == ARG_PTR_TO_MAP_VALUE)
+				insn_buf[tmp_cnt++] = BPF_ST_MEM(BPF_DW, BPF_REG_2, 0, 0);
+			cnt = tmp_cnt;
+
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta	 += cnt - 1;
+			env->prog = prog = new_prog;
+			insn	  = new_prog->insnsi + i + delta;
 			continue;
 		}
 

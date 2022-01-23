@@ -490,11 +490,6 @@ static bool btf_type_is_decl_tag_target(const struct btf_type *t)
 	       btf_type_is_var(t) || btf_type_is_typedef(t);
 }
 
-static bool btf_type_is_type_tag(const struct btf_type *t)
-{
-	return BTF_INFO_KIND(t->info) == BTF_KIND_TYPE_TAG;
-}
-
 u32 btf_nr_types(const struct btf *btf)
 {
 	u32 total = 0;
@@ -3253,7 +3248,9 @@ static s32 btf_find_by_name_kind_all(const char *name, u32 kind, struct btf **bt
 static int btf_find_ptr_to_btf_id_cb(const struct btf *btf, const struct btf_type *t,
 				     u32 off, void *data)
 {
+	bool ref_tag = false, btf_id_tag = false;
 	struct bpf_map_value_off *tab;
+	struct module *module = NULL;
 	struct bpf_map *map = data;
 	struct btf *kernel_btf;
 	int nr_off, ret;
@@ -3262,10 +3259,27 @@ static int btf_find_ptr_to_btf_id_cb(const struct btf *btf, const struct btf_typ
 	if (!btf_type_is_ptr(t))
 		return 0;
 	t = btf_type_by_id(btf, t->type);
-	if (!btf_type_is_type_tag(t))
+	while (btf_type_is_type_tag(t)) {
+		if (btf_id_tag || ref_tag) {
+			pr_err("Repeated '%s' tag on member with offset %u\n",
+			       btf_id_tag ? "btf_id" : "ref", off);
+			ret = -EINVAL;
+			goto end;
+		}
+		if (!strcmp("btf_id", __btf_name_by_offset(btf, t->name_off)))
+			btf_id_tag = true;
+		else if (!strcmp("ref", __btf_name_by_offset(btf, t->name_off)))
+			ref_tag = true;
+		t = btf_type_by_id(btf, t->type);
+	}
+	if (!btf_id_tag && !ref_tag)
 		return 0;
-	if (strcmp("btf_id", __btf_name_by_offset(btf, t->name_off)))
-		return 0;
+	if (ref_tag && !btf_id_tag) {
+		pr_err("'ref' tag requires user to specify 'btf_id' tag on pointer\n");
+		ret = -EINVAL;
+		goto end;
+	}
+
 	t = btf_type_skip_modifiers(btf, t->type, NULL);
 	/* pointer to void is not permitted */
 	if (btf_type_is_void(t)) {
@@ -3297,9 +3311,23 @@ static int btf_find_ptr_to_btf_id_cb(const struct btf *btf, const struct btf_typ
 		tab->nr_off = 0;
 	map->ptr_off_tab = tab;
 
+	/* Take a reference to BTF module, because we may have to call
+	 * destructor for the pointer when map is freed. This is only
+	 * needed when we hold a referenced pointer in the map.
+	 */
+	if (ref_tag && btf_is_module(kernel_btf)) {
+		module = btf_try_get_module(kernel_btf);
+		if (!module) {
+			ret = -ENXIO;
+			goto end_btf;
+		}
+	}
+
 	tab->off[nr_off].offset = off;
 	tab->off[nr_off].btf_id = id;
-	tab->off[nr_off].btf = kernel_btf;
+	tab->off[nr_off].btf    = kernel_btf;
+	tab->off[nr_off].module = module;
+	tab->off[nr_off].flags  = ref_tag ? BPF_MAP_VALUE_OFF_F_REF : 0;
 	tab->nr_off++;
 
 	return 0;
@@ -6732,6 +6760,37 @@ const struct bpf_func_proto bpf_btf_find_by_name_kind_proto = {
 	.arg2_type	= ARG_CONST_SIZE,
 	.arg3_type	= ARG_ANYTHING,
 	.arg4_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_1(bpf_move_ptr, void *, dst, void *, src)
+{
+	/* The verifier _must_ inline this helper. */
+	BUG_ON(1);
+	return 0;
+}
+
+const struct bpf_func_proto bpf_move_ptr_proto = {
+	.func      = bpf_move_ptr,
+	.gpl_only  = false,
+	.ret_type  = RET_VOID,
+	.arg1_type = ARG_ANYTHING,
+	.arg2_type = ARG_ANYTHING,
+};
+
+const struct bpf_func_proto bpf_move_ptr_from_map_proto = {
+	.func      = bpf_move_ptr,
+	.gpl_only  = false,
+	.ret_type  = RET_VOID,
+	.arg1_type = ARG_PTR_TO_STACK,
+	.arg2_type = ARG_PTR_TO_MAP_VALUE,
+};
+
+const struct bpf_func_proto bpf_move_ptr_to_map_proto = {
+	.func      = bpf_move_ptr,
+	.gpl_only  = false,
+	.ret_type  = RET_VOID,
+	.arg1_type = ARG_PTR_TO_MAP_VALUE,
+	.arg2_type = ARG_PTR_TO_STACK,
 };
 
 BTF_ID_LIST_GLOBAL(btf_tracing_ids, MAX_BTF_TRACING_TYPE)

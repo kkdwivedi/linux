@@ -5086,6 +5086,20 @@ union bpf_attr {
  *	Return
  *		0 on success, or a negative error in case of failure. On error
  *		*dst* buffer is zeroed out.
+ *
+ * void bpf_move_ptr(void *dst, void *src)
+ *	Description
+ *		Move a referenced pointer at address **src** into a pointer at
+ *		address **dst**, effectively transferring the reference and
+ *		resetting the old pointer to NULL.
+ *
+ *		Currently, the helper only supports **dst** as pointer to map
+ *		value, and **src** as pointer to stack, and vice-versa.
+ *
+ *		Note that pointer to map value must point at offset for a
+ *		pointer member tagged using **btf_id_ref** BTF type tag.
+ *	Return
+ *		void.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5280,6 +5294,7 @@ union bpf_attr {
 	FN(xdp_load_bytes),		\
 	FN(xdp_store_bytes),		\
 	FN(copy_from_user_task),	\
+	FN(move_ptr),			\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

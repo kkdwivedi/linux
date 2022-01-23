@@ -159,10 +159,16 @@ enum {
 	BPF_MAP_VALUE_OFF_MAX = 32,
 };
 
+enum {
+	BPF_MAP_VALUE_OFF_F_REF    = (1 << 0),
+};
+
 struct bpf_map_value_off_desc {
 	u32 offset;
 	u32 btf_id;
 	struct btf *btf;
+	struct module *module;
+	int flags;
 };
 
 struct bpf_map_value_off {
@@ -1520,6 +1526,8 @@ void bpf_prog_put(struct bpf_prog *prog);
 void bpf_prog_free_id(struct bpf_prog *prog, bool do_idr_lock);
 void bpf_map_free_id(struct bpf_map *map, bool do_idr_lock);
 
+void bpf_map_ptr_off_free(struct bpf_map *map, u32 off);
+void bpf_map_ptr_free(void *addr, struct btf *btf, u32 btf_id);
 struct bpf_map_value_off_desc *bpf_map_ptr_off_contains(struct bpf_map *map, u32 offset);
 void bpf_map_free_ptr_off_tab(struct bpf_map *map);
 
@@ -2283,6 +2291,11 @@ extern const struct bpf_func_proto bpf_find_vma_proto;
 extern const struct bpf_func_proto bpf_loop_proto;
 extern const struct bpf_func_proto bpf_strncmp_proto;
 extern const struct bpf_func_proto bpf_copy_from_user_task_proto;
+extern const struct bpf_func_proto bpf_move_ptr_proto;
+/* overload for bpf_move_ptr */
+extern const struct bpf_func_proto bpf_move_ptr_from_map_proto;
+/* overload for bpf_move_ptr */
+extern const struct bpf_func_proto bpf_move_ptr_to_map_proto;
 
 const struct bpf_func_proto *tracing_prog_func_proto(
   enum bpf_func_id func_id, const struct bpf_prog *prog);
