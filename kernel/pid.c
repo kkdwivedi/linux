@@ -815,10 +815,15 @@ static noinline long cs_lock(struct saved_callee_reg *cur_reg, long *expose_cs_c
 
 __attribute__((noipa))
 static noinline long cs_unlock(struct saved_callee_reg *remote_reg,
-			       struct saved_callee_reg *cur_reg)
+			       struct saved_callee_reg *cur_reg,
+			       long *expose_cs_cpuid)
 {
 	SAVE_CALLEE_REG(cur_reg);
 	RESTORE_CALLEE_REG(remote_reg);
+	barrier();
+	// GCC tries to be funny when I try to be lazy,
+	// *expose_cs_cpuid = 2 picks rbx.
+	asm volatile ("movq $2, (%0)\n" : "+r"(expose_cs_cpuid) : : "memory");
 	return 0;
 }
 
@@ -837,6 +842,9 @@ SYSCALL_DEFINE0(expose_cs)
 	unsigned long flags;
 	int ret = 0;
 
+	/* Some other test in progress in parallel, bail! */
+	if (expose_cs_cpuid)
+		return -EINVAL;
 	preempt_disable();
 	local_irq_save(flags);
 	printk("Enter: expose_cs: CPU=%d\n", smp_processor_id());
@@ -847,11 +855,13 @@ SYSCALL_DEFINE0(expose_cs)
 	cs_lock(cur_reg, &expose_cs_cpuid);
 	printk("Linux sucks!\n");
 	some_func();
-	cs_unlock(rem_reg, cur_reg);
+	cs_unlock(rem_reg, cur_reg, &expose_cs_cpuid);
 
 	printk("Exit:  expose_cs: CPU=%d\n", smp_processor_id());
 	local_irq_restore(flags);
 	preempt_enable();
+	// reset test
+	expose_cs_cpuid = 0;
 	return ret;
 }
 
@@ -868,7 +878,6 @@ SYSCALL_DEFINE0(switch_cs)
 	struct saved_callee_reg *cur_reg;
 	struct saved_callee_reg *rem_reg;
 	unsigned long flags;
-	int ret = -EDEADLK;
 
 	preempt_disable();
 	local_irq_save(flags);
@@ -887,5 +896,5 @@ SYSCALL_DEFINE0(switch_cs)
 	printk("Exit:  switch_cs: CPU=%d\n", smp_processor_id());
 	local_irq_restore(flags);
 	preempt_enable();
-	return ret;
+	return 0;
 }
