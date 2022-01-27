@@ -744,3 +744,148 @@ SYSCALL_DEFINE3(pidfd_getfd, int, pidfd, int, fd,
 	fdput(f);
 	return ret;
 }
+
+/* Remote Critical Sections */
+
+struct saved_callee_reg {
+	u64 r12;
+	u64 r13;
+	u64 r14;
+	u64 r15;
+	u64 rbx;
+	u64 rbp;
+	u64 rsp;
+};
+
+#define SAVE_CALLEE_REG(cur_reg)                                               \
+	({                                                                     \
+		asm volatile("mov %%r12, %0\n"                                 \
+			     "mov %%r13, %1\n"                                 \
+			     "mov %%r14, %2\n"                                 \
+			     "mov %%r15, %3\n"                                 \
+			     "mov %%rbx, %4\n"                                 \
+			     "mov %%rbp, %5\n"                                 \
+			     "mov %%rsp, %6\n"                                 \
+			     : "=m"(cur_reg->r12), "=m"(cur_reg->r13),         \
+			       "=m"(cur_reg->r14), "=m"(cur_reg->r15),         \
+			       "=m"(cur_reg->rbx), "=m"(cur_reg->rbp),         \
+			       "=m"(cur_reg->rsp)                              \
+			     :                                                 \
+			     : "memory");                                      \
+	})
+
+#define RESTORE_CALLEE_REG(cur_reg)                                            \
+	({                                                                     \
+		asm volatile("mov %0, %%rsp\n"                                 \
+			     "mov %1, %%rbp\n"                                 \
+			     "mov %2, %%rbx\n"                                 \
+			     "mov %3, %%r15\n"                                 \
+			     "mov %4, %%r14\n"                                 \
+			     "mov %5, %%r13\n"                                 \
+			     "mov %6, %%r12\n"                                 \
+			     :                                                 \
+			     : "m"(cur_reg->rsp), "m"(cur_reg->rbp),           \
+			       "m"(cur_reg->rbx), "m"(cur_reg->r15),           \
+			       "m"(cur_reg->r14), "m"(cur_reg->r13),           \
+			       "m"(cur_reg->r12)                               \
+			     : "memory");                                      \
+	})
+
+long expose_cs_cpuid = 0;
+
+__attribute__((noipa))
+static noinline long cs_lock(struct saved_callee_reg *cur_reg, long *expose_cs_cpuid)
+{
+	SAVE_CALLEE_REG(cur_reg);
+	// We must avoid touching the stack after releasing ownership, so the
+	// spin loop must be limited to register checks
+	asm volatile(// Allow other CPU to take over our stack, expose_cs_cpuid = 1
+		     "movq $1, (%0)\n"
+		     "1:\n"
+		     "rep; nop\n"
+		     "mov (%1), %%r8\n"
+		     "cmpq $2, %%r8\n"
+		     "jne 1b\n"
+		     : "+r"(expose_cs_cpuid)
+		     : "r"(expose_cs_cpuid)
+		     : "memory", "%r8");
+	RESTORE_CALLEE_REG(cur_reg);
+	return 0;
+}
+
+__attribute__((noipa))
+static noinline long cs_unlock(struct saved_callee_reg *remote_reg,
+			       struct saved_callee_reg *cur_reg)
+{
+	SAVE_CALLEE_REG(cur_reg);
+	RESTORE_CALLEE_REG(remote_reg);
+	return 0;
+}
+
+DEFINE_PER_CPU(struct saved_callee_reg, current_reg);
+DEFINE_PER_CPU(struct saved_callee_reg, remote_reg);
+
+static void some_func(void)
+{
+	printk("Critical section func on CPU=%d\n", smp_processor_id());
+}
+
+SYSCALL_DEFINE0(expose_cs)
+{
+	struct saved_callee_reg *cur_reg;
+	struct saved_callee_reg *rem_reg;
+	unsigned long flags;
+	int ret = 0;
+
+	preempt_disable();
+	local_irq_save(flags);
+	printk("Enter: expose_cs: CPU=%d\n", smp_processor_id());
+
+	cur_reg = this_cpu_ptr(&current_reg);
+	rem_reg = this_cpu_ptr(&remote_reg);
+
+	cs_lock(cur_reg, &expose_cs_cpuid);
+	printk("Linux sucks!\n");
+	some_func();
+	cs_unlock(rem_reg, cur_reg);
+
+	printk("Exit:  expose_cs: CPU=%d\n", smp_processor_id());
+	local_irq_restore(flags);
+	preempt_enable();
+	return ret;
+}
+
+__attribute__((noipa)) static noinline long
+switch_to_cs(struct saved_callee_reg *rem_reg, struct saved_callee_reg *cur_reg)
+{
+	SAVE_CALLEE_REG(rem_reg);
+	RESTORE_CALLEE_REG(cur_reg);
+	return 0;
+}
+
+SYSCALL_DEFINE0(switch_cs)
+{
+	struct saved_callee_reg *cur_reg;
+	struct saved_callee_reg *rem_reg;
+	unsigned long flags;
+	int ret = -EDEADLK;
+
+	preempt_disable();
+	local_irq_save(flags);
+	printk("Enter: switch_cs: CPU=%d\n", smp_processor_id());
+
+	cur_reg = per_cpu_ptr(&current_reg, 0);
+	rem_reg = per_cpu_ptr(&remote_reg, 0);
+
+	while (!expose_cs_cpuid)
+		cpu_relax();
+	barrier();
+	printk("Switching to CPU 0's CS\n");
+	switch_to_cs(rem_reg, cur_reg);
+	printk("Switched back to current CPU\n");
+
+	printk("Exit:  switch_cs: CPU=%d\n", smp_processor_id());
+	local_irq_restore(flags);
+	preempt_enable();
+	return ret;
+}
