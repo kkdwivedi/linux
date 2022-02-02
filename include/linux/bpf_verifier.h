@@ -432,6 +432,7 @@ struct bpf_verifier_env {
 	int stack_size;			/* number of states to be processed */
 	bool strict_alignment;		/* perform strict pointer alignment checks */
 	bool test_state_freq;		/* test verifier with different pruning frequency */
+	u16 kfunc_off_gen;
 	struct bpf_verifier_state *cur_state; /* current verifier state */
 	struct bpf_verifier_state_list **explored_states; /* search pruning optimization */
 	struct bpf_verifier_state_list *free_list;
@@ -569,6 +570,13 @@ static inline u32 type_flag(u32 type)
 static inline enum bpf_prog_type resolve_prog_type(struct bpf_prog *prog)
 {
 	return prog->aux->dst_prog ? prog->aux->dst_prog->type : prog->type;
+}
+
+static inline u16 kfunc_invented_call_gen(struct bpf_verifier_env *env)
+{
+	if (env->kfunc_off_gen == U16_MAX)
+		return 0;
+	return env->kfunc_off_gen++;
 }
 
 #endif /* _LINUX_BPF_VERIFIER_H */

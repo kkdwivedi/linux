@@ -1746,6 +1746,37 @@ find_kfunc_desc(const struct bpf_prog *prog, u32 func_id, u16 offset)
 		       sizeof(tab->descs[0]), kfunc_desc_cmp_by_id_off);
 }
 
+
+
+/* This function is called when we fill kfunc_btf_tab from BPF program and also
+ * when inventing kfunc call for bpf_move_ptr destructor call. Hence, since
+ * userspace can atmost have S16_MAX as its offset, and __find_kfunc_desc_btf
+ * always calls us with positive offset, so we can take offset > S16_MAX for
+ * invented kfunc calls.
+ *
+ * Expects that caller will pass in a reference for @btf and @module which will
+ * be transferred to the kfunc_btf_tab.
+ *
+ * Note that for the invented call case, this function is only needed when a
+ * module BTF is involved.
+ */
+static struct bpf_kfunc_btf *add_kfunc_desc_btf(struct bpf_verifier_env *env,
+						struct btf *btf,
+						struct module *module,
+						u16 offset)
+{
+	struct bpf_kfunc_btf_tab *tab = env->prog->aux->kfunc_btf_tab;
+	struct bpf_kfunc_btf *b;
+
+	if (WARN_ON_ONCE(!offset) || !tab || tab->nr_descs == MAX_KFUNC_BTFS)
+		return NULL;
+	b = &tab->descs[tab->nr_descs++];
+	b->btf = btf;
+	b->module = module;
+	b->offset = offset;
+	return b;
+}
+
 static struct btf *__find_kfunc_desc_btf(struct bpf_verifier_env *env,
 					 s16 offset)
 {
@@ -1793,10 +1824,13 @@ static struct btf *__find_kfunc_desc_btf(struct bpf_verifier_env *env,
 			return ERR_PTR(-ENXIO);
 		}
 
-		b = &tab->descs[tab->nr_descs++];
-		b->btf = btf;
-		b->module = mod;
-		b->offset = offset;
+		b = add_kfunc_desc_btf(env, btf, mod, offset);
+		/* we already checked for room in 'tab', so something is broken */
+		if (WARN_ON_ONCE(!b)) {
+			module_put(mod);
+			btf_put(btf);
+			return ERR_PTR(-EFAULT);
+		}
 
 		sort(tab->descs, tab->nr_descs, sizeof(tab->descs[0]),
 		     kfunc_btf_cmp_by_off, NULL);
@@ -1817,23 +1851,19 @@ void bpf_free_kfunc_btf_tab(struct bpf_kfunc_btf_tab *tab)
 }
 
 static struct btf *find_kfunc_desc_btf(struct bpf_verifier_env *env,
-				       u32 func_id, s16 offset)
+				       u32 func_id, u16 offset)
 {
-	if (offset) {
-		if (offset < 0) {
-			/* In the future, this can be allowed to increase limit
-			 * of fd index into fd_array, interpreted as u16.
-			 */
-			verbose(env, "negative offset disallowed for kernel module function call\n");
-			return ERR_PTR(-EINVAL);
-		}
-
+	/* add_kfunc_call ensures offset is >= 0 and <= S16_MAX, while invented
+	 * kfunc calls may have offset > S16_MAX, hence we must not enforce any
+	 * checks here. The offset is checked once when it is added to kfunc
+	 * desc table, but internally it is considered as u16.
+	 */
+	if (offset)
 		return __find_kfunc_desc_btf(env, offset);
-	}
 	return btf_vmlinux ?: ERR_PTR(-ENOENT);
 }
 
-static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
+static int __add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 {
 	const struct btf_type *func, *func_proto;
 	struct bpf_kfunc_btf_tab *btf_tab;
@@ -1937,6 +1967,57 @@ static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
 		sort(tab->descs, tab->nr_descs, sizeof(tab->descs[0]),
 		     kfunc_desc_cmp_by_id_off, NULL);
 	return err;
+}
+
+static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
+{
+	/* In the future, this can be allowed to increase limit of fd index into
+	 * fd_array, interpreted as u16.
+	 */
+	if (offset && offset < 0) {
+		verbose(env, "negative offset disallowed for kernel module function call\n");
+		return -EINVAL;
+	}
+	return __add_kfunc_call(env, func_id, offset);
+}
+
+static int add_invented_kfunc_call(struct bpf_verifier_env *env,
+				   struct btf *btf, u32 btf_id, u16 *offset_p)
+{
+	struct module *mod = NULL;
+	u16 offset = 0;
+	int ret;
+
+	if (btf_is_module(btf)) {
+		mod = btf_try_get_module(btf);
+		if (!mod)
+			return -ENXIO;
+
+		offset = kfunc_invented_call_gen(env);
+		if (!offset) {
+			verbose(env, "cannot add more invented kfunc calls\n");
+			return -E2BIG;
+		}
+	}
+
+	if (mod) {
+		/* In case of module BTF, tie offset to btf, mod pair, so that
+		 * it can looked up in check_kfunc_call and fixup_kfunc_call
+		 * stages.
+		 */
+		btf_get(btf);
+		if (!add_kfunc_desc_btf(env, btf, mod, offset)) {
+			btf_put(btf);
+			return -E2BIG;
+		}
+		/* mod and btf reference has been transferred */
+	}
+
+	ret = add_kfunc_call(env, btf_id, offset);
+	if (ret < 0)
+		return ret;
+	*offset_p = offset;
+	return 0;
 }
 
 static int kfunc_desc_cmp_by_imm(const void *a, const void *b)
@@ -14334,6 +14415,11 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr)
 	if (!env)
 		return -ENOMEM;
 	log = &env->log;
+
+	/* kfunc_off_gen is used for allocating distinct offset for invented
+	 * kfunc calls, where their func_id belong to module BTF.
+	 */
+	env->kfunc_off_gen = S16_MAX + 1;
 
 	len = (*prog)->len;
 	env->insn_aux_data =
