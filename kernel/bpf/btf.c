@@ -3250,12 +3250,12 @@ static s32 btf_find_by_name_kind_all(const char *name, u32 kind, struct btf **bt
 static int btf_find_ptr_to_btf_id_cb(const struct btf *btf, const struct btf_type *t,
 				     u32 off, int sz, void *data)
 {
-	bool btf_id_tag = false, ref_tag = false;
+	bool btf_id_tag = false, ref_tag = false, percpu_tag = false;
 	struct bpf_map_value_off *tab;
 	struct bpf_map *map = data;
+	int nr_off, ret, flags = 0;
 	struct module *mod = NULL;
 	struct btf *kernel_btf;
-	int nr_off, ret;
 	s32 id;
 
 	/* For PTR, sz is always == 8 */
@@ -3278,6 +3278,13 @@ static int btf_find_ptr_to_btf_id_cb(const struct btf *btf, const struct btf_typ
 				goto end;
 			}
 			ref_tag = true;
+		} else if (!strcmp("kernel.bpf.percpu", __btf_name_by_offset(btf, t->name_off))) {
+			/* repeated tag */
+			if (percpu_tag) {
+				ret = -EINVAL;
+				goto end;
+			}
+			percpu_tag = true;
 		} else if (!strncmp("kernel.", __btf_name_by_offset(btf, t->name_off),
 			   sizeof("kernel.") - 1)) {
 			/* Unavailable tag in reserved tag namespace */
@@ -3288,12 +3295,17 @@ static int btf_find_ptr_to_btf_id_cb(const struct btf *btf, const struct btf_typ
 		t = btf_type_by_id(btf, t->type);
 	}
 	if (!btf_id_tag) {
-		/* 'ref' tag must be specified together with 'btf_id' tag */
-		if (ref_tag) {
+		/* 'ref' or 'percpu' tag must be specified together with 'btf_id' tag */
+		if (ref_tag || percpu_tag) {
 			ret = -EINVAL;
 			goto end;
 		}
 		return 0;
+	}
+	/* referenced percpu btf_id pointer is not yet supported */
+	if (ref_tag && percpu_tag) {
+		ret = -EINVAL;
+		goto end;
 	}
 
 	/* Get the base type */
@@ -3344,11 +3356,16 @@ static int btf_find_ptr_to_btf_id_cb(const struct btf *btf, const struct btf_typ
 		}
 	}
 
+	if (ref_tag)
+		flags |= BPF_MAP_VALUE_OFF_F_REF;
+	else if (percpu_tag)
+		flags |= BPF_MAP_VALUE_OFF_F_PERCPU;
+
 	tab->off[nr_off].offset = off;
 	tab->off[nr_off].btf_id = id;
 	tab->off[nr_off].btf    = kernel_btf;
 	tab->off[nr_off].module = mod;
-	tab->off[nr_off].flags  = ref_tag ? BPF_MAP_VALUE_OFF_F_REF : 0;
+	tab->off[nr_off].flags  = flags;
 	tab->nr_off++;
 
 	return 0;
