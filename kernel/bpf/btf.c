@@ -3250,7 +3250,7 @@ static s32 btf_find_by_name_kind_all(const char *name, u32 kind, struct btf **bt
 static int btf_find_ptr_to_btf_id_cb(const struct btf *btf, const struct btf_type *t,
 				     u32 off, int sz, void *data)
 {
-	bool btf_id_tag = false, ref_tag = false, percpu_tag = false;
+	bool btf_id_tag = false, ref_tag = false, percpu_tag = false, user_tag = false;
 	struct bpf_map_value_off *tab;
 	struct bpf_map *map = data;
 	int nr_off, ret, flags = 0;
@@ -3285,6 +3285,13 @@ static int btf_find_ptr_to_btf_id_cb(const struct btf *btf, const struct btf_typ
 				goto end;
 			}
 			percpu_tag = true;
+		} else if (!strcmp("kernel.bpf.user", __btf_name_by_offset(btf, t->name_off))) {
+			/* repeated tag */
+			if (user_tag) {
+				ret = -EINVAL;
+				goto end;
+			}
+			user_tag = true;
 		} else if (!strncmp("kernel.", __btf_name_by_offset(btf, t->name_off),
 			   sizeof("kernel.") - 1)) {
 			/* Unavailable tag in reserved tag namespace */
@@ -3295,15 +3302,16 @@ static int btf_find_ptr_to_btf_id_cb(const struct btf *btf, const struct btf_typ
 		t = btf_type_by_id(btf, t->type);
 	}
 	if (!btf_id_tag) {
-		/* 'ref' or 'percpu' tag must be specified together with 'btf_id' tag */
-		if (ref_tag || percpu_tag) {
+		/* 'ref', 'percpu', 'user' tag must be specified together with 'btf_id' tag */
+		if (ref_tag || percpu_tag || user_tag) {
 			ret = -EINVAL;
 			goto end;
 		}
 		return 0;
 	}
-	/* referenced percpu btf_id pointer is not yet supported */
-	if (ref_tag && percpu_tag) {
+	/* All three are mutually exclusive */
+	ret = ref_tag + percpu_tag + user_tag;
+	if (ret > 1) {
 		ret = -EINVAL;
 		goto end;
 	}
@@ -3360,6 +3368,8 @@ static int btf_find_ptr_to_btf_id_cb(const struct btf *btf, const struct btf_typ
 		flags |= BPF_MAP_VALUE_OFF_F_REF;
 	else if (percpu_tag)
 		flags |= BPF_MAP_VALUE_OFF_F_PERCPU;
+	else if (user_tag)
+		flags |= BPF_MAP_VALUE_OFF_F_USER;
 
 	tab->off[nr_off].offset = off;
 	tab->off[nr_off].btf_id = id;
