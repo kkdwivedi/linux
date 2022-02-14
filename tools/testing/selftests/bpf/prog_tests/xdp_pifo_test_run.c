@@ -33,7 +33,7 @@ static void run_dequeue_prog(int prog_fd, int exp_proto)
 
 	err = bpf_prog_test_run_opts(prog_fd, &opts);
 	ASSERT_OK(err, "bpf_prog_test_run(valid)");
-	ASSERT_EQ(opts.retval, 0, "valid-retval");
+	ASSERT_EQ(opts.retval, exp_proto == -1 ? 0 : 1, "valid-retval");
 	if (exp_proto >= 0) {
 		ASSERT_EQ(opts.data_size_out, sizeof(pkt_v4), "valid-datasize");
 		ASSERT_EQ(data_out.eth.h_proto, exp_proto, "valid-pkt");
