@@ -9587,7 +9587,7 @@ int dequeue_btf_struct_access(struct bpf_verifier_log *log,
 		return -EACCES;
 	}
 
-	pkt_type = btf_type_by_id(btf, xdp_md_btf_ids[0]);
+	pkt_type = btf_type_by_id(bpf_get_btf_vmlinux(), xdp_md_btf_ids[0]);
 	if (!pkt_type)
 		return -EINVAL;
 	if (t != pkt_type)

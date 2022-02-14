@@ -700,6 +700,11 @@ static void print_verifier_state(struct bpf_verifier_env *env,
 			    base_type(t) == PTR_TO_PERCPU_BTF_ID)
 				verbose(env, "%s", kernel_type_name(reg->btf, reg->btf_id));
 			verbose(env, "(id=%d", reg->id);
+			if (reg->type == PTR_TO_PACKET || reg->type == PTR_TO_PACKET_META ||
+			    reg->type == PTR_TO_PACKET_END) {
+				if (reg->pkt_uid)
+					verbose(env, ",pkt_uid=%d", reg->pkt_uid);
+			}
 			if (reg_type_may_be_refcounted_or_null(t))
 				verbose(env, ",ref_obj_id=%d", reg->ref_obj_id);
 			if (t != SCALAR_VALUE)
@@ -1555,8 +1560,6 @@ static void mark_btf_ld_reg(struct bpf_verifier_env *env,
 			    struct btf *btf, u32 btf_id,
 			    enum bpf_type_flag flag)
 {
-	u32 pkt_uid = regs[regno].ref_obj_id;
-
 	if (reg_type == SCALAR_VALUE) {
 		mark_reg_unknown(env, regs, regno);
 		return;
@@ -1565,7 +1568,7 @@ static void mark_btf_ld_reg(struct bpf_verifier_env *env,
 	regs[regno].type = reg_type | flag;
 	/* If not PTR_TO_BTF_ID, it is a pkt pointer */
 	if (reg_type != PTR_TO_BTF_ID) {
-		regs[regno].pkt_uid = pkt_uid;
+		regs[regno].pkt_uid = btf_id;
 		return;
 	}
 	regs[regno].btf = btf;
@@ -4214,8 +4217,11 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 	aux->btf_var.btf_id = reg->btf_id;
 	aux->btf_var.btf = reg->btf;
 
-	if (atype == BPF_READ && value_regno >= 0)
+	if (atype == BPF_READ && value_regno >= 0) {
+		if (ret != PTR_TO_BTF_ID && ret != SCALAR_VALUE)
+			btf_id = reg->ref_obj_id;
 		mark_btf_ld_reg(env, regs, value_regno, ret, reg->btf, btf_id, flag);
+	}
 
 	return 0;
 }
@@ -9287,8 +9293,7 @@ static void mark_ptr_or_null_regs(struct bpf_verifier_state *vstate, u32 regno,
 static bool is_bad_pkt_comparison(const struct bpf_reg_state *dst_reg,
 				  const struct bpf_reg_state *src_reg)
 {
-	if (!reg_is_pkt_pointer(dst_reg) ||
-	    !reg_is_pkt_pointer(src_reg))
+	if (!reg_is_pkt_pointer_any(dst_reg) || !reg_is_pkt_pointer_any(src_reg))
 		return false;
 	return dst_reg->pkt_uid != src_reg->pkt_uid;
 }
@@ -9306,7 +9311,7 @@ static bool try_match_pkt_pointers(const struct bpf_insn *insn,
 	if (BPF_CLASS(insn->code) == BPF_JMP32)
 		return false;
 
-	if (dst_reg->pkt_uid != src_reg->pkt_uid)
+	if (is_bad_pkt_comparison(dst_reg, src_reg))
 		return false;
 
 	switch (BPF_OP(insn->code)) {
