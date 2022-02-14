@@ -8661,7 +8661,8 @@ static void __find_good_pkt_pointers(struct bpf_func_state *state,
 
 	for (i = 0; i < MAX_BPF_REG; i++) {
 		reg = &state->regs[i];
-		if (reg->type == type && reg->id == dst_reg->id)
+		if (reg->type == type && reg->id == dst_reg->id &&
+		    reg->pkt_uid == dst_reg->pkt_uid)
 			/* keep the maximum range already checked */
 			reg->range = max(reg->range, new_range);
 	}
@@ -8669,7 +8670,8 @@ static void __find_good_pkt_pointers(struct bpf_func_state *state,
 	bpf_for_each_spilled_reg(i, state, reg) {
 		if (!reg)
 			continue;
-		if (reg->type == type && reg->id == dst_reg->id)
+		if (reg->type == type && reg->id == dst_reg->id &&
+		    reg->pkt_uid == dst_reg->pkt_uid)
 			reg->range = max(reg->range, new_range);
 	}
 }
