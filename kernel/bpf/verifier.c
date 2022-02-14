@@ -1555,12 +1555,19 @@ static void mark_btf_ld_reg(struct bpf_verifier_env *env,
 			    struct btf *btf, u32 btf_id,
 			    enum bpf_type_flag flag)
 {
+	u32 pkt_uid = regs[regno].ref_obj_id;
+
 	if (reg_type == SCALAR_VALUE) {
 		mark_reg_unknown(env, regs, regno);
 		return;
 	}
 	mark_reg_known_zero(env, regs, regno);
-	regs[regno].type = PTR_TO_BTF_ID | flag;
+	regs[regno].type = reg_type | flag;
+	/* If not PTR_TO_BTF_ID, it is a pkt pointer */
+	if (reg_type != PTR_TO_BTF_ID) {
+		regs[regno].pkt_uid = pkt_uid;
+		return;
+	}
 	regs[regno].btf = btf;
 	regs[regno].btf_id = btf_id;
 }
@@ -4153,11 +4160,12 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 				   struct bpf_reg_state *regs,
 				   int regno, int off, int size,
 				   enum bpf_access_type atype,
-				   int value_regno)
+				   int value_regno, int insn_idx)
 {
 	struct bpf_reg_state *reg = regs + regno;
 	const struct btf_type *t = btf_type_by_id(reg->btf, reg->btf_id);
 	const char *tname = btf_name_by_offset(reg->btf, t->name_off);
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[insn_idx];
 	enum bpf_type_flag flag = 0;
 	u32 btf_id;
 	int ret;
@@ -4200,6 +4208,11 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 
 	if (ret < 0)
 		return ret;
+
+	/* Remember the BTF ID for later use in convert_ctx_accesses */
+	aux->btf_var.reg_type = PTR_TO_BTF_ID;
+	aux->btf_var.btf_id = reg->btf_id;
+	aux->btf_var.btf = reg->btf;
 
 	if (atype == BPF_READ && value_regno >= 0)
 		mark_btf_ld_reg(env, regs, value_regno, ret, reg->btf, btf_id, flag);
@@ -4546,7 +4559,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 			mark_reg_unknown(env, regs, value_regno);
 	} else if (reg->type == PTR_TO_BTF_ID) {
 		err = check_ptr_to_btf_access(env, regs, regno, off, size, t,
-					      value_regno);
+					      value_regno, insn_idx);
 	} else if (reg->type == CONST_PTR_TO_MAP) {
 		err = check_ptr_to_map_access(env, regs, regno, off, size, t,
 					      value_regno);
@@ -9271,6 +9284,15 @@ static void mark_ptr_or_null_regs(struct bpf_verifier_state *vstate, u32 regno,
 		__mark_ptr_or_null_regs(vstate->frame[i], id, is_null);
 }
 
+static bool is_bad_pkt_comparison(const struct bpf_reg_state *dst_reg,
+				  const struct bpf_reg_state *src_reg)
+{
+	if (!reg_is_pkt_pointer(dst_reg) ||
+	    !reg_is_pkt_pointer(src_reg))
+		return false;
+	return dst_reg->pkt_uid != src_reg->pkt_uid;
+}
+
 static bool try_match_pkt_pointers(const struct bpf_insn *insn,
 				   struct bpf_reg_state *dst_reg,
 				   struct bpf_reg_state *src_reg,
@@ -9282,6 +9304,9 @@ static bool try_match_pkt_pointers(const struct bpf_insn *insn,
 
 	/* Pointers are always 64-bit. */
 	if (BPF_CLASS(insn->code) == BPF_JMP32)
+		return false;
+
+	if (dst_reg->pkt_uid != src_reg->pkt_uid)
 		return false;
 
 	switch (BPF_OP(insn->code)) {
@@ -9581,11 +9606,18 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		mark_ptr_or_null_regs(other_branch, insn->dst_reg,
 				      opcode == BPF_JEQ);
 	} else if (!try_match_pkt_pointers(insn, dst_reg, &regs[insn->src_reg],
-					   this_branch, other_branch) &&
-		   is_pointer_value(env, insn->dst_reg)) {
-		verbose(env, "R%d pointer comparison prohibited\n",
-			insn->dst_reg);
-		return -EACCES;
+					   this_branch, other_branch)) {
+		if (is_pointer_value(env, insn->dst_reg)) {
+			verbose(env, "R%d pointer comparison prohibited\n",
+				insn->dst_reg);
+			return -EACCES;
+		}
+		if (is_bad_pkt_comparison(dst_reg, &regs[insn->src_reg])) {
+			verbose(env, "R%d and R%d pkt pointers point into different packets, "
+				"comparison forbidden\n", insn->dst_reg, insn->src_reg);
+			print_verifier_state(env, this_branch->frame[this_branch->curframe], true);
+			return -EACCES;
+		}
 	}
 	if (env->log.level & BPF_LOG_LEVEL)
 		print_insn_state(env, this_branch->frame[this_branch->curframe]);
@@ -10848,6 +10880,7 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		/* id relations must be preserved */
 		if (rold->id && !check_ids(rold->id, rcur->id, idmap))
 			return false;
+		/// XXX: Review whether pruning needs adjustments due to pkt_uid
 		/* new val must satisfy old val knowledge */
 		return range_within(rold, rcur) &&
 		       tnum_in(rold->var_off, rcur->var_off);
@@ -12817,8 +12850,15 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 			break;
 		case PTR_TO_BTF_ID:
 			if (type == BPF_READ) {
-				insn->code = BPF_LDX | BPF_PROBE_MEM |
-					BPF_SIZE((insn)->code);
+				if (env->ops->get_convert_ctx_access) {
+					struct btf *btf = env->insn_aux_data[i + delta].btf_var.btf;
+					u32 btf_id = env->insn_aux_data[i + delta].btf_var.btf_id;
+
+					convert_ctx_access = env->ops->get_convert_ctx_access(&env->log, btf, btf_id);
+					if (convert_ctx_access)
+						break;
+				}
+				insn->code = BPF_LDX | BPF_PROBE_MEM | BPF_SIZE((insn)->code);
 				env->prog->aux->num_exentries++;
 			} else if (resolve_prog_type(env->prog) != BPF_PROG_TYPE_STRUCT_OPS) {
 				verbose(env, "Writes through BTF pointers are not allowed\n");
