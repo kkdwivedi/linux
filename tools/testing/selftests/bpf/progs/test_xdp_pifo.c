@@ -33,18 +33,19 @@ int xdp_pifo(struct xdp_md *xdp)
 __u16 pkt_count = 0;
 
 SEC("dequeue")
-int dequeue_pifo(struct dequeue_ctx *ctx)
+void *dequeue_pifo(struct dequeue_ctx *ctx)
 {
 	void *pkt;
 
 	pkt = (void *)bpf_packet_dequeue(ctx, &pifo_map, 0);
 	if (!pkt)
-		return 0;
+		return NULL;
 
-	if (++pkt_count > 2)
-		return bpf_packet_drop(ctx, pkt);
-	else
-		return bpf_packet_return(ctx, pkt);
+	if (++pkt_count > 2) {
+		bpf_packet_drop(ctx, pkt);
+		pkt = NULL;
+	}
+	return pkt;
 }
 
 char _license[] SEC("license") = "GPL";
