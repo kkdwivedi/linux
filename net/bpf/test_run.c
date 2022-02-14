@@ -1316,7 +1316,7 @@ int bpf_prog_test_run_dequeue(struct bpf_prog *prog, const union bpf_attr *kattr
 	    kattr->test.ctx_in || kattr->test.ctx_out || repeat > 1)
 		return -EINVAL;
 
-	ret = bpf_test_run(prog, &ctx, repeat, &retval, &duration, true);
+	ret = bpf_test_run(prog, &ctx, repeat, &retval, &duration, false);
 	if (ret)
 		return ret;
 	if (!retval)
