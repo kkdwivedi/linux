@@ -6031,14 +6031,21 @@ static void release_reg_references(struct bpf_verifier_env *env,
 	struct bpf_reg_state *regs = state->regs, *reg;
 	int i;
 
-	for (i = 0; i < MAX_BPF_REG; i++)
+	for (i = 0; i < MAX_BPF_REG; i++) {
 		if (regs[i].ref_obj_id == ref_obj_id)
 			mark_reg_unknown(env, regs, i);
+		/* Invalidate all pkt pointers inherting ref_obj_id in pkt_uid */
+		else if (reg_is_pkt_pointer_any(&regs[i]) && regs[i].pkt_uid == ref_obj_id)
+			mark_reg_unknown(env, regs, i);
+	}
 
 	bpf_for_each_spilled_reg(i, state, reg) {
 		if (!reg)
 			continue;
 		if (reg->ref_obj_id == ref_obj_id)
+			__mark_reg_unknown(env, reg);
+		/* Invalidate all pkt pointers inherting ref_obj_id in pkt_uid */
+		else if (reg_is_pkt_pointer_any(reg) && reg->pkt_uid == ref_obj_id)
 			__mark_reg_unknown(env, reg);
 	}
 }
