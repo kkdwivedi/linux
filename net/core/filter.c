@@ -9721,10 +9721,8 @@ static int dequeue_btf_struct_access(struct bpf_verifier_log *log,
 	if (IS_ERR(btf_vmlinux) || btf != btf_vmlinux)
 		return -EINVAL;
 
-	if (atype != BPF_READ) {
-		bpf_log(log, "only read is supported\n");
+	if (atype != BPF_READ)
 		return -EACCES;
-	}
 
 	pkt_type = btf_type_by_id(btf_vmlinux, xdp_md_btf_ids[0]);
 	if (!pkt_type)
@@ -9744,14 +9742,11 @@ static int dequeue_btf_struct_access(struct bpf_verifier_log *log,
 		reg_type = PTR_TO_PACKET_END;
 		break;
 	default:
-		bpf_log(log, "only access to data, data_meta, and data_end allowed for xdp_md\n");
 		return -EACCES;
 	}
 
-	if (!__is_valid_xdp_access(off, size)) {
-		bpf_log(log, "invalid xdp_md access off=%d size=%d\n", off, size);
+	if (!__is_valid_xdp_access(off, size))
 		return -EINVAL;
-	}
 	return reg_type;
 }
 
