@@ -300,6 +300,12 @@ static int probe_map_create(enum bpf_map_type map_type, __u32 ifindex)
 		key_size = 0;
 		max_entries = 1;
 		break;
+	case BPF_MAP_TYPE_SKIPLIST:
+		key_size = sizeof(__u64);
+		value_size = sizeof(__u64);
+		max_entries = 1;
+		opts.map_extra = 64;
+		break;
 	case BPF_MAP_TYPE_HASH:
 	case BPF_MAP_TYPE_ARRAY:
 	case BPF_MAP_TYPE_PROG_ARRAY:
