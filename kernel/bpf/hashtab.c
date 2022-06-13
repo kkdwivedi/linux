@@ -881,7 +881,7 @@ static void free_htab_elem(struct bpf_htab *htab, struct htab_elem *l)
 
 	if (htab_is_prealloc(htab)) {
 		check_and_free_fields(htab, l);
-		__pcpu_freelist_push(&htab->freelist, &l->fnode);
+		__pcpu_freelist_push(&htab->freelist, &l->fnode, -1);
 	} else {
 		atomic_dec(&htab->count);
 		l->htab = htab;

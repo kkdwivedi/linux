@@ -22,9 +22,10 @@ struct pcpu_freelist_node {
 
 /* pcpu_freelist_* do spin_lock_irqsave. */
 void pcpu_freelist_push(struct pcpu_freelist *, struct pcpu_freelist_node *);
+void pcpu_freelist_push_cpu(struct pcpu_freelist *, struct pcpu_freelist_node *, int cpu);
 struct pcpu_freelist_node *pcpu_freelist_pop(struct pcpu_freelist *);
 /* __pcpu_freelist_* do spin_lock only. caller must disable irqs. */
-void __pcpu_freelist_push(struct pcpu_freelist *, struct pcpu_freelist_node *);
+void __pcpu_freelist_push(struct pcpu_freelist *, struct pcpu_freelist_node *, int cpu);
 struct pcpu_freelist_node *__pcpu_freelist_pop(struct pcpu_freelist *);
 void pcpu_freelist_populate(struct pcpu_freelist *s, void *buf, u32 elem_size,
 			    u32 nr_elems);

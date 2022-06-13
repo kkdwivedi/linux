@@ -80,10 +80,13 @@ static inline void ___pcpu_freelist_push_nmi(struct pcpu_freelist *s,
 }
 
 void __pcpu_freelist_push(struct pcpu_freelist *s,
-			struct pcpu_freelist_node *node)
+			struct pcpu_freelist_node *node,
+			int cpu)
 {
 	if (in_nmi())
 		___pcpu_freelist_push_nmi(s, node);
+	else if (cpu >= 0)
+		___pcpu_freelist_push(per_cpu_ptr(s->freelist, cpu), node);
 	else
 		___pcpu_freelist_push(this_cpu_ptr(s->freelist), node);
 }
@@ -94,7 +97,18 @@ void pcpu_freelist_push(struct pcpu_freelist *s,
 	unsigned long flags;
 
 	local_irq_save(flags);
-	__pcpu_freelist_push(s, node);
+	__pcpu_freelist_push(s, node, -1);
+	local_irq_restore(flags);
+}
+
+void pcpu_freelist_push_cpu(struct pcpu_freelist *s,
+			    struct pcpu_freelist_node *node,
+			    int cpu)
+{
+	unsigned long flags;
+
+	local_irq_save(flags);
+	__pcpu_freelist_push(s, node, cpu);
 	local_irq_restore(flags);
 }
 
