@@ -21,6 +21,29 @@
 
 DEFINE_BPF_STORAGE_CACHE(inode_cache);
 
+static bool bpf_inode_get(struct inode *inode)
+{
+	bool ret = false;
+
+	if (!atomic_read(&inode->i_count))
+		return false;
+	spin_lock(&inode->i_lock);
+	if (!atomic_read(&inode->i_count))
+		goto out;
+	if (inode->i_state & (I_WILL_FREE | I_FREEING | I_NEW))
+		goto out;
+	__iget(inode);
+	ret = true;
+out:
+	spin_unlock(&inode->i_lock);
+	return ret;
+}
+
+static void bpf_inode_put(struct inode *inode)
+{
+	iput(inode);
+}
+
 static struct bpf_local_storage __rcu **
 inode_storage_ptr(void *owner)
 {
@@ -194,10 +217,11 @@ BPF_CALL_5(bpf_inode_storage_get, struct bpf_map *, map, struct inode *, inode,
 	/* This helper must only called from where the inode is guaranteed
 	 * to have a refcount and cannot be freed.
 	 */
-	if (flags & BPF_LOCAL_STORAGE_GET_F_CREATE) {
+	if ((flags & BPF_LOCAL_STORAGE_GET_F_CREATE) && bpf_inode_get(inode)) {
 		sdata = bpf_local_storage_update(
 			inode, (struct bpf_local_storage_map *)map, value,
 			BPF_NOEXIST, gfp_flags);
+		bpf_inode_put(inode);
 		return IS_ERR(sdata) ? (unsigned long)NULL :
 					     (unsigned long)sdata->data;
 	}
@@ -208,6 +232,8 @@ BPF_CALL_5(bpf_inode_storage_get, struct bpf_map *, map, struct inode *, inode,
 BPF_CALL_2(bpf_inode_storage_delete,
 	   struct bpf_map *, map, struct inode *, inode)
 {
+	int ret;
+
 	WARN_ON_ONCE(!bpf_rcu_lock_held());
 	if (!inode)
 		return -EINVAL;
@@ -215,7 +241,12 @@ BPF_CALL_2(bpf_inode_storage_delete,
 	/* This helper must only called from where the inode is guaranteed
 	 * to have a refcount and cannot be freed.
 	 */
-	return inode_storage_delete(inode, map);
+	if (!bpf_inode_get(inode))
+		return -ENOENT;
+	ret = inode_storage_delete(inode, map);
+	bpf_inode_put(inode);
+
+	return ret;
 }
 
 static int notsupp_get_next_key(struct bpf_map *map, void *key,
