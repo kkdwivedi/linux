@@ -2,6 +2,10 @@
 #include <vmlinux.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_helpers.h>
+#include "bpf_misc.h"
+
+pid_t cur_pid = 0;
+int result = -1;
 
 struct map_value {
 	struct prog_test_ref_kfunc __kptr *unref_ptr;
@@ -15,12 +19,26 @@ struct array_map {
 	__uint(max_entries, 1);
 } array_map SEC(".maps");
 
+struct percpu_array_map {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__type(key, int);
+	__type(value, struct map_value);
+	__uint(max_entries, 1);
+} percpu_array_map SEC(".maps");
+
 struct hash_map {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, int);
 	__type(value, struct map_value);
 	__uint(max_entries, 1);
 } hash_map SEC(".maps");
+
+struct percpu_hash_map {
+	__uint(type, BPF_MAP_TYPE_PERCPU_HASH);
+	__type(key, int);
+	__type(value, struct map_value);
+	__uint(max_entries, 1);
+} percpu_hash_map SEC(".maps");
 
 struct hash_malloc_map {
 	__uint(type, BPF_MAP_TYPE_HASH);
@@ -30,12 +48,48 @@ struct hash_malloc_map {
 	__uint(map_flags, BPF_F_NO_PREALLOC);
 } hash_malloc_map SEC(".maps");
 
+struct percpu_hash_malloc_map {
+	__uint(type, BPF_MAP_TYPE_PERCPU_HASH);
+	__type(key, int);
+	__type(value, struct map_value);
+	__uint(max_entries, 1);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+} percpu_hash_malloc_map SEC(".maps");
+
 struct lru_hash_map {
 	__uint(type, BPF_MAP_TYPE_LRU_HASH);
 	__type(key, int);
 	__type(value, struct map_value);
 	__uint(max_entries, 1);
 } lru_hash_map SEC(".maps");
+
+struct lru_percpu_hash_map {
+	__uint(type, BPF_MAP_TYPE_LRU_PERCPU_HASH);
+	__type(key, int);
+	__type(value, struct map_value);
+	__uint(max_entries, 1);
+} lru_percpu_hash_map SEC(".maps");
+
+struct sk_storage_map {
+	__uint(type, BPF_MAP_TYPE_SK_STORAGE);
+	__type(key, int);
+	__type(value, struct map_value);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+} sk_storage_map SEC(".maps");
+
+struct inode_storage_map {
+	__uint(type, BPF_MAP_TYPE_INODE_STORAGE);
+	__type(key, int);
+	__type(value, struct map_value);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+} inode_storage_map SEC(".maps");
+
+struct task_storage_map {
+	__uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+	__type(key, int);
+	__type(value, struct map_value);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+} task_storage_map SEC(".maps");
 
 #define DEFINE_MAP_OF_MAP(map_type, inner_map_type, name)       \
 	struct {                                                \
@@ -49,13 +103,27 @@ struct lru_hash_map {
 	}
 
 DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_ARRAY_OF_MAPS, array_map, array_of_array_maps);
+DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_ARRAY_OF_MAPS, percpu_array_map, array_of_percpu_array_maps);
 DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_ARRAY_OF_MAPS, hash_map, array_of_hash_maps);
+DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_ARRAY_OF_MAPS, percpu_hash_map, array_of_percpu_hash_maps);
 DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_ARRAY_OF_MAPS, hash_malloc_map, array_of_hash_malloc_maps);
+DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_ARRAY_OF_MAPS, percpu_hash_malloc_map, array_of_percpu_hash_malloc_maps);
 DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_ARRAY_OF_MAPS, lru_hash_map, array_of_lru_hash_maps);
+DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_ARRAY_OF_MAPS, lru_percpu_hash_map, array_of_lru_percpu_hash_maps);
+DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_ARRAY_OF_MAPS, sk_storage_map, array_of_sk_storage_maps);
+DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_ARRAY_OF_MAPS, inode_storage_map, array_of_inode_storage_maps);
+DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_ARRAY_OF_MAPS, task_storage_map, array_of_task_storage_maps);
 DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_HASH_OF_MAPS, array_map, hash_of_array_maps);
+DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_HASH_OF_MAPS, percpu_array_map, hash_of_percpu_array_maps);
 DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_HASH_OF_MAPS, hash_map, hash_of_hash_maps);
+DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_HASH_OF_MAPS, percpu_hash_map, hash_of_percpu_hash_maps);
 DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_HASH_OF_MAPS, hash_malloc_map, hash_of_hash_malloc_maps);
+DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_HASH_OF_MAPS, percpu_hash_malloc_map, hash_of_percpu_hash_malloc_maps);
 DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_HASH_OF_MAPS, lru_hash_map, hash_of_lru_hash_maps);
+DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_HASH_OF_MAPS, lru_percpu_hash_map, hash_of_lru_percpu_hash_maps);
+DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_HASH_OF_MAPS, sk_storage_map, hash_of_sk_storage_maps);
+DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_HASH_OF_MAPS, inode_storage_map, hash_of_inode_storage_maps);
+DEFINE_MAP_OF_MAP(BPF_MAP_TYPE_HASH_OF_MAPS, task_storage_map, hash_of_task_storage_maps);
 
 extern struct prog_test_ref_kfunc *bpf_kfunc_call_test_acquire(unsigned long *sp) __ksym;
 extern struct prog_test_ref_kfunc *
@@ -150,9 +218,13 @@ int test_map_kptr(struct __sk_buff *ctx)
 	test_kptr(v)
 
 	TEST(array_map);
+	TEST(percpu_array_map);
 	TEST(hash_map);
+	TEST(percpu_hash_map);
 	TEST(hash_malloc_map);
+	TEST(percpu_hash_malloc_map);
 	TEST(lru_hash_map);
+	TEST(lru_percpu_hash_map);
 
 #undef TEST
 	return 0;
@@ -175,15 +247,99 @@ int test_map_in_map_kptr(struct __sk_buff *ctx)
 	test_kptr(v)
 
 	TEST(array_of_array_maps);
+	TEST(array_of_percpu_array_maps);
 	TEST(array_of_hash_maps);
+	TEST(array_of_percpu_hash_maps);
 	TEST(array_of_hash_malloc_maps);
+	TEST(array_of_percpu_hash_malloc_maps);
 	TEST(array_of_lru_hash_maps);
+	TEST(array_of_lru_percpu_hash_maps);
 	TEST(hash_of_array_maps);
+	TEST(hash_of_percpu_array_maps);
 	TEST(hash_of_hash_maps);
+	TEST(hash_of_percpu_hash_maps);
 	TEST(hash_of_hash_malloc_maps);
+	TEST(hash_of_percpu_hash_malloc_maps);
 	TEST(hash_of_lru_hash_maps);
+	TEST(hash_of_lru_percpu_hash_maps);
 
 #undef TEST
+	return 0;
+}
+
+SEC("fentry/" SYS_PREFIX "sys_nanosleep")
+int test_local_storage_kptr(void *ctx)
+{
+	struct prog_test_ref_kfunc *p, *pp;
+	struct map_value *v, val = {};
+	struct task_struct *current;
+	unsigned long ul = 0;
+
+	current = bpf_get_current_task_btf();
+	if (current->pid != cur_pid)
+		return 0;
+
+	v = bpf_task_storage_get(&task_storage_map, current, &val, BPF_LOCAL_STORAGE_GET_F_CREATE);
+	if (!v)
+		return 0;
+	p = bpf_kfunc_call_test_acquire(&ul);
+	if (!p)
+		return 0;
+	p = bpf_kptr_xchg(&v->ref_ptr, p);
+	if (p)
+		goto rel_p;
+	p = bpf_kfunc_call_test_acquire(&ul);
+	if (!p)
+		return 0;
+
+	/* Use copy_map_value in bpf_selem_alloc */
+	v = bpf_task_storage_get(&task_storage_map, bpf_get_current_task_btf(), &val, 0);
+	if (!v)
+		goto rel_p;
+	if (v->ref_ptr != p)
+		goto rel_p;
+	if (p->cnt.refs.counter != 3)
+		goto rel_p;
+	bpf_task_storage_delete(&task_storage_map, bpf_get_current_task_btf());
+
+	v = bpf_task_storage_get(&task_storage_map, bpf_get_current_task_btf(), &val,
+				 BPF_LOCAL_STORAGE_GET_F_CREATE);
+	if (!v)
+		goto rel_p;
+	if (v->ref_ptr != NULL)
+		goto rel_p;
+	/* Old selem is still not freed due to RCU */
+	if (p->cnt.refs.counter != 3)
+		goto rel_p;
+	pp = p->next;
+	bpf_kfunc_call_test_release(p);
+	result = pp->cnt.refs.counter == 2 ? 0 : -1;
+	return 0;
+rel_p:
+	bpf_kfunc_call_test_release(p);
+	return 0;
+}
+
+SEC("fentry/" SYS_PREFIX "sys_getpgid")
+int test_local_storage_kptr2(void *ctx)
+{
+	struct prog_test_ref_kfunc *p, *pp;
+	struct map_value *v, val = {};
+	struct task_struct *current;
+
+	current = bpf_get_current_task_btf();
+	if (current->pid != cur_pid)
+		return 0;
+
+	v = bpf_task_storage_get(&task_storage_map, current, &val, 0);
+	if (!v)
+		return 0;
+	p = bpf_kptr_xchg(&v->ref_ptr, NULL);
+	if (!p)
+		return 0;
+	pp = p->next;
+	bpf_kfunc_call_test_release(p);
+	result = pp->cnt.refs.counter == 1 ? 0 : -1;
 	return 0;
 }
 

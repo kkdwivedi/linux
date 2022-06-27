@@ -132,6 +132,17 @@ static void test_map_kptr_success(bool test_run)
 	ret = bpf_map__delete_elem(skel->maps.lru_hash_map, &key, sizeof(key), 0);
 	ASSERT_OK(ret, "lru_hash_map delete");
 
+	ret = map_kptr__attach(skel);
+	if (!ASSERT_OK(ret, "map_kptr__attach"))
+		return;
+	skel->bss->cur_pid = getpid();
+	usleep(1);
+	ASSERT_EQ(skel->data->result, 0, "test_local_storage_kptr");
+	ASSERT_OK(kern_sync_rcu(), "Wait for RCU gp");
+	skel->data->result = -1;
+	getpgid(1);
+	ASSERT_EQ(skel->data->result, 0, "test_local_storage_kptr");
+
 	map_kptr__destroy(skel);
 }
 
