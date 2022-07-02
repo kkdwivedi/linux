@@ -843,6 +843,7 @@ static struct bpf_dtab_netdev *__dev_map_alloc_node(struct net *net,
 {
 	struct bpf_prog *prog = NULL;
 	struct bpf_dtab_netdev *dev;
+	int ret = -EINVAL;
 
 	dev = bpf_map_kmalloc_node(&dtab->map, sizeof(*dev),
 				   GFP_NOWAIT | __GFP_NOWARN,
@@ -854,11 +855,23 @@ static struct bpf_dtab_netdev *__dev_map_alloc_node(struct net *net,
 	if (!dev->dev)
 		goto err_out;
 
+	/* Check if net_device can be used as a redirect target */
+	if (READ_ONCE(dev->dev->xdp_features) & XDP_F_REDIRECT_TARGET) {
+		ret = -EOPNOTSUPP;
+		goto err_put_dev;
+	}
+
 	if (val->bpf_prog.fd > 0) {
+		xdp_features_t devmap_features = XDP_F_ABORTED | XDP_F_DROP | XDP_F_PASS;
+
 		prog = bpf_prog_get_type_dev(val->bpf_prog.fd,
 					     BPF_PROG_TYPE_XDP, false);
 		if (IS_ERR(prog))
 			goto err_put_dev;
+		if ((devmap_features & prog->aux->xdp_features) != prog->aux->xdp_features) {
+			ret = -EOPNOTSUPP;
+			goto err_put_prog;
+		}
 		if (prog->expected_attach_type != BPF_XDP_DEVMAP ||
 		    !bpf_prog_map_compatible(&dtab->map, prog))
 			goto err_put_prog;
@@ -882,7 +895,7 @@ err_put_dev:
 	dev_put(dev->dev);
 err_out:
 	kfree(dev);
-	return ERR_PTR(-EINVAL);
+	return ERR_PTR(ret);
 }
 
 static int __dev_map_update_elem(struct net *net, struct bpf_map *map,
