@@ -3017,6 +3017,11 @@ __weak u64 bpf_arena_get_kern_vm_start(struct bpf_arena *arena)
 	return 0;
 }
 
+void __weak arch_bpf_cleanup_frame_resource(struct bpf_prog *prog, struct bpf_throw_ctx *ctx, u64 ip, u64 sp, u64 bp)
+{
+	return;
+}
+
 #ifdef CONFIG_BPF_SYSCALL
 static int __init bpf_global_ma_init(void)
 {
