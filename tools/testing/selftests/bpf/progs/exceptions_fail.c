@@ -131,7 +131,7 @@ int reject_subprog_with_lock(void *ctx)
 }
 
 SEC("?tc")
-__failure __msg("BPF_EXIT instruction in main prog cannot be used inside bpf_rcu_read_lock-ed region")
+__failure __msg("thrown exception cannot be used inside bpf_rcu_read_lock-ed region")
 int reject_with_rcu_read_lock(void *ctx)
 {
 	bpf_rcu_read_lock();
@@ -140,6 +140,13 @@ int reject_with_rcu_read_lock(void *ctx)
 }
 
 __noinline static int throwing_subprog(struct __sk_buff *ctx)
+{
+	if (ctx->len)
+		bpf_throw(0);
+	return 0;
+}
+
+__noinline int throwing_global_subprog(struct __sk_buff *ctx)
 {
 	if (ctx->len)
 		bpf_throw(0);
@@ -343,6 +350,20 @@ int reject_exception_throw_cb_diff(struct __sk_buff *ctx)
 		bpf_loop(5, loop_cb1, NULL, 0);
 	else
 		bpf_loop(5, loop_cb2, NULL, 0);
+	return 0;
+}
+
+SEC("?tc")
+__failure __msg("thrown exception would lead to reference leak")
+int reject_exception_throw_from_global_subprog(struct __sk_buff *ctx)
+{
+	struct { long a; } *p = bpf_obj_new(typeof(*p));
+
+	if (!p)
+		return 0;
+	if (ctx->protocol)
+		throwing_global_subprog(ctx);
+	bpf_obj_drop(p);
 	return 0;
 }
 
