@@ -1017,6 +1017,7 @@ static int mark_stack_slots_iter(struct bpf_verifier_env *env,
 		st->iter.btf_id = btf_id;
 		st->iter.state = BPF_ITER_STATE_ACTIVE;
 		st->iter.depth = 0;
+		st->gen++;
 
 		for (j = 0; j < BPF_REG_SIZE; j++)
 			slot->slot_type[j] = STACK_ITER;
@@ -16633,6 +16634,7 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 			 */
 			if (old_reg->iter.btf != cur_reg->iter.btf ||
 			    old_reg->iter.btf_id != cur_reg->iter.btf_id ||
+			    old_reg->gen != cur_reg->gen ||
 			    old_reg->iter.state != cur_reg->iter.state ||
 			    /* ignore {old_reg,cur_reg}->iter.depth, see above */
 			    !check_ids(old_reg->ref_obj_id, cur_reg->ref_obj_id, idmap))

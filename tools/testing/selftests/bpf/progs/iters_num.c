@@ -239,4 +239,38 @@ int num_fail_elem_cnt(const void *ctx)
 	return 0;
 }
 
+const volatile __s64 exp_iter_test = 20 + 0;
+__s64 res_iter_test;
+
+SEC("raw_tp/sys_enter")
+int num_iter_test(const void *ctx)
+{
+	struct bpf_iter_num it1;
+	struct bpf_iter_num it2;
+	int cnt = 0, *v, i;
+
+	bpf_iter_num_new(&it1, 1, 10);
+	bpf_iter_num_new(&it2, 1, 10);
+	for (;;) {
+		bpf_iter_num_destroy(&it2);
+		bpf_iter_num_new(&it2, 1, 10);
+		v = bpf_iter_num_next(&it1);
+		if (!v) break;
+		(void)i;
+/*
+		i = bpf_get_prandom_u32();
+		if (i)
+			v = bpf_iter_num_next(&it1);
+		else
+			v = bpf_iter_num_next(&it2);
+		if (!v)
+			break;
+*/
+	}
+	bpf_iter_num_destroy(&it1);
+	bpf_iter_num_destroy(&it2);
+	res_iter_test = 20 + cnt;
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";

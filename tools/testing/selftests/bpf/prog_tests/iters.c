@@ -59,6 +59,7 @@ static void subtest_num_iters(void)
 	VALIDATE_CASE(succ_elem_cnt);
 	VALIDATE_CASE(overfetched_elem_cnt);
 	VALIDATE_CASE(fail_elem_cnt);
+	VALIDATE_CASE(iter_test);
 
 #undef VALIDATE_CASE
 

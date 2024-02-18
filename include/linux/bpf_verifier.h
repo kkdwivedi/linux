@@ -225,6 +225,7 @@ struct bpf_reg_state {
 	enum bpf_reg_liveness live;
 	/* if (!precise && SCALAR_VALUE) min/max/tnum don't affect safety */
 	bool precise;
+	int gen;
 };
 
 enum bpf_stack_slot_type {
