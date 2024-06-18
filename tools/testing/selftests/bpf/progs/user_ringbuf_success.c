@@ -210,3 +210,32 @@ int test_user_ringbuf_epoll(void *ctx)
 
 	return 0;
 }
+
+__noinline long
+do_nothing_global(struct bpf_dynptr *dynptr)
+{
+	bpf_dynptr_data(dynptr, 42, 42);
+	return 0;
+}
+
+static long
+do_nothing_cb_off(struct bpf_dynptr *dynptr, void *context)
+{
+	do_nothing_global(dynptr += 1);
+	return 0;
+}
+
+SEC("fentry/" SYS_PREFIX "sys_prlimit64")
+int test_user_ringbuf_off(void *ctx)
+{
+	long num_samples;
+
+	if (!is_test_process())
+		return 0;
+
+	num_samples = bpf_user_ringbuf_drain(&user_ringbuf, do_nothing_cb_off, NULL, 0);
+	if (num_samples <= 0)
+		err = 1;
+
+	return 0;
+}
