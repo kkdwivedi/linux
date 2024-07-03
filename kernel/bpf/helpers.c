@@ -23,6 +23,7 @@
 #include <linux/btf_ids.h>
 #include <linux/bpf_mem_alloc.h>
 #include <linux/kasan.h>
+#include <linux/bpf-bwq.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -1087,7 +1088,9 @@ struct bpf_async_cb {
 	union {
 		struct rcu_head rcu;
 		struct work_struct delete_work;
+		struct llist_node llnode;
 	};
+	struct bpf_batched_wq_node *bwq_node;
 	u64 flags;
 };
 
@@ -1237,6 +1240,9 @@ static void bpf_timer_delete_work(struct work_struct *work)
 	kfree_rcu(t, cb.rcu);
 }
 
+DEFINE_BPF_BATCHED_WQ(bpf_delete_timer_bwq, struct bpf_hrtimer, cb.delete_work,
+		      bpf_timer_delete_work, cb.bwq_node, cb.llnode);
+
 static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u64 flags,
 			    enum bpf_async_type type)
 {
@@ -1281,9 +1287,10 @@ static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u
 		t = (struct bpf_hrtimer *)cb;
 
 		atomic_set(&t->cancelling, 0);
-		INIT_WORK(&t->cb.delete_work, bpf_timer_delete_work);
+		INIT_WORK(&t->cb.delete_work, bpf_batched_wq_work_func_bpf_delete_timer_bwq);
 		hrtimer_init(&t->timer, clockid, HRTIMER_MODE_REL_SOFT);
 		t->timer.function = bpf_timer_cb;
+		t->cb.bwq_node = &bpf_delete_timer_bwq.bwq_nodes[numa_node_id()];
 		cb->value = (void *)async - map->record->timer_off;
 		break;
 	case BPF_ASYNC_TYPE_WQ:
@@ -1591,10 +1598,8 @@ void bpf_timer_cancel_and_free(void *val)
 	 * To avoid these issues, punt to workqueue context when we are in a
 	 * timer callback.
 	 */
-	if (this_cpu_read(hrtimer_running))
-		queue_work(system_unbound_wq, &t->cb.delete_work);
-	else
-		bpf_timer_delete_work(&t->cb.delete_work);
+	bpf_batched_queue_unbound_work(t->cb.bwq_node, &t->cb.delete_work,
+				       &t->cb.llnode);
 }
 
 /* This function is called by map_delete/update_elem for individual element and
