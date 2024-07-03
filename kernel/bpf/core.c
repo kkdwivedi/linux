@@ -38,6 +38,7 @@
 #include <linux/bpf_mem_alloc.h>
 #include <linux/memcontrol.h>
 #include <linux/execmem.h>
+#include <linux/bpf-bwq.h>
 
 #include <asm/barrier.h>
 #include <asm/unaligned.h>
@@ -3066,3 +3067,53 @@ EXPORT_SYMBOL(bpf_stats_enabled_key);
 
 EXPORT_TRACEPOINT_SYMBOL_GPL(xdp_exception);
 EXPORT_TRACEPOINT_SYMBOL_GPL(xdp_bulk_tx);
+
+/* Batched Workqueue Submission
+ *
+ * BPF map updates and deletions, and bpf_wq APIs, can cause work to be
+ * scheduled on to the global system workqueues. Map operations schedule work to
+ * cancel and free bpf_timer and bpf_wq objects, while bpf_wq_start can
+ * explicitly be invoked to schedule a work item. Likewise, upon map
+ * destruction, each map value containing live bpf_timer and bpf_wq objects will
+ * also cause work to be scheduled.
+ *
+ * Thus, certain scenarios can be constructed where work is scheduled at very
+ * high frequency, such that the workqueue subsystem is overwhelmed with
+ * millions of work items and spawns kworkers in quick succession to meet the
+ * growing demand. This can cause system-wide bottlenecks due to resource
+ * pressure on CPU and memory. To avoid such overload, we provide a batched
+ * submission API for these scenarios.
+ *
+ * The idea is that each user of this API declares there own batching context,
+ * i.e. bpf_batched_wq. This context maintains a queue per NUMA node, and at
+ * most one work item will be in-flight for a given queue and be responsible for
+ * processing all the queued work. Limiting the number of actual generated work
+ * items (which the workqueue subsystem treats as the unit of concurrency)
+ * controls the rate at which kworkers are spawned to service them.
+ *
+ * If a work item is already in-flight when queueing work, it is instead added
+ * to the NUMA queue. If not, a new work item is queued onto the workqueue,
+ * which will drain the NUMA queue.
+ *
+ * The unbound system wq is chosen so as to avoid spawning kworkers on CPUs
+ * where work items are generated at high frequency, and allow the scheduler to
+ * freely move them around the system and use idle capacity when subjected to
+ * a high load.
+ */
+void bpf_batched_queue_unbound_work(struct bpf_batched_wq_node *bwq_node,
+				    struct work_struct *work,
+				    struct llist_node *node)
+{
+	/* Ensure zero initilization is correct for bpf_batched_wq. */
+	BUILD_BUG_ON((struct llist_head)LLIST_HEAD_INIT(x).first != NULL);
+	/* Cannot be called from NMI context. */
+	WARN_ON_ONCE(in_nmi());
+
+	if (atomic_xchg(&bwq_node->inflight, 1)) {
+		init_llist_node(node);
+		llist_add(node, &bwq_node->queue);
+		return;
+	}
+	/* Replace the work item func with our wrapper that drains the NUMA queue. */
+	queue_work(system_unbound_wq, work);
+}
