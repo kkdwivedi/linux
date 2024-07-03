@@ -1119,6 +1119,8 @@ struct bpf_hrtimer {
 struct bpf_work {
 	struct bpf_async_cb cb;
 	struct work_struct work;
+	struct llist_node work_llnode;
+	struct bpf_batched_wq_node *bwq_node;
 };
 
 /* the actual struct hidden inside uapi struct bpf_timer and bpf_wq */
@@ -1243,6 +1245,12 @@ static void bpf_timer_delete_work(struct work_struct *work)
 DEFINE_BPF_BATCHED_WQ(bpf_delete_timer_bwq, struct bpf_hrtimer, cb.delete_work,
 		      bpf_timer_delete_work, cb.bwq_node, cb.llnode);
 
+DEFINE_BPF_BATCHED_WQ(bpf_work_bwq, struct bpf_work, work, bpf_wq_work,
+		      bwq_node, work_llnode);
+
+DEFINE_BPF_BATCHED_WQ(bpf_delete_work_bwq, struct bpf_work, cb.delete_work,
+		      bpf_wq_delete_work, cb.bwq_node, cb.llnode);
+
 static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u64 flags,
 			    enum bpf_async_type type)
 {
@@ -1296,8 +1304,11 @@ static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u
 	case BPF_ASYNC_TYPE_WQ:
 		w = (struct bpf_work *)cb;
 
+		// INIT_WORK(&w->work, bpf_batched_wq_work_func_bpf_work_bwq);
 		INIT_WORK(&w->work, bpf_wq_work);
-		INIT_WORK(&w->cb.delete_work, bpf_wq_delete_work);
+		INIT_WORK(&w->cb.delete_work, bpf_batched_wq_work_func_bpf_delete_work_bwq);
+		w->bwq_node = &bpf_work_bwq.bwq_nodes[numa_node_id()];
+		w->cb.bwq_node = &bpf_delete_work_bwq.bwq_nodes[numa_node_id()];
 		cb->value = (void *)async - map->record->wq_off;
 		break;
 	}
@@ -1619,7 +1630,8 @@ void bpf_wq_cancel_and_free(void *val)
 	 * sleepable context.
 	 * kfree will be called once the work has finished.
 	 */
-	schedule_work(&work->cb.delete_work);
+	bpf_batched_queue_unbound_work(work->cb.bwq_node, &work->cb.delete_work,
+				       &work->cb.llnode);
 }
 
 BPF_CALL_2(bpf_kptr_xchg, void *, map_value, void *, ptr)
@@ -2799,6 +2811,7 @@ __bpf_kfunc int bpf_wq_start(struct bpf_wq *wq, unsigned int flags)
 		return -EINVAL;
 
 	schedule_work(&w->work);
+	// bpf_batched_queue_unbound_work(w->bwq_node, &w->work, &w->work_llnode);
 	return 0;
 }
 
