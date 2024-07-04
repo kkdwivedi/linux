@@ -28,7 +28,7 @@ void serial_test_wq(void)
 	ASSERT_OK(err, "test_run");
 	ASSERT_EQ(topts.retval, 0, "test_run");
 
-	usleep(50); /* 10 usecs should be enough, but give it extra */
+	sleep(1);
 
 	ASSERT_EQ(wq_skel->bss->ok_sleepable, (1 << 1), "ok_sleepable");
 	wq__destroy(wq_skel);
