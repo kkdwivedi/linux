@@ -1116,7 +1116,6 @@ struct bpf_hrtimer {
 struct bpf_work {
 	struct bpf_async_cb cb;
 	struct work_struct work;
-	struct work_struct delete_work;
 };
 
 /* the actual struct hidden inside uapi struct bpf_timer and bpf_wq */
@@ -1216,7 +1215,7 @@ static void bpf_wq_work(struct work_struct *work)
 
 static void bpf_wq_delete_work(struct work_struct *work)
 {
-	struct bpf_work *w = container_of(work, struct bpf_work, delete_work);
+	struct bpf_work *w = container_of(work, struct bpf_work, cb.delete_work);
 
 	cancel_work_sync(&w->work);
 
@@ -1291,7 +1290,7 @@ static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u
 		w = (struct bpf_work *)cb;
 
 		INIT_WORK(&w->work, bpf_wq_work);
-		INIT_WORK(&w->delete_work, bpf_wq_delete_work);
+		INIT_WORK(&w->cb.delete_work, bpf_wq_delete_work);
 		cb->value = (void *)async - map->record->wq_off;
 		break;
 	}
@@ -1615,7 +1614,7 @@ void bpf_wq_cancel_and_free(void *val)
 	 * sleepable context.
 	 * kfree will be called once the work has finished.
 	 */
-	schedule_work(&work->delete_work);
+	schedule_work(&work->cb.delete_work);
 }
 
 BPF_CALL_2(bpf_kptr_xchg, void *, map_value, void *, ptr)
