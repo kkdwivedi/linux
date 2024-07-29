@@ -105,9 +105,23 @@ int res_spin_lock_slowpath(res_spinlock_t *lock, u32 val)
 	u32 idx, old, tail;
 	int timeout = 0;
 
-	/* TODO(kkd): Bounded spinning needed like qspinlock slowpath. */
+	/* TODO(kkd): Bounded spinning needed like qspinlock slowpath.  Reason,
+	 * we may (theoretically) miss the case where word goes from (0, 1, 0)
+	 * to (0, 0, 1), then it may transition to (0, 1, 1) and back to (0, 1,
+	 * 0), causing us to spin indefinitely. This isn't easy to reproduce in
+	 * reality though.
+	 */
 	if (val == RES_PENDING_VAL)
-		val = atomic_cond_read_relaxed(&lock->val, VAL != RES_PENDING_VAL);
+		val = atomic_cond_read_relaxed(&lock->val, VAL != RES_PENDING_VAL ||
+					       RES_CHECK_TIMEOUT(timeout_spin, timeout_end, timeout));
+
+	/* Did we get stuck waiting for a pending to locked transition? This
+	 * does not happen (as typically, pending bit owners seeing locked == 0
+	 * will clear pending bit) unless lock word is corrupted and we're
+	 * observing a pending state without an active pending owner.
+	 */
+	if (timeout)
+		return timeout;
 
 	/* Do we see pending bit and/or tail node? Indicates contention. Queue. */
 	if (val & ~RES_LOCKED_MASK)
