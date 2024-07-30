@@ -257,6 +257,20 @@ queue:
 	val = atomic_cond_read_acquire(&lock->val, !(VAL & 0xffff) ||
 				       RES_CHECK_TIMEOUT(timeout_spin, timeout_end, timeout));
 
+	/* Vishal: Technically, timeout is assumed to K x length of maximum
+	 * critical section. In theory, the timeout used in the above loop
+	 * needs to be multiplied by 2, since we are waiting for 2 transitions
+	 * in case pending and locked bit are set. (*, 1, 1) to (*, 1, 0) and
+	 * (*, 1, 0) to (*, 0, 1). And then finally (*, 0, 0). Therefore, two
+	 * critical section lengths will encompass the timeout. However, since
+	 * our chosen value is orders of magnitude higher than typical spin lock
+	 * critical sections, it won't matter in practice.
+	 *
+	 * A fix would require depending on the pending owner's signalling for
+	 * the head of the waitqueue, just how non-head waiters wait for signal
+	 * from the head of the waitqueue.
+	 */
+
 	/* We failed to see the transition from (n, 1, 0), (n, 1, 1), (n, 0, 1)
 	 * to (n, 0, 0). This means either the owner is stuck, or the pending
 	 * waiter is not making progress to acquire the lock (the second case
