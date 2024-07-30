@@ -21,7 +21,7 @@
 #include <linux/errno.h>
 #include <vdso/time64.h>
 
-#define RES_LOCK_TIMEOUT (NSEC_PER_SEC / 8)
+#define RES_LOCK_TIMEOUT (NSEC_PER_SEC / 32)
 
 static __always_inline
 int check_timeout(u64 *endp, u64 total)
