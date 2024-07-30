@@ -23,6 +23,7 @@
 #include <linux/btf_ids.h>
 #include <linux/bpf_mem_alloc.h>
 #include <linux/kasan.h>
+#include <linux/bpf_res_lock.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -1888,6 +1889,9 @@ const struct bpf_func_proto bpf_probe_read_kernel_proto __weak;
 const struct bpf_func_proto bpf_probe_read_kernel_str_proto __weak;
 const struct bpf_func_proto bpf_task_pt_regs_proto __weak;
 
+const struct bpf_func_proto bpf_res_spin_lock_proto;
+const struct bpf_func_proto bpf_res_spin_unlock_proto;
+
 const struct bpf_func_proto *
 bpf_base_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -1948,6 +1952,10 @@ bpf_base_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return NULL;
 
 	switch (func_id) {
+	case BPF_FUNC_res_spin_lock:
+		return &bpf_res_spin_lock_proto;
+	case BPF_FUNC_res_spin_unlock:
+		return &bpf_res_spin_unlock_proto;
 	case BPF_FUNC_spin_lock:
 		return &bpf_spin_lock_proto;
 	case BPF_FUNC_spin_unlock:
@@ -2938,6 +2946,84 @@ __bpf_kfunc void bpf_iter_bits_destroy(struct bpf_iter_bits *it)
 		return;
 	bpf_mem_free(&bpf_global_ma, kit->bits);
 }
+
+#if defined(CONFIG_QUEUED_SPINLOCKS) || defined(CONFIG_BPF_ARCH_SPINLOCK)
+
+static inline int __res_spin_lock(struct bpf_spin_lock *lock)
+{
+	arch_spinlock_t *l = (void *)lock;
+	union {
+		__u32 val;
+		arch_spinlock_t lock;
+	} u = { .lock = __ARCH_SPIN_LOCK_UNLOCKED };
+
+	compiletime_assert(u.val == 0, "__ARCH_SPIN_LOCK_UNLOCKED not 0");
+	BUILD_BUG_ON(sizeof(*l) != sizeof(__u32));
+	BUILD_BUG_ON(sizeof(*lock) != sizeof(__u32));
+	preempt_disable();
+	int ret = res_spin_lock(l);
+	if (ret)
+		preempt_enable();
+	return ret;
+}
+
+static inline void __res_spin_unlock(struct bpf_spin_lock *lock)
+{
+	arch_spinlock_t *l = (void *)lock;
+
+	res_spin_unlock(l);
+	preempt_enable();
+}
+
+#else
+
+#error "Add timeout to default implementations"
+
+static inline int __res_spin_lock(struct bpf_spin_lock *lock)
+{
+	atomic_t *l = (void *)lock;
+
+	BUILD_BUG_ON(sizeof(*l) != sizeof(*lock));
+	do {
+		atomic_cond_read_relaxed(l, !VAL);
+	} while (atomic_xchg(l, 1));
+}
+
+static inline void __res_spin_unlock(struct bpf_spin_lock *lock)
+{
+	atomic_t *l = (void *)lock;
+
+	atomic_set_release(l, 0);
+}
+
+#endif
+
+static DEFINE_PER_CPU(unsigned long, irqsave_flags);
+
+NOTRACE_BPF_CALL_1(bpf_res_spin_lock, struct bpf_spin_lock *, lock)
+{
+	return __res_spin_lock(lock);
+}
+
+const struct bpf_func_proto bpf_res_spin_lock_proto = {
+	.func		= bpf_res_spin_lock,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+};
+
+NOTRACE_BPF_CALL_1(bpf_res_spin_unlock, struct bpf_spin_lock *, lock)
+{
+	__res_spin_unlock(lock);
+	return 0;
+}
+
+const struct bpf_func_proto bpf_res_spin_unlock_proto = {
+	.func		= bpf_res_spin_unlock,
+	.gpl_only	= false,
+	.ret_type	= RET_VOID,
+	.arg1_type	= ARG_ANYTHING,
+};
 
 __bpf_kfunc_end_defs();
 

@@ -5792,6 +5792,61 @@ union bpf_attr {
  *		0 on success.
  *
  *		**-ENOENT** if the bpf_local_storage cannot be found.
+ *
+ * long bpf_res_spin_lock(struct bpf_spin_lock *lock)
+ *	Description
+ *		Acquire a spinlock represented by the pointer *lock*, which is
+ *		stored as part of a value of a map. Taking the lock allows to
+ *		safely update the rest of the fields in that value. The
+ *		spinlock can (and must) later be released with a call to
+ *		**bpf_spin_unlock**\ (\ *lock*\ ).
+ *
+ *		Spinlocks in BPF programs come with a number of restrictions
+ *		and constraints:
+ *
+ *		* **bpf_spin_lock** objects are only allowed inside maps of
+ *		  types **BPF_MAP_TYPE_HASH** and **BPF_MAP_TYPE_ARRAY** (this
+ *		  list could be extended in the future).
+ *		* BTF description of the map is mandatory.
+ *		* The BPF program can take ONE lock at a time, since taking two
+ *		  or more could cause dead locks.
+ *		* Only one **struct bpf_spin_lock** is allowed per map element.
+ *		* When the lock is taken, calls (either BPF to BPF or helpers)
+ *		  are not allowed.
+ *		* The **BPF_LD_ABS** and **BPF_LD_IND** instructions are not
+ *		  allowed inside a spinlock-ed region.
+ *		* The BPF program MUST call **bpf_spin_unlock**\ () to release
+ *		  the lock, on all execution paths, before it returns.
+ *		* The BPF program can access **struct bpf_spin_lock** only via
+ *		  the **bpf_spin_lock**\ () and **bpf_spin_unlock**\ ()
+ *		  helpers. Loading or storing data into the **struct
+ *		  bpf_spin_lock** *lock*\ **;** field of a map is not allowed.
+ *		* To use the **bpf_spin_lock**\ () helper, the BTF description
+ *		  of the map value must be a struct and have **struct
+ *		  bpf_spin_lock** *anyname*\ **;** field at the top level.
+ *		  Nested lock inside another struct is not allowed.
+ *		* The **struct bpf_spin_lock** *lock* field in a map value must
+ *		  be aligned on a multiple of 4 bytes in that value.
+ *		* Syscall with command **BPF_MAP_LOOKUP_ELEM** does not copy
+ *		  the **bpf_spin_lock** field to user space.
+ *		* Syscall with command **BPF_MAP_UPDATE_ELEM**, or update from
+ *		  a BPF program, do not update the **bpf_spin_lock** field.
+ *		* **bpf_spin_lock** cannot be on the stack or inside a
+ *		  networking packet (it can only be inside of a map values).
+ *		* **bpf_spin_lock** is available to root only.
+ *		* Tracing programs and socket filter programs cannot use
+ *		  **bpf_spin_lock**\ () due to insufficient preemption checks
+ *		  (but this may change in the future).
+ *		* **bpf_spin_lock** is not allowed in inner maps of map-in-map.
+ *	Return
+ *		0 or -ETIMEDOUT
+ *
+ * long bpf_res_spin_unlock(struct bpf_spin_lock *lock)
+ *	Description
+ *		Release the *lock* previously locked by a call to
+ *		**bpf_spin_lock**\ (\ *lock*\ ).
+ *	Return
+ *		0
  */
 #define ___BPF_FUNC_MAPPER(FN, ctx...)			\
 	FN(unspec, 0, ##ctx)				\
@@ -6006,6 +6061,8 @@ union bpf_attr {
 	FN(user_ringbuf_drain, 209, ##ctx)		\
 	FN(cgrp_storage_get, 210, ##ctx)		\
 	FN(cgrp_storage_delete, 211, ##ctx)		\
+	FN(res_spin_lock, 212, ##ctx)			\
+	FN(res_spin_unlock, 213, ##ctx)			\
 	/* */
 
 /* backwards-compatibility macros for users of __BPF_FUNC_MAPPER that don't
