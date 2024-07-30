@@ -10,6 +10,7 @@
 typedef arch_spinlock_t res_spinlock_t;
 
 #define RES_LOCKED_VAL 1
+#define RES_TIMEOUT_VAL 2
 #define RES_PENDING_VAL (1 << 8)
 #define RES_LOCKED_MASK (0xff)
 #define RES_PENDING_MASK (0xff00)

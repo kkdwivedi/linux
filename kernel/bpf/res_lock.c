@@ -202,24 +202,110 @@ queue:
 	old = xchg_tail(lock, tail);
 	if (old & RES_TAIL_MASK) {
 		struct mcs_spinlock *prev = decode_tail(old);
+		int state;
 
 		WRITE_ONCE(prev->next, node);
 
-		smp_cond_load_acquire(&node->locked, VAL);
+		state = smp_cond_load_acquire(&node->locked, VAL);
+
+		/* Our predecessor signalled that it timed out waiting for the
+		 * owner. We must see if we are the current tail and take charge
+		 * of clearing it back to 0. If not, we must pass on this state
+		 * to the next waiter. This happens successively until the tail
+		 * waiter succeeds in clearing the tail bit.
+		 *
+		 * The nice thing is that incoming waiters will now receive the
+		 * timeout status much more quickly, without having to wait for
+		 * a long time.
+		 */
+		if (state == RES_TIMEOUT_VAL) {
+			timeout = -ETIMEDOUT;
+			goto waitqueue_timeout;
+		}
 
 		/* TODO(kkd): Optimistic prefetch of node->next */
 	}
 
+	/* This is an important point in the code: we are now the head of the
+	 * waitqueue, which makes us responsible for ensuring timeouts clean up
+	 * everyone queued behind us.
+	 */
+
 	/*
-	 * We saw zero tail, but in the meantime, we could have pending and
-	 * locked bits set. Since we are at the head of the wait queue. Wait
-	 * for owner, and the pending waiter to go away and release the lock.
+	 * We are now head of waitqueue, we could have pending and locked bits
+	 * set. Since we are at the head of the wait queue. Wait for owner, and
+	 * the pending waiter to go away and release the lock.
 	 *
 	 * Ordering: Needs to be acquire to pair with store_release in unlock to
 	 * maintain lock sequentiality.
 	 */
 	// TODO(kkd): Fix hardcoded constant mask for locked + pending
-	val = atomic_cond_read_acquire(&lock->val, !(VAL & 0xffff));
+	val = atomic_cond_read_acquire(&lock->val, !(VAL & 0xffff) ||
+				       RES_CHECK_TIMEOUT(timeout_spin, timeout_end, timeout));
+
+	/* We failed to see the transition from (n, 1, 0), (n, 1, 1), (n, 0, 1)
+	 * to (n, 0, 0). This means either the owner is stuck, or the pending
+	 * waiter is not making progress to acquire the lock (the second case
+	 * shouldn't occur, only the first one would be a possibility).
+	 *
+	 * Therefore, we need to carefully remove ourselves from the tail node,
+	 * such that any incoming waiters.
+	 *
+	 * We can also reach this point from non-head of waitqueues received a
+	 * RES_TIMEOUT_VAL bit in their node->locked while waiting to become the
+	 * head. In such a case, they try to clear the tail since the head is no
+	 * longer able to do so.
+	 *
+	 * TODO(kkd): Can also occur with corruption, but handled in later
+	 * patches.
+	 */
+waitqueue_timeout:
+	if (timeout) {
+		/* If we succeed, word will be (0, *, *) which other incoming
+		 * waiters can observe and deal with. Just check that we are the
+		 * only waiter in the queue at this point (i.e. head == tail).
+		 */
+		u16 cmp_tail = tail >> _Q_TAIL_OFFSET;
+		if (READ_ONCE(lock->tail) == cmp_tail && try_cmpxchg_relaxed(&lock->tail, &cmp_tail, 0))
+			goto release;
+
+		/* We failed and now have a queue build up occuring for
+		 * ourselves. This is the protocol we follow:
+		 *
+		 * The tail is responsible for ensuring tail goes back to 0, and
+		 * now we don't care what happens to pending and locked. We
+		 * thought we were the tail and tried above, but it didn't work
+		 * out as we lost the race.
+		 *
+		 * Both locked and pending could be in any state, but as long as
+		 * the tail is non-zero, all incoming waiters will be able to
+		 * see contention. Once the tail succeeds in clearing it, either
+		 * of pending or locked may be set (indicating contention) or
+		 * none may be set, indicating that the lock is free to take.
+		 *
+		 * The tail may constantly change as more incoming waiters
+		 * arrive, we just have to keep passing on the responsibility of
+		 * clearing it further down the queue and remove ourselves.
+		 */
+
+		/* Wait for the next node to appear, since we have someone who
+		 * queued behind us. We cannot leave the queue at this point,
+		 * as our successor may be racing to write to prev->next after
+		 * seeing us as the old node upon xchg of tail.
+		 */
+		next = smp_cond_load_relaxed(&node->next, (VAL));
+
+		/* TODO(kkd): This seems like the right ordering, but confirm... */
+		WRITE_ONCE(next->locked, RES_TIMEOUT_VAL);
+
+		/* We are free to exit at this point, since our successor can't
+		 * touch us, and we're not in the lock word.
+		 *
+		 * TODO(kkd): Revisit for corruption, as somebody could write
+		 * random bits matching our tail to lock word.
+		 */
+		goto release;
+	}
 
 	/* Since we waited upon the removal of locked + pending, we just need to
 	 * ensure a new node is not linked in. New pending bits won't be set.
@@ -253,5 +339,5 @@ queue:
 
 release:
 	this_cpu_dec(qnodes[0].mcs.count);
-	return 0;
+	return timeout;
 }
