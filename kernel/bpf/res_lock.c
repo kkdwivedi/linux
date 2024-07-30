@@ -100,7 +100,10 @@ struct mcs_spinlock *grab_mcs_node(struct mcs_spinlock *base, int idx)
 int res_spin_lock_slowpath(res_spinlock_t *lock, u32 val)
 {
 	struct mcs_spinlock *node, *next;
+	u32 timeout_spin = 0;
+	u64 timeout_end = 0;
 	u32 idx, old, tail;
+	int timeout = 0;
 
 	/* TODO(kkd): Bounded spinning needed like qspinlock slowpath. */
 	if (val == RES_PENDING_VAL)
@@ -144,7 +147,25 @@ int res_spin_lock_slowpath(res_spinlock_t *lock, u32 val)
 	 * for lock sequentiality.
 	 */
 	if (val & RES_LOCKED_MASK)
-		smp_cond_load_acquire(&lock->locked, !VAL);
+		smp_cond_load_acquire(&lock->locked, !VAL
+				      || RES_CHECK_TIMEOUT(timeout_spin, timeout_end, timeout));
+
+	/* We do not see the locked bit being set back to 0, which means the
+	 * owner is stuck in the critical section failing to reach the unlock
+	 * function.
+	 *
+	 * TODO(kkd): Can also be caused by corruption, but handled in later
+	 * patches.
+	 */
+	if (timeout) {
+		/* Clear the pending bit, as we are the owner, let others come
+		 * in and give this lock a try after us. We don't need to do
+		 * anything to the head of the waitqueue, which is spinning
+		 * separately and will clean up the queue.
+		 */
+		WRITE_ONCE(lock->pending, 0);
+		return timeout;
+	}
 
 	/* We own the pending bit, thus are indicating contention to any
 	 * incoming waiters, which will queue themselves. The lock owner is
