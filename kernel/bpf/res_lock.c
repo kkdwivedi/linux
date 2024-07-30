@@ -14,11 +14,40 @@
 
 #include <linux/bpf_res_lock.h>
 #include <asm/processor.h>
+#include <linux/sched/clock.h>
 #include <linux/atomic.h>
 #include <linux/bug.h>
 #include <linux/smp.h>
 #include <linux/errno.h>
 #include <vdso/time64.h>
+
+#define RES_LOCK_TIMEOUT (NSEC_PER_SEC / 8)
+
+static __always_inline
+int check_timeout(u64 *endp, u64 total)
+{
+	u64 end = *endp;
+
+	/* The time we have to compare against is not updated, so update and
+	 * return in this iteration. This avoids having to invoke sched_clock
+	 * before entering the spin loop.
+	 */
+	if (!end) {
+		*endp = sched_clock() + total;
+		return 0;
+	}
+
+	if (sched_clock() > end)
+		return -ETIMEDOUT;
+	return 0;
+}
+
+#define RES_CHECK_TIMEOUT(spin, end, ret)                                \
+	({                                                               \
+		if ((u16)((spin)++) == 0xffff)                           \
+			(ret) = check_timeout(&(end), RES_LOCK_TIMEOUT); \
+		(ret);                                                   \
+	})
 
 #include "../locking/mcs_spinlock.h"
 
