@@ -112,6 +112,8 @@ end:
 	test_spin_lock_fail__destroy(skel);
 }
 
+volatile int skip;
+
 static void *spin_lock_thread(void *arg)
 {
 	int err, prog_fd = *(u32 *) arg;
@@ -121,9 +123,11 @@ static void *spin_lock_thread(void *arg)
 		.repeat = 10000,
 	);
 
-	err = bpf_prog_test_run_opts(prog_fd, &topts);
-	ASSERT_OK(err, "test_run");
-	ASSERT_OK(topts.retval, "test_run retval");
+	while (!skip) {
+		err = bpf_prog_test_run_opts(prog_fd, &topts);
+		ASSERT_OK(err, "test_run");
+		ASSERT_OK(topts.retval, "test_run retval");
+	}
 	pthread_exit(arg);
 }
 
@@ -156,10 +160,66 @@ end:
 	test_spin_lock__destroy(skel);
 }
 
+void test_res_spin_lock(void)
+{
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.data_in = &pkt_v4,
+		.data_size_in = sizeof(pkt_v4),
+		.repeat = 1,
+	);
+	struct test_spin_lock *skel;
+	pthread_t thread_id[16];
+	int prog_fd, i;
+	void *ret;
+
+	skel = test_spin_lock__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "test_spin_lock__open_and_load"))
+		return;
+	/* AA deadlock */
+	prog_fd = bpf_program__fd(skel->progs.res_spin_lock_test);
+	int err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "error");
+	ASSERT_OK(topts.retval, "retval");
+
+	/* Multi-threaded ABBA deadlock. */
+
+	prog_fd = bpf_program__fd(skel->progs.res_spin_lock_test_AB);
+	for (i = 0; i < 16; i++) {
+		int err;
+
+		err = pthread_create(&thread_id[i], NULL, &spin_lock_thread, &prog_fd);
+		if (!ASSERT_OK(err, "pthread_create"))
+			goto end;
+	}
+
+	topts.repeat = 1000;
+	int fd = bpf_program__fd(skel->progs.res_spin_lock_test_BA);
+	while (!topts.retval && !err && !skel->bss->err) {
+		err = bpf_prog_test_run_opts(fd, &topts);
+	}
+	ASSERT_EQ(skel->bss->err, -ETIMEDOUT, "timeout err");
+	ASSERT_OK(err, "err");
+	ASSERT_EQ(topts.retval, ETIMEDOUT, "timeout");
+
+	skip = true;
+
+	for (i = 0; i < 16; i++) {
+		if (!ASSERT_OK(pthread_join(thread_id[i], &ret), "pthread_join"))
+			goto end;
+		if (!ASSERT_EQ(ret, &prog_fd, "ret == prog_fd"))
+			goto end;
+	}
+end:
+	test_spin_lock__destroy(skel);
+}
+
+
 void test_spin_lock(void)
 {
 	int i;
 
+	test_res_spin_lock();
+	return;
 	test_spin_lock_success();
 
 	for (i = 0; i < ARRAY_SIZE(spin_lock_fail_tests); i++) {

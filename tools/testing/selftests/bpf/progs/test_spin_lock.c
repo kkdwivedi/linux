@@ -103,6 +103,7 @@ err:
 }
 
 struct bpf_spin_lock lockA __hidden SEC(".data.A");
+struct bpf_spin_lock lockB __hidden SEC(".data.B");
 
 __noinline
 static int static_subprog(struct __sk_buff *ctx)
@@ -165,5 +166,59 @@ int lock_static_subprog_unlock(struct __sk_buff *ctx)
 	ret = static_subprog_unlock(ctx);
 	return ret;
 }
+
+extern int bpf_res_spin_lock(void *) __ksym;
+extern void bpf_res_spin_unlock(void *) __ksym;
+
+SEC("tc")
+int res_spin_lock_test(struct __sk_buff *ctx)
+{
+	int ret;
+
+	ret = bpf_res_spin_lock(&lockA);
+	ret = bpf_res_spin_lock(&lockA);
+	if (!ret)
+		bpf_res_spin_unlock(&lockA);
+	bpf_res_spin_unlock(&lockA);
+	return 0;
+}
+
+SEC("tc")
+int res_spin_lock_test_AB(struct __sk_buff *ctx)
+{
+	int ret;
+
+	ret = bpf_res_spin_lock(&lockA);
+	if (ret != 0)
+		return 0;
+	ret = bpf_res_spin_lock(&lockB);
+	for (int i = 0; i < 10000; i++);
+	/* Only unlock if we took the lock. */
+	if (!ret)
+		bpf_res_spin_unlock(&lockB);
+	bpf_res_spin_unlock(&lockA);
+	return 0;
+}
+
+int err;
+
+SEC("tc")
+int res_spin_lock_test_BA(struct __sk_buff *ctx)
+{
+	int ret;
+
+	ret = bpf_res_spin_lock(&lockB);
+	if (ret != 0)
+		return 0;
+	ret = bpf_res_spin_lock(&lockA);
+	if (ret)
+		err = ret;
+	if (!ret)
+		bpf_res_spin_unlock(&lockA);
+	bpf_res_spin_unlock(&lockB);
+	return -ret;
+}
+
+
 
 char _license[] SEC("license") = "GPL";
