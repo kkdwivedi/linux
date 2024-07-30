@@ -103,6 +103,7 @@ err:
 }
 
 struct bpf_spin_lock lockA __hidden SEC(".data.A");
+struct bpf_spin_lock lockB __hidden SEC(".data.B");
 
 __noinline
 static int static_subprog(struct __sk_buff *ctx)
