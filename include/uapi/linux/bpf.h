@@ -7345,6 +7345,10 @@ struct bpf_refcount {
 	__u32 __opaque[1];
 } __attribute__((aligned(4)));
 
+struct bpf_res_spin_lock {
+	__u32	val;
+} __attribute__((aligned(4)));
+
 struct bpf_sysctl {
 	__u32	write;		/* Sysctl is being read (= 0) or written (= 1).
 				 * Allows 1,2,4-byte read, but no write.

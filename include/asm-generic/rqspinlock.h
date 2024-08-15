@@ -87,4 +87,39 @@ dec:
 	this_cpu_dec(rqspinlock_held_locks.cnt);
 }
 
+/**
+ * res_spin_lock - acquire a queued spinlock
+ * @lock: Pointer to queued spinlock structure
+ */
+static __always_inline int res_spin_lock(struct qspinlock *lock)
+{
+	int val = 0;
+
+	if (likely(atomic_try_cmpxchg_acquire(&lock->val, &val, _Q_LOCKED_VAL))) {
+		grab_held_lock_entry(lock);
+		return 0;
+	}
+	return resilient_queued_spin_lock_slowpath(lock, val, RES_DEF_TIMEOUT);
+}
+
+static __always_inline void res_spin_unlock(struct qspinlock *lock)
+{
+	struct rqspinlock_held *rqh = this_cpu_ptr(&rqspinlock_held_locks);
+
+	/*
+	 * WARN and return early on bugs.
+	 */
+	if (WARN_ON_ONCE(!rqh->cnt))
+		return;
+	if (unlikely(rqh->cnt > RES_NR_HELD))
+		goto unlock;
+	WRITE_ONCE(rqh->locks[rqh->cnt - 1], NULL);
+	/*
+	 * Release barrier, ensuring ordering. See release_held_lock_entry.
+	 */
+unlock:
+	queued_spin_unlock(lock);
+	this_cpu_dec(rqspinlock_held_locks.cnt);
+}
+
 #endif /* __ASM_GENERIC_RQSPINLOCK_H */
