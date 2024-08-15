@@ -35,7 +35,7 @@
 
 #define RES_DEF_TIMEOUT (NSEC_PER_SEC / 32)
 
-__maybe_unused __no_caller_saved_registers
+__no_caller_saved_registers
 static noinline int check_timeout(u64 *endp, u64 total)
 {
 	u64 time = sched_clock();
@@ -117,11 +117,12 @@ static __always_inline u32  __pv_wait_head_or_lock(struct qspinlock *lock,
  * contended             :    (*,x,y) +--> (*,0,0) ---> (*,0,1) -'  :
  *   queue               :         ^--'                             :
  */
-void __lockfunc resilient_spin_lock_slowpath(struct qspinlock *lock, u32 val)
+int __lockfunc resilient_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 {
 	struct mcs_spinlock *prev, *next, *node;
+	u64 spin = 0, end = 0;
+	int idx, ret = 0;
 	u32 old, tail;
-	int idx;
 
 	BUILD_BUG_ON(CONFIG_NR_CPUS >= (1U << _Q_TAIL_CPU_BITS));
 
@@ -129,7 +130,7 @@ void __lockfunc resilient_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 		goto pv_queue;
 
 	if (virt_spin_lock(lock))
-		return;
+		return 0;
 
 	/*
 	 * Wait for in-progress pending->locked hand-overs with a bounded
@@ -184,7 +185,19 @@ void __lockfunc resilient_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 * barriers.
 	 */
 	if (val & _Q_LOCKED_MASK)
-		smp_cond_load_acquire(&lock->locked, !VAL);
+		smp_cond_load_acquire(&lock->locked, !VAL || RES_CHECK_TIMEOUT(spin, end, ret));
+
+	if (ret) {
+		/* We waited for the locked bit to go back to 0, as the pending
+		 * waiter, but timed out. We need to clear the pending bit since
+		 * we own it. Once a stuck owner has been recovered, the lock
+		 * must be restored to a valid state, hence removing the pending
+		 * bit is necessary.
+		 */
+		clear_pending(lock);
+		lockevent_inc(rsl_lock_timeout);
+		return ret;
+	}
 
 	/*
 	 * take ownership and clear the pending bit.
@@ -193,7 +206,7 @@ void __lockfunc resilient_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 */
 	clear_pending_set_locked(lock);
 	lockevent_inc(lock_pending);
-	return;
+	return 0;
 
 	/*
 	 * End of pending bit optimistic spinning and beginning of MCS
@@ -367,6 +380,7 @@ release:
 	 * release the node
 	 */
 	__this_cpu_dec(rqnodes[0].mcs.count);
+	return 0;
 }
 EXPORT_SYMBOL(resilient_spin_lock_slowpath);
 
