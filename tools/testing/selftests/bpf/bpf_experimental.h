@@ -582,4 +582,8 @@ extern int bpf_wq_set_callback_impl(struct bpf_wq *wq,
 		unsigned int flags__k, void *aux__ign) __ksym;
 #define bpf_wq_set_callback(timer, cb, flags) \
 	bpf_wq_set_callback_impl(timer, cb, flags, NULL)
+
+extern struct lock_condition *bpf_res_spin_lock(struct bpf_spin_lock *) __weak __ksym;
+extern void bpf_res_spin_unlock(struct bpf_spin_lock *) __weak __ksym;
+
 #endif
