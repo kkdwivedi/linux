@@ -6,9 +6,11 @@
  * (C) Copyright 2013-2014,2018 Red Hat, Inc.
  * (C) Copyright 2015 Intel Corp.
  * (C) Copyright 2015 Hewlett-Packard Enterprise Development LP
+ * (C) Copyright 2024 Meta Platforms, Inc. and affiliates.
  *
  * Authors: Waiman Long <longman@redhat.com>
  *          Peter Zijlstra <peterz@infradead.org>
+ *          Kumar Kartikeya Dwivedi <memxor@gmail.com>
  */
 
 #ifndef _GEN_PV_LOCK_SLOWPATH
@@ -24,11 +26,38 @@
 #include <asm/byteorder.h>
 #include <asm/qspinlock.h>
 #include <trace/events/lock.h>
+#include <linux/sched/clock.h>
 
 /*
  * Include queued spinlock statistics code
  */
 #include "../locking/qspinlock_stat.h"
+
+#define RES_DEF_TIMEOUT (NSEC_PER_SEC / 32)
+
+__maybe_unused __no_caller_saved_registers
+static noinline int check_timeout(u64 *endp, u64 total)
+{
+	u64 time = sched_clock();
+	u64 end = *endp;
+
+	if (!end) {
+		*endp = time + total;
+		return 0;
+	}
+
+	if (time > end)
+		return -EDEADLK;
+
+	return 0;
+}
+
+#define RES_CHECK_TIMEOUT(spin, end, ret)                               \
+	({                                                              \
+		if ((u16)((spin)++) == 0xffff)                          \
+			(ret) = check_timeout(&(end), RES_DEF_TIMEOUT); \
+		(ret);                                                  \
+	})
 
 /*
  * Per-CPU queue node structures; we can never have more than 4 nested
