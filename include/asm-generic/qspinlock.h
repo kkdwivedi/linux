@@ -187,6 +187,15 @@ struct qnode {
 };
 
 /*
+ * Node structure for Resilient Spin Lock */
+struct rqnode {
+	struct mcs_spinlock mcs;
+#ifdef CONFIG_PARAVIRT_SPINLOCKS
+	long reserved[2];
+#endif
+};
+
+/*
  * We must be able to distinguish between no-tail and the tail at 0:0,
  * therefore increment the cpu number by one.
  */
