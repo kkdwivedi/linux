@@ -16,6 +16,7 @@
 
 #include <linux/smp.h>
 #include <linux/bug.h>
+#include <linux/bpf.h>
 #include <linux/cpumask.h>
 #include <linux/percpu.h>
 #include <linux/hardirq.h>
@@ -983,4 +984,85 @@ bool signal_arena_stale_waiter(struct qspinlock *lock, struct mcs_spinlock *node
 #include "rqspinlock.c"
 #undef resilient_queued_spin_lock_slowpath
 #undef _GEN_RES_ARENA_SLOWPATH
+#endif /* _GEN_RES_ARENA_SLOWPATH */
+
+#ifndef _GEN_RES_ARENA_SLOWPATH
+/**
+ * res_spin_lock - acquire a queued spinlock
+ * @lock: Pointer to queued spinlock structure
+ */
+static __always_inline int res_spin_lock(struct qspinlock *lock)
+{
+	int val = 0;
+
+	if (likely(atomic_try_cmpxchg_acquire(&lock->val, &val, _Q_LOCKED_VAL))) {
+		grab_held_lock_entry(lock);
+		return 0;
+	}
+	return resilient_queued_spin_lock_slowpath(lock, val, RES_DEF_TIMEOUT);
+}
+
+static __always_inline void res_spin_unlock(struct qspinlock *lock)
+{
+	struct rqspinlock_held *rqh = this_cpu_ptr(&held_locks);
+
+	if (unlikely(rqh->cnt > RES_NR_HELD))
+		goto unlock;
+	WRITE_ONCE(rqh->locks[rqh->cnt - 1], NULL);
+	/*
+	 * Release barrier, ensuring ordering. See release_held_lock_entry.
+	 */
+unlock:
+	queued_spin_unlock(lock);
+	this_cpu_dec(held_locks.cnt);
+}
+
+/* This is a fake struct returned by bpf_res_spin_lock_cond. The verifier logic
+ * is wired to treat the non-NULL nature of returned value as a success
+ * condition.
+ */
+struct lock_condition {
+	char __pad[8];
+};
+
+static struct lock_condition lock_condition;
+
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc struct lock_condition *bpf_res_spin_lock(struct bpf_res_spin_lock *lock)
+{
+	BUILD_BUG_ON(sizeof(struct qspinlock) != sizeof(struct bpf_res_spin_lock));
+	BUILD_BUG_ON(__alignof__(struct qspinlock) != __alignof__(struct bpf_res_spin_lock));
+
+	preempt_disable();
+	if (res_spin_lock((struct qspinlock *)lock)) {
+		preempt_enable();
+		return NULL;
+	}
+	return &lock_condition;
+}
+
+__bpf_kfunc void bpf_res_spin_unlock(struct bpf_res_spin_lock *lock)
+{
+	res_spin_unlock((struct qspinlock *)lock);
+	preempt_enable();
+}
+
+__bpf_kfunc_end_defs();
+
+BTF_KFUNCS_START(rqspinlock_kfunc_ids)
+BTF_ID_FLAGS(func, bpf_res_spin_lock, KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_res_spin_unlock)
+BTF_KFUNCS_END(rqspinlock_kfunc_ids)
+
+static const struct btf_kfunc_id_set rqspinlock_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set = &rqspinlock_kfunc_ids,
+};
+
+static __init int rqspinlock_register_kfuncs(void)
+{
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC, &rqspinlock_kfunc_set);
+}
+late_initcall(rqspinlock_register_kfuncs);
 #endif /* _GEN_RES_ARENA_SLOWPATH */
