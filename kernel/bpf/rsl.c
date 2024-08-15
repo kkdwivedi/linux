@@ -33,6 +33,7 @@
  */
 #include "../locking/qspinlock_stat.h"
 
+#define RES_TIMEOUT_VAL	2
 #define RES_DEF_TIMEOUT (NSEC_PER_SEC / 32)
 
 __no_caller_saved_registers
@@ -285,13 +286,20 @@ pv_queue:
 	 * head of the waitqueue.
 	 */
 	if (old & _Q_TAIL_MASK) {
+		int val;
+
 		prev = decode_tail(old, rqnodes);
 
 		/* Link @node into the waitqueue. */
 		WRITE_ONCE(prev->next, node);
 
 		pv_wait_node(node, prev);
-		arch_mcs_spin_lock_contended(&node->locked);
+		val = arch_mcs_spin_lock_contended(&node->locked);
+
+		if (val == RES_TIMEOUT_VAL) {
+			ret = -EDEADLK;
+			goto waitq_timeout;
+		}
 
 		/*
 		 * While waiting for the MCS lock, the next pointer may have
@@ -328,7 +336,30 @@ pv_queue:
 	if ((val = pv_wait_head_or_lock(lock, node)))
 		goto locked;
 
-	val = atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_PENDING_MASK));
+	val = atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_PENDING_MASK) ||
+				       RES_CHECK_TIMEOUT(spin, end, ret));
+
+waitq_timeout:
+	if (ret) {
+		/*
+		 * When performing cmpxchg for the whole word (NR_CPUS > 16k),
+		 * it is possible locked/pending bits keep changing and we see
+		 * failures even when we remain the head of wait queue. However,
+		 * eventually, for the case without corruption, pending bit
+		 * owner will unset the pending bit, and new waiters will queue
+		 * behind us. This will leave the lock owner in charge, and it
+		 * will eventually either set locked bit to 0, or leave it as 1,
+		 * allowing us to make progress.
+		 */
+		if (try_cmpxchg_tail(lock, tail, 0))
+			goto waitq_out;
+
+		next = smp_cond_load_relaxed(&node->next, VAL);
+		WRITE_ONCE(next->locked, RES_TIMEOUT_VAL);
+waitq_out:
+		lockevent_inc(rsl_lock_timeout);
+		goto release;
+	}
 
 locked:
 	/*
@@ -380,7 +411,7 @@ release:
 	 * release the node
 	 */
 	__this_cpu_dec(rqnodes[0].mcs.count);
-	return 0;
+	return ret;
 }
 EXPORT_SYMBOL(resilient_spin_lock_slowpath);
 

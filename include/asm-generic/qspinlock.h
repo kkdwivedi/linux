@@ -271,6 +271,27 @@ static __always_inline u32 xchg_tail(struct qspinlock *lock, u32 tail)
 				 tail >> _Q_TAIL_OFFSET) << _Q_TAIL_OFFSET;
 }
 
+/*
+ * try_cmpxchg_tail - Return result of cmpxchg of tail word with a new value
+ * @lock: Pointer to queued spinlock structure
+ * @tail: The tail to compare against
+ * @new_tail: The new queue tail code word
+ * Return: Bool to indicate whether the cmpxchg operation succeeded
+ *
+ * This is used by the head of the wait queue to clean up the queue.
+ * Provides relaxed ordering.
+ */
+static __always_inline bool try_cmpxchg_tail(struct qspinlock *lock, u32 tail, u32 new_tail)
+{
+	u32 cmp_tail = tail >> _Q_TAIL_OFFSET;
+
+	/*
+	 * Use relaxed ordering as we don't need to ensure visibility of
+	 * memory accesses before this operation.
+	 */
+	return try_cmpxchg_relaxed(&lock->tail, &cmp_tail, new_tail >> _Q_TAIL_OFFSET);
+}
+
 #else /* _Q_PENDING_BITS == 8 */
 
 /**
@@ -320,6 +341,34 @@ static __always_inline u32 xchg_tail(struct qspinlock *lock, u32 tail)
 	} while (!atomic_try_cmpxchg_relaxed(&lock->val, &old, new));
 
 	return old;
+}
+
+/*
+ * try_cmpxchg_tail - Return result of cmpxchg of tail word with a new value
+ * @lock: Pointer to queued spinlock structure
+ * @tail: The tail to compare against
+ * @new_tail: The new queue tail code word
+ * Return: Bool to indicate whether the cmpxchg operation succeeded
+ *
+ * This is used by the head of the wait queue to clean up the queue.
+ * Provides relaxed ordering.
+ */
+static __always_inline bool try_cmpxchg_tail(struct qspinlock *lock, u32 tail, u32 new_tail)
+{
+	u32 old, new;
+
+	old = atomic_read(&lock->val);
+	do {
+		/*
+		 * Is the tail part we compare to already stale? Fail. */
+		if ((old & _Q_TAIL_MASK) != tail)
+			return false;
+		/*
+		 * Encode latest locked/pending state for new tail. */
+		new = (old & _Q_LOCKED_PENDING_MASK) | new_tail;
+	} while (!atomic_try_cmpxchg_relaxed(&lock->val, &old, new));
+
+	return true;
 }
 #endif /* _Q_PENDING_BITS == 8 */
 
