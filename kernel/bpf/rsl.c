@@ -18,6 +18,7 @@
 
 #include <linux/smp.h>
 #include <linux/bug.h>
+#include <linux/bpf.h>
 #include <linux/cpumask.h>
 #include <linux/percpu.h>
 #include <linux/hardirq.h>
@@ -637,9 +638,60 @@ static __init int parse_nopvspin(char *arg)
 early_param("nopvspin", parse_nopvspin);
 #endif
 
+#ifndef _GEN_PV_LOCK_SLOWPATH
+
+/**
+ * res_spin_lock - acquire a queued spinlock
+ * @lock: Pointer to queued spinlock structure
+ */
+static __always_inline int res_spin_lock(struct qspinlock *lock)
+{
+	int val = 0;
+
+	if (likely(atomic_try_cmpxchg_acquire(&lock->val, &val, _Q_LOCKED_VAL)))
+		return 0;
+
+	return resilient_spin_lock_slowpath(lock, val);
+}
+
 static __always_inline void res_spin_unlock(struct qspinlock *lock)
 {
 	/* TODO(kkd): Can we avoid doing clear_dd_entry for uncontended cases? */
 	queued_spin_unlock(lock);
 	clear_dd_entry();
 }
+
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc bool bpf_res_spin_lock_cond(struct bpf_spin_lock *lock)
+{
+	BUILD_BUG_ON(sizeof(struct qspinlock) != sizeof(struct bpf_spin_lock));
+	BUILD_BUG_ON(__alignof__(struct qspinlock) != __alignof__(struct bpf_spin_lock));
+
+	return !res_spin_lock((struct qspinlock *)lock);
+}
+
+__bpf_kfunc void bpf_res_spin_unlock(struct bpf_spin_lock *lock)
+{
+	res_spin_unlock((struct qspinlock *)lock);
+}
+
+__bpf_kfunc_end_defs();
+
+BTF_KFUNCS_START(rsl_kfunc_ids)
+BTF_ID_FLAGS(func, bpf_res_spin_lock_cond)
+BTF_ID_FLAGS(func, bpf_res_spin_unlock)
+BTF_KFUNCS_END(rsl_kfunc_ids)
+
+static const struct btf_kfunc_id_set rsl_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set = &rsl_kfunc_ids,
+};
+
+static __init int rsl_register_kfuncs(void)
+{
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC, &rsl_kfunc_set);
+}
+late_initcall(rsl_register_kfuncs);
+
+#endif /* _GEN_PV_LOCK_SLOWPATH */
