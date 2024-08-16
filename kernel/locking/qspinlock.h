@@ -170,6 +170,7 @@ static __always_inline u32 xchg_tail(struct qspinlock *lock, u32 tail)
 
 	return old;
 }
+
 #endif /* _Q_PENDING_BITS == 8 */
 
 /**

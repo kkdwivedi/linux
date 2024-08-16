@@ -30,6 +30,7 @@
  * Include queued spinlock definitions and statistics code
  */
 #include "qspinlock.h"
+#include "rqspinlock.h"
 #include "qspinlock_stat.h"
 
 /*
@@ -74,31 +75,17 @@
 struct rqspinlock_timeout {
 	u64 end;
 	u64 timeout;
+	u64 cur;
 	u16 spin;
 };
 
 #define RES_TIMEOUT_VAL	2
 
-static noinline int check_timeout(struct rqspinlock_timeout *ts)
-{
-	u64 time = ktime_get_mono_fast_ns();
-
-	if (!ts->end) {
-		ts->end = time + ts->timeout;
-		return 0;
-	}
-
-	if (time > ts->end)
-		return -EDEADLK;
-
-	return 0;
-}
-
-#define RES_CHECK_TIMEOUT(ts, ret)                    \
-	({                                            \
-		if (!((ts).spin++ & 0xffff))          \
-			(ret) = check_timeout(&(ts)); \
-		(ret);                                \
+#define RES_CHECK_TIMEOUT(ts, ret, mask)                              \
+	({                                                            \
+		if (!((ts).spin++ & 0xffff))                          \
+			(ret) = check_timeout((lock), (mask), &(ts)); \
+		(ret);                                                \
 	})
 
 /*
@@ -110,6 +97,197 @@ static noinline int check_timeout(struct rqspinlock_timeout *ts)
  * We only need to reset 'end', 'spin' will just wrap around as necessary.
  */
 #define RES_RESET_TIMEOUT(ts) ({ (ts).end = 0; })
+
+#define RES_NR_HELD 32
+
+struct rqspinlock_held {
+	int cnt;
+	void *locks[RES_NR_HELD];
+};
+
+static DEFINE_PER_CPU_ALIGNED(struct rqspinlock_held, held_locks);
+
+static __always_inline void grab_held_lock_entry(void *lock)
+{
+	int cnt = this_cpu_inc_return(held_locks.cnt);
+
+	if (unlikely(cnt > RES_NR_HELD)) {
+		/* Still keep the inc so we decrement later. */
+		return;
+	}
+
+	/*
+	 * Implied compiler barrier in per-CPU operations; otherwise we can have
+	 * the compiler reorder inc with write to table, allowing interrupts to
+	 * overwrite and erase our write to the table (as on interrupt exit it
+	 * will be reset to NULL).
+	 */
+	this_cpu_write(held_locks.locks[cnt - 1], lock);
+}
+
+static __always_inline void release_held_lock_entry(void)
+{
+	struct rqspinlock_held *rqh = this_cpu_ptr(&held_locks);
+
+	if (unlikely(rqh->cnt > RES_NR_HELD))
+		goto dec;
+	smp_store_release(&rqh->locks[rqh->cnt - 1], NULL);
+	/*
+	 * Overwrite of NULL should appear before our decrement of the count to
+	 * other CPUs, otherwise we have the issue of a stale non-NULL entry being
+	 * visible in the array, leading to misdetection during deadlock detection.
+	 */
+dec:
+	this_cpu_dec(held_locks.cnt);
+}
+
+static bool is_lock_released(struct qspinlock *lock, u32 mask, struct rqspinlock_timeout *ts)
+{
+	if (!(atomic_read_acquire(&lock->val) & (mask)))
+		return true;
+	return false;
+}
+
+static noinline int check_deadlock_AA(struct qspinlock *lock, u32 mask,
+				  struct rqspinlock_timeout *ts)
+{
+	struct rqspinlock_held *rqh = this_cpu_ptr(&held_locks);
+	int cnt = min(RES_NR_HELD, rqh->cnt);
+
+	/*
+	 * Return an error if we hold the lock we are attempting to acquire.
+	 * We'll iterate over max 32 locks; no need to do is_lock_released.
+	 */
+	for (int i = 0; i < cnt - 1; i++) {
+		if (rqh->locks[i] == lock)
+			return -EDEADLK;
+	}
+	return 0;
+}
+
+static noinline int check_deadlock_ABBA(struct qspinlock *lock, u32 mask,
+				  struct rqspinlock_timeout *ts)
+{
+	struct rqspinlock_held *rqh = this_cpu_ptr(&held_locks);
+	int rqh_cnt = min(RES_NR_HELD, rqh->cnt);
+	void *remote_lock;
+	int cpu;
+
+	/*
+	 * Find the CPU holding the lock that we want to acquire. If there is a
+	 * deadlock scenario, we will read a stable set on the remote CPU and
+	 * find the target. This would be a constant time operation instead of
+	 * O(NR_CPUS) if we could determine the owning CPU from a lock value, but
+	 * that requires increasing the size of the lock word.
+	 */
+	for_each_possible_cpu(cpu) {
+		struct rqspinlock_held *rqh_cpu = per_cpu_ptr(&held_locks, cpu);
+		// TODO(kkd): Is this safe against this_cpu_inc/dec on the remote CPU?
+		int real_cnt = READ_ONCE(rqh_cpu->cnt);
+		int cnt = min(RES_NR_HELD, real_cnt);
+
+		/*
+		 * Let's ensure to break out of this loop if the lock is available for
+		 * us to potentially acquire.
+		 */
+		if (is_lock_released(lock, mask, ts))
+			return 0;
+
+		/*
+		 * Skip ourselves, and CPUs whose count is less than 2, as they need at
+		 * least one held lock and one acquisition attempt (reflected as top
+		 * most entry) to participate in an ABBA deadlock.
+		 *
+		 * If cnt is more than RES_NR_HELD, it means the current lock being
+		 * acquired won't appear in the table, and other locks in the table are
+		 * already held, so we can't determine ABBA.
+		 */
+		if (cpu == smp_processor_id() || real_cnt < 2 || real_cnt > RES_NR_HELD)
+			continue;
+
+		/*
+		 * Obtain the entry at the top, this corresponds to the lock the
+		 * remote CPU is attempting to acquire in a deadlock situation,
+		 * and would be one of the locks we hold on the current CPU.
+		 */
+		remote_lock = READ_ONCE(rqh_cpu->locks[cnt - 1]);
+		/*
+		 * If it is NULL, we've raced and cannot determine a deadlock
+		 * conclusively, skip this CPU.
+		 */
+		if (!remote_lock)
+			continue;
+		/*
+		 * Find if the lock we're attempting to acquire is held by this CPU.
+		 * Don't consider the topmost entry, as that must be the latest lock
+		 * being held or acquired.  For a deadlock, the target CPU must also
+		 * attempt to acquire a lock we hold, so for this search only 'cnt - 1'
+		 * entries are important.
+		 */
+		for (int i = 0; i < cnt - 1; i++) {
+			if (READ_ONCE(rqh_cpu->locks[i]) != lock)
+				continue;
+			/*
+			 * We found our lock as held on the remote CPU.  Is the
+			 * acquisition attempt on the remote CPU for a lock held
+			 * by us?  If so, we have a deadlock situation, and need
+			 * to recover.
+			 */
+			for (int i = 0; i < rqh_cnt - 1; i++) {
+				if (rqh->locks[i] == remote_lock)
+					return -EDEADLK;
+			}
+			/*
+			 * Inconclusive; retry again later.
+			 */
+			return 0;
+		}
+	}
+	return 0;
+}
+
+static noinline int check_deadlock(struct qspinlock *lock, u32 mask,
+				   struct rqspinlock_timeout *ts)
+{
+	int ret;
+
+	ret = check_deadlock_AA(lock, mask, ts);
+	if (ret)
+		return ret;
+	ret = check_deadlock_ABBA(lock, mask, ts);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
+static noinline int check_timeout(struct qspinlock *lock, u32 mask,
+				  struct rqspinlock_timeout *ts)
+{
+	u64 time = ktime_get_mono_fast_ns();
+	u64 prev = ts->cur;
+	u64 end = ts->end;
+
+	if (!end) {
+		ts->cur = time;
+		ts->end = time + ts->timeout;
+		return 0;
+	}
+
+	if (time > end)
+		return -EDEADLK;
+
+	/*
+	 * A millisecond interval passed from last time? Trigger deadlock
+	 * checks.
+	 */
+	if (prev + NSEC_PER_MSEC < time) {
+		ts->cur = time;
+		return check_deadlock(lock, mask, ts);
+	}
+
+	return 0;
+}
 
 /*
  * Per-CPU queue node structures; we can never have more than 4 nested
@@ -193,6 +371,11 @@ int __lockfunc resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 v
 	}
 
 	/*
+	 * Grab an entry in the held locks array, to enable deadlock detection.
+	 */
+	grab_held_lock_entry(lock);
+
+	/*
 	 * We're pending, wait for the owner to go away.
 	 *
 	 * 0,1,1 -> *,1,0
@@ -205,7 +388,7 @@ int __lockfunc resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 v
 	 */
 	if (val & _Q_LOCKED_MASK) {
 		RES_RESET_TIMEOUT(ts);
-		smp_cond_load_acquire(&lock->locked, !VAL || RES_CHECK_TIMEOUT(ts, ret));
+		smp_cond_load_acquire(&lock->locked, !VAL || RES_CHECK_TIMEOUT(ts, ret, _Q_LOCKED_MASK));
 	}
 
 	if (ret) {
@@ -220,7 +403,7 @@ int __lockfunc resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 v
 		 */
 		clear_pending(lock);
 		lockevent_inc(rqspinlock_lock_timeout);
-		return ret;
+		goto release_entry;
 	}
 
 	/*
@@ -238,6 +421,11 @@ int __lockfunc resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 v
 	 */
 queue:
 	lockevent_inc(lock_slowpath);
+	/*
+	 * Grab deadlock detection entry for the queue path.
+	 */
+	grab_held_lock_entry(lock);
+
 	node = this_cpu_ptr(&qnodes[0].mcs);
 	idx = node->count++;
 	tail = encode_tail(smp_processor_id(), idx);
@@ -257,9 +445,9 @@ queue:
 		lockevent_inc(lock_no_node);
 		RES_RESET_TIMEOUT(ts);
 		while (!queued_spin_trylock(lock)) {
-			if (RES_CHECK_TIMEOUT(ts, ret)) {
+			if (RES_CHECK_TIMEOUT(ts, ret, ~0u)) {
 				lockevent_inc(rqspinlock_lock_timeout);
-				break;
+				goto release_node;
 			}
 			cpu_relax();
 		}
@@ -350,7 +538,7 @@ queue:
 	 */
 	RES_RESET_TIMEOUT(ts);
 	val = atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_PENDING_MASK) ||
-				       RES_CHECK_TIMEOUT(ts, ret));
+				       RES_CHECK_TIMEOUT(ts, ret, _Q_LOCKED_PENDING_MASK));
 
 waitq_timeout:
 	if (ret) {
@@ -375,7 +563,7 @@ waitq_timeout:
 			WRITE_ONCE(next->locked, RES_TIMEOUT_VAL);
 		}
 		lockevent_inc(rqspinlock_lock_timeout);
-		goto release;
+		goto release_node;
 	}
 
 	/*
@@ -421,6 +609,12 @@ release:
 	 * release the node
 	 */
 	__this_cpu_dec(qnodes[0].mcs.count);
+	return ret;
+release_node:
+	trace_contention_end(lock, 0);
+	__this_cpu_dec(qnodes[0].mcs.count);
+release_entry:
+	release_held_lock_entry();
 	return ret;
 }
 EXPORT_SYMBOL(resilient_queued_spin_lock_slowpath);
