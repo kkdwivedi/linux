@@ -23,6 +23,7 @@
 #include <linux/hardirq.h>
 #include <linux/mutex.h>
 #include <linux/prefetch.h>
+#include <linux/seqlock.h>
 #include <asm/byteorder.h>
 #include <asm/qspinlock.h>
 #include <trace/events/lock.h>
@@ -33,31 +34,194 @@
  */
 #include "../locking/qspinlock_stat.h"
 
+#define RES_DD_MAX 128
+
+struct res_dd_table {
+	seqcount_t seqcount;
+	int cnt;
+	struct qspinlock *lock[RES_DD_MAX];
+};
+
+static DEFINE_PER_CPU_ALIGNED(struct res_dd_table, res_dd_tab) = {
+	.seqcount = SEQCNT_ZERO(res_dd_tab.seqcount)
+};
+
+static __always_inline struct qspinlock **grab_dd_entry(struct qspinlock *lock)
+{
+	struct res_dd_table *rdt = this_cpu_ptr(&res_dd_tab);
+	bool seqcnt_odd = raw_read_seqcount(&rdt->seqcount) & 0x1;
+	struct qspinlock **dde;
+	int cnt;
+
+	/*
+	 * Interrupt/NMI safety for write_seqcount begin? We must detect open
+	 * seqcount section and avoid bumping count. Also, move prefetch of dde
+	 * up and just store the dde here in this function to close the seqcount
+	 * write section also, otherwise we have to carry context everywhere.
+	 */
+	if (!seqcnt_odd)
+		write_seqcount_begin(&rdt->seqcount);
+	cnt = __this_cpu_inc_return(res_dd_tab.cnt);
+	dde = &rdt->lock[cnt];
+	WRITE_ONCE(*dde, lock);
+	if (!seqcnt_odd)
+		write_seqcount_end(&rdt->seqcount);
+	return dde;
+}
+
+static __always_inline void clear_dd_entry(void)
+{
+	struct res_dd_table *rdt = this_cpu_ptr(&res_dd_tab);
+	int cnt;
+
+	cnt = __this_cpu_dec_return(res_dd_tab.cnt);
+	WRITE_ONCE(rdt->lock[cnt], NULL);
+}
+
+struct res_timeout_state {
+	u64 cur;
+	u64 end;
+	u64 total;
+	bool checked_aa;
+};
+
 #define RES_TIMEOUT_VAL	2
 #define RES_DEF_TIMEOUT (NSEC_PER_SEC / 32)
 
+#define poll_lock(lock, mask) (!(atomic_read(&((lock)->val)) & (mask)))
+
+static noinline int check_deadlock_AA(struct qspinlock *lock, u32 mask, struct qspinlock **dde)
+{
+	struct qspinlock **i, **first = &this_cpu_ptr(&res_dd_tab)->lock[0];
+
+	for (i = dde - 1; i >= first; i--) {
+		/* Found an existing entry for the current lock. */
+		if (*i == lock)
+			return -EDEADLK;
+		if (poll_lock(lock, mask))
+			break;
+	}
+	return 0;
+}
+
+static noinline int check_deadlock_ABBA(struct qspinlock *lock, u32 mask, struct qspinlock **dde)
+{
+	struct res_dd_table *rdt_cur;
+	int cpu;
+
+	rdt_cur = this_cpu_ptr(&res_dd_tab);
+
+	/*
+	 * Iterate through held locks on the current CPU, and look
+	 * whether another CPU is attempting to acquire them.
+	 */
+	for (struct qspinlock **i = dde - 1; i >= rdt_cur->lock; i--) {
+		struct qspinlock *held_lock = *i;
+
+		for_each_possible_cpu(cpu) {
+			struct res_dd_table *rdt;
+			int seqcnt, cnt;
+
+			if (poll_lock(lock, mask))
+				return 0;
+
+			if (cpu == smp_processor_id())
+				continue;
+
+			rdt = per_cpu_ptr(&res_dd_tab, cpu);
+			/*
+			 * We do not need stabilizing read_seqcount_begin as
+			 * interrupts/NMIs can prolong the writer section and it
+			 * is better to skip and recheck in next interval than
+			 * now.  This should be rare as in case of actual
+			 * deadlocks, the target CPU should have stabilized and
+			 * not cause major updates to the table.
+			 */
+			seqcnt = raw_seqcount_begin(&rdt->seqcount);
+			cnt = READ_ONCE(rdt->cnt);
+			if (rdt->lock[cnt] != held_lock)
+				continue;
+			/* A held lock is potentially being waited upon. Search
+			 * if the lock we are attempting to acquire is held on
+			 * the remote CPU. That indicates an ABBA situation.
+			 */
+			for (int i = cnt - 1; i >= 0; i--) {
+				if (rdt->lock[i] == lock) {
+					/* There was writer presence during our
+					 * search, try searching through this
+					 * table in the next interval so that it
+					 * stabilizes by then.
+					 */
+					if (read_seqcount_retry(&rdt->seqcount, seqcnt))
+						return 0;
+					return -EDEADLK;
+				}
+
+				if (poll_lock(lock, mask))
+					return 0;
+			}
+			continue;
+		}
+	}
+	return 0;
+}
+
+static noinline int check_deadlock(struct qspinlock *lock, u32 mask,
+				   struct qspinlock **dde,
+				   struct res_timeout_state *ts)
+{
+	int ret;
+
+	if (ts->checked_aa)
+		goto check_abba;
+	ret = check_deadlock_AA(lock, mask, dde);
+	if (ret)
+		return ret;
+	ts->checked_aa = true;
+check_abba:
+	ret = check_deadlock_ABBA(lock, mask, dde);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
 __no_caller_saved_registers
-static noinline int check_timeout(u64 *endp, u64 total)
+static noinline int check_timeout(struct qspinlock *lock, u32 mask,
+				  struct qspinlock **dde,
+				  struct res_timeout_state *ts)
 {
 	u64 time = sched_clock();
-	u64 end = *endp;
+	u64 prev = ts->cur;
+	u64 end = ts->end;
 
 	if (!end) {
-		*endp = time + total;
+		ts->cur = time;
+		ts->end = time + ts->total;
 		return 0;
 	}
 
 	if (time > end)
 		return -EDEADLK;
 
+	/*
+	 * A millisecond interval passed from last time? Trigger deadlock
+	 * checks.
+	 */
+	if (prev + (NSEC_PER_MSEC) > time) {
+		ts->cur = time;
+		return check_deadlock(lock, mask, dde, ts);
+	}
+
 	return 0;
 }
 
-#define RES_CHECK_TIMEOUT(spin, end, ret)                               \
-	({                                                              \
-		if ((u16)((spin)++) == 0xffff)                          \
-			(ret) = check_timeout(&(end), RES_DEF_TIMEOUT); \
-		(ret);                                                  \
+#define RES_CHECK_TIMEOUT(spin, ts, ret, mask)                               \
+	({                                                                   \
+		if ((u16)((spin)++) == 0xffff) {                             \
+			(ret) = check_timeout((lock), (mask), (dde), &(ts)); \
+		}                                                            \
+		(ret);                                                       \
 	})
 
 /*
@@ -120,12 +284,20 @@ static __always_inline u32  __pv_wait_head_or_lock(struct qspinlock *lock,
  */
 int __lockfunc resilient_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 {
+	struct res_timeout_state ts = { .total = RES_DEF_TIMEOUT };
 	struct mcs_spinlock *prev, *next, *node;
-	u64 spin = 0, end = 0;
+	struct qspinlock **dde;
 	int idx, ret = 0;
 	u32 old, tail;
+	u64 spin = 0;
 
 	BUILD_BUG_ON(CONFIG_NR_CPUS >= (1U << _Q_TAIL_CPU_BITS));
+
+	/*
+	 * We are going to be touching the deadlock detection table, therefore
+	 * issue a prefetch to possibly mitigate a cache miss later.
+	 */
+	prefetchw(this_cpu_ptr(&res_dd_tab));
 
 	if (pv_enabled())
 		goto pv_queue;
@@ -175,6 +347,11 @@ int __lockfunc resilient_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	}
 
 	/*
+	 * Grab deadlock detection entry for pending waiter path.
+	 */
+	dde = grab_dd_entry(lock);
+
+	/*
 	 * We're pending, wait for the owner to go away.
 	 *
 	 * 0,1,1 -> *,1,0
@@ -186,7 +363,7 @@ int __lockfunc resilient_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 * barriers.
 	 */
 	if (val & _Q_LOCKED_MASK)
-		smp_cond_load_acquire(&lock->locked, !VAL || RES_CHECK_TIMEOUT(spin, end, ret));
+		smp_cond_load_acquire(&lock->locked, !VAL || RES_CHECK_TIMEOUT(spin, ts, ret, _Q_LOCKED_MASK));
 
 	if (ret) {
 		/* We waited for the locked bit to go back to 0, as the pending
@@ -197,7 +374,7 @@ int __lockfunc resilient_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 		 */
 		clear_pending(lock);
 		lockevent_inc(rsl_lock_timeout);
-		return ret;
+		goto release_dde_entry;
 	}
 
 	/*
@@ -216,6 +393,11 @@ int __lockfunc resilient_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 queue:
 	lockevent_inc(lock_slowpath);
 pv_queue:
+	/*
+	 * Grab deadlock detection entry for the queue path.
+	 */
+	dde = grab_dd_entry(lock);
+
 	node = this_cpu_ptr(&rqnodes[0].mcs);
 	idx = node->count++;
 	tail = encode_tail(smp_processor_id(), idx);
@@ -234,9 +416,9 @@ pv_queue:
 	if (unlikely(idx >= _Q_MAX_NODES)) {
 		lockevent_inc(lock_no_node);
 		while (!queued_spin_trylock(lock)) {
-			if (RES_CHECK_TIMEOUT(spin, end, ret)) {
+			if (RES_CHECK_TIMEOUT(spin, ts, ret, _Q_LOCKED_MASK)) {
 				lockevent_inc(rsl_lock_timeout);
-				break;
+				goto release_dde_node;
 			}
 			cpu_relax();
 		}
@@ -342,7 +524,7 @@ pv_queue:
 		goto locked;
 
 	val = atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_PENDING_MASK) ||
-				       RES_CHECK_TIMEOUT(spin, end, ret));
+				       RES_CHECK_TIMEOUT(spin, ts, ret, _Q_LOCKED_PENDING_MASK));
 
 waitq_timeout:
 	if (ret) {
@@ -363,7 +545,7 @@ waitq_timeout:
 		WRITE_ONCE(next->locked, RES_TIMEOUT_VAL);
 waitq_out:
 		lockevent_inc(rsl_lock_timeout);
-		goto release;
+		goto release_dde_node;
 	}
 
 locked:
@@ -417,6 +599,12 @@ release:
 	 */
 	__this_cpu_dec(rqnodes[0].mcs.count);
 	return ret;
+release_dde_node:
+	__this_cpu_dec(rqnodes[0].mcs.count);
+release_dde_entry:
+	WRITE_ONCE(*dde, NULL);
+	__this_cpu_dec(res_dd_tab.cnt);
+	return ret;
 }
 EXPORT_SYMBOL(resilient_spin_lock_slowpath);
 
@@ -448,3 +636,10 @@ static __init int parse_nopvspin(char *arg)
 }
 early_param("nopvspin", parse_nopvspin);
 #endif
+
+static __always_inline void res_spin_unlock(struct qspinlock *lock)
+{
+	/* TODO(kkd): Can we avoid doing clear_dd_entry for uncontended cases? */
+	queued_spin_unlock(lock);
+	clear_dd_entry();
+}
