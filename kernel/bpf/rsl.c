@@ -671,15 +671,28 @@ __bpf_kfunc bool bpf_res_spin_lock_cond(struct bpf_spin_lock *lock)
 	return !res_spin_lock((struct qspinlock *)lock);
 }
 
-__bpf_kfunc void bpf_res_spin_unlock(struct bpf_spin_lock *lock)
+__bpf_kfunc int bpf_res_spin_lock(void *p__ign)
 {
-	res_spin_unlock((struct qspinlock *)lock);
+	int ret;
+
+	preempt_disable();
+	ret = res_spin_lock(p__ign);
+	if (ret)
+		preempt_enable();
+	return ret;
+}
+
+__bpf_kfunc void bpf_res_spin_unlock(void *lock__ign)
+{
+	res_spin_unlock((struct qspinlock *)lock__ign);
+	preempt_enable();
 }
 
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(rsl_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_res_spin_lock_cond)
+BTF_ID_FLAGS(func, bpf_res_spin_lock)
 BTF_ID_FLAGS(func, bpf_res_spin_unlock)
 BTF_KFUNCS_END(rsl_kfunc_ids)
 
