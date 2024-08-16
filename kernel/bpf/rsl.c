@@ -303,7 +303,7 @@ int __lockfunc resilient_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	if (pv_enabled())
 		goto pv_queue;
 
-	if (virt_spin_lock(lock))
+	if (0 && virt_spin_lock(lock))
 		return 0;
 
 	/*
