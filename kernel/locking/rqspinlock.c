@@ -81,6 +81,7 @@ struct rqspinlock_timeout {
 };
 
 #define RES_TIMEOUT_VAL	2
+#define RES_CORRUPT_VAL	3
 
 #define __RES_CHECK_TIMEOUT(ts, ret, mask, deadlock)                 \
 	({                                                           \
@@ -343,9 +344,34 @@ static __always_inline int resilient_virt_spin_lock(struct qspinlock *lock)
  */
 static DEFINE_PER_CPU_ALIGNED(struct qnode, qnodes[_Q_MAX_NODES]);
 
+#define RES_NEXT_DEFAULT(lock) (NULL)
+
+#define RES_ARENA_ACTIVE 0
 #define RES_ARENA_RESET_TIMEOUT(ts) (void)0
 #define RES_ARENA_TIMEOUT_RETVAL 0
 #define RES_ARENA_PENDING_CNT_TIMEOUT 0
+#define RES_ARENA_MCS_NEXT_TIMEOUT 0
+
+static inline
+void release_qnode(struct mcs_spinlock *node)
+{
+	(void)node;
+	__this_cpu_dec(qnodes[0].mcs.count);
+}
+
+static inline
+bool link_into_waitqueue(struct qspinlock *lock, struct mcs_spinlock *prev,
+			 struct mcs_spinlock *node)
+{
+	WRITE_ONCE(prev->next, node);
+	return true;
+}
+
+static inline
+bool signal_stale_waiter(struct qspinlock *lock, struct mcs_spinlock *node)
+{
+	return false;
+}
 
 #endif /* _GEN_RES_ARENA_SLOWPATH */
 
@@ -538,7 +564,6 @@ queue:
 	barrier();
 
 	node->locked = 0;
-	node->next = NULL;
 
 	/*
 	 * We touched a (possibly) cold cacheline in the per-cpu queue node;
@@ -547,6 +572,18 @@ queue:
 	 */
 	if (queued_spin_trylock(lock))
 		goto release;
+
+	/*
+	 * This is WRITE_ONCE due to arena slow path implementation performing a
+	 * cmpxchg into this value. We do this assignment after trylock (unlike
+	 * qspinlock) as we don't want to clean up random waiter who links
+	 * itself after us due to corruption. Before this assignment, next will
+	 * be set to NULL, so arena waiter cmpxchg will fail.
+	 *
+	 * After this store, we can expect random nodes to be linked to us for
+	 * arena locks, regardless of what happens with the xchg_tail below.
+	 */
+	WRITE_ONCE(node->next, RES_NEXT_DEFAULT(lock));
 
 	/*
 	 * Ensure that the initialisation of @node is complete before we
@@ -563,7 +600,7 @@ queue:
 	 * p,*,* -> n,*,*
 	 */
 	old = xchg_tail(lock, tail);
-	next = NULL;
+	next = RES_NEXT_DEFAULT(lock);
 
 	/*
 	 * if there was a previous node; link it and wait until reaching the
@@ -573,14 +610,41 @@ queue:
 		int val;
 
 		prev = decode_tail(old, qnodes);
+		if (!prev) {
+			signal_stale_waiter(lock, node);
+			lockevent_inc(rqspinlock_lock_corrupt);
+			ret = -ESTALE;
+			goto release_node;
+		}
 
 		/* Link @node into the waitqueue. */
-		WRITE_ONCE(prev->next, node);
+		if (!link_into_waitqueue(lock, prev, node)) {
+			signal_stale_waiter(lock, node);
+			lockevent_inc(rqspinlock_lock_corrupt);
+			ret = -ESTALE;
+			goto release_node;
+		}
 
+		/*
+		 * Once we link ourselves, either due to a valid prev node or to
+		 * someone randomly due to corruption, they will ensure that we
+		 * are signalled, so never use a timeout here.
+		 */
 		val = arch_mcs_spin_lock_contended(&node->locked);
 		if (val == RES_TIMEOUT_VAL) {
+			/*
+			 * The wait queue timeout logic will also handle stale
+			 * waiter case, no need to signal here.
+			 */
 			ret = -EDEADLK;
 			goto waitq_timeout;
+		}
+
+		if (RES_ARENA_ACTIVE && val == RES_CORRUPT_VAL) {
+			signal_stale_waiter(lock, node);
+			lockevent_inc(rqspinlock_lock_corrupt_timeout);
+			ret = -ESTALE;
+			goto release_node;
 		}
 
 		/*
@@ -590,7 +654,7 @@ queue:
 		 * to reduce latency in the upcoming MCS unlock operation.
 		 */
 		next = READ_ONCE(node->next);
-		if (next)
+		if (next != RES_NEXT_DEFAULT(lock))
 			prefetchw(next);
 	}
 
@@ -628,8 +692,29 @@ waitq_timeout:
 		 * or leave it as 1, allowing us to make progress.
 		 */
 		if (!try_cmpxchg_tail(lock, tail, 0)) {
-			next = smp_cond_load_relaxed(&node->next, VAL);
+			int old_ret = ret;
+			ret = 0;
+			RES_ARENA_RESET_TIMEOUT(ts);
+			next = smp_cond_load_relaxed(&node->next, (VAL != RES_NEXT_DEFAULT(lock)) ||
+						     RES_ARENA_MCS_NEXT_TIMEOUT);
+
+			if (RES_ARENA_TIMEOUT_RETVAL) {
+				signal_stale_waiter(lock, node);
+				lockevent_inc(rqspinlock_lock_corrupt_timeout);
+				ret = -ESTALE;
+				goto release_node;
+			}
+			ret = old_ret;
 			WRITE_ONCE(next->locked, RES_TIMEOUT_VAL);
+		} else {
+			/*
+			 * The cmpxchg of tail back to 0 succeeded, but it is
+			 * possible the value is being overwritten randomly and
+			 * someone happened to link behind us. Signal them to
+			 * stop waiting.
+			 */
+			if (signal_stale_waiter(lock, node))
+				ret = -ESTALE;
 		}
 		lockevent_inc(rqspinlock_lock_timeout);
 		goto release_node;
@@ -652,8 +737,20 @@ waitq_timeout:
 	 *       PENDING will make the uncontended transition fail.
 	 */
 	if ((val & _Q_TAIL_MASK) == tail) {
-		if (atomic_try_cmpxchg_relaxed(&lock->val, &val, _Q_LOCKED_VAL))
+		if (atomic_try_cmpxchg_relaxed(&lock->val, &val, _Q_LOCKED_VAL)) {
+			/*
+			 * If we succeeded in getting the lock, ensure we don't
+			 * have any stale nodes linked after us waiting to be
+			 * signalled. If so, this indicates corruption and we
+			 * need to bail!
+			 */
+			if (signal_stale_waiter(lock, node)) {
+				lockevent_inc(rqspinlock_lock_corrupt);
+				ret = -ESTALE;
+				goto release_node;
+			}
 			goto release; /* No contention */
+		}
 	}
 
 	/*
@@ -666,8 +763,16 @@ waitq_timeout:
 	/*
 	 * contended path; wait for next if not observed yet, release.
 	 */
-	if (!next)
-		next = smp_cond_load_relaxed(&node->next, (VAL));
+	RES_ARENA_RESET_TIMEOUT(ts);
+	if (next == RES_NEXT_DEFAULT(lock))
+		next = smp_cond_load_relaxed(&node->next, (VAL != RES_NEXT_DEFAULT(lock)) ||
+					     RES_ARENA_MCS_NEXT_TIMEOUT);
+
+	if (RES_ARENA_TIMEOUT_RETVAL) {
+		signal_stale_waiter(lock, node);
+		lockevent_inc(rqspinlock_lock_corrupt_timeout);
+		goto release_node;
+	}
 
 	arch_mcs_spin_unlock_contended(&next->locked);
 
@@ -677,11 +782,11 @@ release:
 	/*
 	 * release the node
 	 */
-	__this_cpu_dec(qnodes[0].mcs.count);
+	release_qnode(node);
 	return ret;
 release_node:
 	trace_contention_end(lock, 0);
-	__this_cpu_dec(qnodes[0].mcs.count);
+	release_qnode(node);
 release_entry:
 	release_held_lock_entry();
 	return ret;
@@ -692,13 +797,76 @@ EXPORT_SYMBOL(resilient_queued_spin_lock_slowpath);
 #define _GEN_RES_ARENA_SLOWPATH
 #define resilient_queued_spin_lock_slowpath arena_resilient_queued_spin_lock_slowpath
 
+#undef RES_NEXT_DEFAULT
+
+#undef RES_ARENA_ACTIVE
 #undef RES_ARENA_RESET_TIMEOUT
 #undef RES_ARENA_TIMEOUT_RETVAL
 #undef RES_ARENA_PENDING_CNT_TIMEOUT
+#undef RES_ARENA_MCS_NEXT_TIMEOUT
+#undef release_qnode
+#undef link_into_waitqueue
 
+#undef decode_tail
+#undef signal_stale_waiter
+
+#define RES_NEXT_DEFAULT(lock) ((struct mcs_spinlock *)(lock))
+
+#define RES_ARENA_ACTIVE 1
 #define RES_ARENA_RESET_TIMEOUT(ts) RES_RESET_TIMEOUT(ts)
 #define RES_ARENA_TIMEOUT_RETVAL (ret)
 #define RES_ARENA_PENDING_CNT_TIMEOUT __RES_CHECK_TIMEOUT(ts, ret, 0, false)
+#define RES_ARENA_MCS_NEXT_TIMEOUT __RES_CHECK_TIMEOUT(ts, ret, 0, false)
+
+#define release_qnode release_arena_qnode
+#define link_into_waitqueue link_into_arena_waitqueue
+
+#define decode_tail decode_arena_tail
+#define signal_stale_waiter signal_arena_stale_waiter
+
+static inline
+void release_arena_qnode(struct mcs_spinlock *node)
+{
+	WRITE_ONCE(node->next, NULL);
+	__this_cpu_dec(qnodes[0].mcs.count);
+}
+
+static inline
+bool link_into_arena_waitqueue(struct qspinlock *lock, struct mcs_spinlock *prev,
+			       struct mcs_spinlock *node)
+{
+	struct mcs_spinlock *val = RES_NEXT_DEFAULT(lock);
+
+	return try_cmpxchg_relaxed(&prev->next, &val, node);
+}
+
+static inline __pure
+struct mcs_spinlock *decode_arena_tail(u32 tail, struct qnode *qnodes)
+{
+	int cpu = (tail >> _Q_TAIL_CPU_OFFSET) - 1;
+	int idx = (tail &  _Q_TAIL_IDX_MASK) >> _Q_TAIL_IDX_OFFSET;
+
+	if (cpu < 0 || cpu > NR_CPUS)
+		return NULL;
+	if (idx < 0 || idx >= _Q_MAX_NODES)
+		return NULL;
+
+	return per_cpu_ptr(&qnodes[idx].mcs, cpu);
+}
+
+static inline
+bool signal_arena_stale_waiter(struct qspinlock *lock, struct mcs_spinlock *node)
+{
+	struct mcs_spinlock *next;
+
+	next = xchg_relaxed(&node->next, NULL);
+	if (next != RES_NEXT_DEFAULT(lock)) {
+		WRITE_ONCE(next->locked, RES_CORRUPT_VAL);
+		return true;
+	}
+	return false;
+}
+
 
 #include "rqspinlock.c"
 #undef resilient_queued_spin_lock_slowpath
