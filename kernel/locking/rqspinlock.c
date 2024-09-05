@@ -12,6 +12,7 @@
  *          Peter Zijlstra <peterz@infradead.org>
  *          Kumar Kartikeya Dwivedi <memxor@gmail.com>
  */
+#ifndef _GEN_RES_ARENA_SLOWPATH
 
 #include <linux/smp.h>
 #include <linux/bug.h>
@@ -335,6 +336,8 @@ static __always_inline int resilient_virt_spin_lock(struct qspinlock *lock)
  * Exactly fits one 64-byte cacheline on a 64-bit architecture.
  */
 static DEFINE_PER_CPU_ALIGNED(struct qnode, qnodes[_Q_MAX_NODES]);
+
+#endif /* _GEN_RES_ARENA_SLOWPATH */
 
 /**
  * resilient_queued_spin_lock_slowpath - acquire the queued spinlock
@@ -660,3 +663,12 @@ release_entry:
 	return ret;
 }
 EXPORT_SYMBOL(resilient_queued_spin_lock_slowpath);
+
+#ifndef _GEN_RES_ARENA_SLOWPATH
+#define _GEN_RES_ARENA_SLOWPATH
+#define resilient_queued_spin_lock_slowpath arena_resilient_queued_spin_lock_slowpath
+
+#include "rqspinlock.c"
+#undef resilient_queued_spin_lock_slowpath
+#undef _GEN_RES_ARENA_SLOWPATH
+#endif /* _GEN_RES_ARENA_SLOWPATH */
