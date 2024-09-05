@@ -675,6 +675,8 @@ waitq_timeout:
 		 * or leave it as 1, allowing us to make progress.
 		 */
 		if (!resilient_try_cmpxchg_tail(lock, tail, 0, fault_release_signal)) {
+			int old_ret = ret;
+			ret = 0;
 			RES_ARENA_RESET_TIMEOUT(ts);
 			next = smp_cond_load_relaxed(&node->next, (VAL != RES_NEXT_DEFAULT(lock)) ||
 						     RES_ARENA_MCS_NEXT_TIMEOUT);
@@ -685,7 +687,7 @@ waitq_timeout:
 				ret = -ESTALE;
 				goto release_node;
 			}
-
+			ret = old_ret;
 			WRITE_ONCE(next->locked, RES_TIMEOUT_VAL);
 		} else {
 			/*
@@ -926,6 +928,35 @@ unlock:
 	this_cpu_dec(held_locks.cnt);
 }
 
+static __always_inline int arena_res_spin_lock(struct qspinlock *lock)
+{
+	int val = 0;
+
+	if (likely(raw_atomic_try_cmpxchg_acquire_nofault(&lock->val, &val, _Q_LOCKED_VAL, fault))) {
+		grab_held_lock_entry(lock);
+		return 0;
+	}
+	return arena_resilient_queued_spin_lock_slowpath(lock, val, RES_DEF_TIMEOUT);
+fault:
+	return -EFAULT;
+}
+
+static __always_inline void arena_res_spin_unlock(struct qspinlock *lock)
+{
+	struct rqspinlock_held *rqh = this_cpu_ptr(&held_locks);
+
+	if (unlikely(rqh->cnt >= RES_NR_HELD))
+		goto unlock;
+	WRITE_ONCE(rqh->locks[rqh->cnt], NULL);
+	/*
+	 * Release barrier, ensuring ordering. See release_held_lock_entry.
+	 */
+unlock:
+	arena_queued_spin_unlock(lock, fault);
+fault:
+	this_cpu_dec(held_locks.cnt);
+}
+
 /* This is a fake struct returned by bpf_res_spin_lock_cond. The verifier logic
  * is wired to treat the non-NULL nature of returned value as a success
  * condition.
@@ -952,6 +983,22 @@ __bpf_kfunc struct lock_condition *bpf_res_spin_lock(struct bpf_spin_lock *lock)
 }
 
 __bpf_kfunc void bpf_res_spin_unlock(struct bpf_spin_lock *lock)
+{
+	res_spin_unlock((struct qspinlock *)lock);
+	preempt_enable();
+}
+
+__bpf_kfunc struct lock_condition *bpf_arena_res_spin_lock(struct bpf_spin_lock *lock)
+{
+	preempt_disable();
+	if (arena_res_spin_lock((struct qspinlock *)lock)) {
+		preempt_enable();
+		return NULL;
+	}
+	return &lock_condition;
+}
+
+__bpf_kfunc void bpf_arena_res_spin_unlock(struct bpf_spin_lock *lock)
 {
 	res_spin_unlock((struct qspinlock *)lock);
 	preempt_enable();

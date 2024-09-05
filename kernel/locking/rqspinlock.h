@@ -53,6 +53,8 @@ static __always_inline bool try_cmpxchg_tail(struct qspinlock *lock, u32 tail, u
 		__val;										\
 	})
 
+#define arena_queued_spin_unlock(lock, _label) smp_store_release_nofault(&(lock)->locked, 0, _label)
+
 #if _Q_PENDING_BITS == 8
 /**
  * clear_pending - clear the pending bit.
