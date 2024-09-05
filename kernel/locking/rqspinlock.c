@@ -676,7 +676,7 @@ waitq_timeout:
 		 */
 		if (!resilient_try_cmpxchg_tail(lock, tail, 0, fault_release_signal)) {
 			int old_ret = ret;
-			ret = 0;
+			// ret = 0;
 			RES_ARENA_RESET_TIMEOUT(ts);
 			next = smp_cond_load_relaxed(&node->next, (VAL != RES_NEXT_DEFAULT(lock)) ||
 						     RES_ARENA_MCS_NEXT_TIMEOUT);
@@ -883,7 +883,20 @@ bool signal_arena_stale_waiter(struct qspinlock *lock, struct mcs_spinlock *node
 {
 	struct mcs_spinlock *next;
 
-	next = xchg_relaxed(&node->next, NULL);
+	next = READ_ONCE(node->next);
+	if (next != RES_NEXT_DEFAULT(lock)) {
+		WRITE_ONCE(next->locked, RES_CORRUPT_VAL);
+		/*
+		 * Ordered by a control dep.
+		 */
+		WRITE_ONCE(node->next, NULL);
+		return true;
+	}
+
+	/*
+	 * Order load before xchg.
+	 */
+	next = xchg_release(&node->next, NULL);
 	if (next != RES_NEXT_DEFAULT(lock)) {
 		WRITE_ONCE(next->locked, RES_CORRUPT_VAL);
 		return true;
@@ -910,7 +923,9 @@ static __always_inline int res_spin_lock(struct qspinlock *lock)
 		grab_held_lock_entry(lock);
 		return 0;
 	}
-	return resilient_queued_spin_lock_slowpath(lock, val, RES_DEF_TIMEOUT);
+	val = arena_resilient_queued_spin_lock_slowpath(lock, val, RES_DEF_TIMEOUT);
+	WARN_ON_ONCE(val == -ESTALE);
+	return val;
 }
 
 static __always_inline void res_spin_unlock(struct qspinlock *lock)
