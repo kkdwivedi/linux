@@ -52,7 +52,8 @@ LOCK_EVENT(lock_no_node)	/* # of locking ops w/o using percpu node    */
 /*
  * Locking events for Resilient Queued Spin Lock
  */
-LOCK_EVENT(rqspinlock_lock_timeout)	/* # of locking ops that timeout	*/
+LOCK_EVENT(rqspinlock_lock_timeout)		/* # of locking ops that timeout	*/
+LOCK_EVENT(rqspinlock_lock_corrupt_timeout)	/* # of locking ops that timeout due to corruption */
 
 /*
  * Locking events for rwsem

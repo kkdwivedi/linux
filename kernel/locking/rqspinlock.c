@@ -82,12 +82,15 @@ struct rqspinlock_timeout {
 
 #define RES_TIMEOUT_VAL	2
 
-#define RES_CHECK_TIMEOUT(ts, ret, mask)                              \
-	({                                                            \
-		if (!((ts).spin++ & 0xffff))                          \
-			(ret) = check_timeout((lock), (mask), &(ts)); \
-		(ret);                                                \
+#define __RES_CHECK_TIMEOUT(ts, ret, mask, deadlock)                 \
+	({                                                           \
+		if (!((ts).spin++ & 0xffff))                         \
+			(ret) = check_timeout((lock), (mask), &(ts), \
+					      (deadlock));           \
+		(ret);                                               \
 	})
+
+#define RES_CHECK_TIMEOUT(ts, ret, mask) __RES_CHECK_TIMEOUT(ts, ret, mask, true)
 
 /*
  * Initialize the 'timeout' member with the chosen timeout.
@@ -270,7 +273,8 @@ static noinline int check_deadlock(struct qspinlock *lock, u32 mask,
 }
 
 static noinline int check_timeout(struct qspinlock *lock, u32 mask,
-				  struct rqspinlock_timeout *ts)
+				  struct rqspinlock_timeout *ts,
+				  bool deadlock)
 {
 	u64 time = ktime_get_mono_fast_ns();
 	u64 prev = ts->cur;
@@ -291,7 +295,9 @@ static noinline int check_timeout(struct qspinlock *lock, u32 mask,
 	 */
 	if (prev + (NSEC_PER_MSEC) < time) {
 		ts->cur = time;
-		return check_deadlock(lock, mask, ts);
+
+		if (deadlock)
+			return check_deadlock(lock, mask, ts);
 	}
 
 	return 0;
@@ -304,6 +310,10 @@ static noinline int check_timeout(struct qspinlock *lock, u32 mask,
  * Exactly fits one 64-byte cacheline on a 64-bit architecture.
  */
 static DEFINE_PER_CPU_ALIGNED(struct qnode, qnodes[_Q_MAX_NODES]);
+
+#define RES_ARENA_RESET_TIMEOUT(ts) (void)0
+#define RES_ARENA_TIMEOUT_RETVAL 0
+#define RES_ARENA_PENDING_CNT_TIMEOUT 0
 
 #endif /* _GEN_RES_ARENA_SLOWPATH */
 
@@ -345,10 +355,24 @@ int __lockfunc resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 v
 	 *
 	 * 0,1,0 -> 0,0,1
 	 */
+	RES_ARENA_RESET_TIMEOUT(ts);
 	if (val == _Q_PENDING_VAL) {
 		int cnt = _Q_PENDING_LOOPS;
 		val = atomic_cond_read_relaxed(&lock->val,
-					       (VAL != _Q_PENDING_VAL) || !cnt--);
+					       (VAL != _Q_PENDING_VAL) || !cnt-- ||
+					       RES_ARENA_PENDING_CNT_TIMEOUT);
+	}
+
+	/*
+	 * When locks are hosted on an arena, it is possible that corruption
+	 * leads to us observing 0,1,0 and waiting in vain for the pending to
+	 * locked hand-over, while there may be no other thread that is active.
+	 *
+	 * In such a case, we apply a timeout and return an error if it expires.
+	 */
+	if (RES_ARENA_TIMEOUT_RETVAL) {
+		lockevent_inc(rqspinlock_lock_corrupt_timeout);
+		return -ESTALE;
 	}
 
 	/*
@@ -632,6 +656,14 @@ EXPORT_SYMBOL(resilient_queued_spin_lock_slowpath);
 #ifndef _GEN_RES_ARENA_SLOWPATH
 #define _GEN_RES_ARENA_SLOWPATH
 #define resilient_queued_spin_lock_slowpath arena_resilient_queued_spin_lock_slowpath
+
+#undef RES_ARENA_RESET_TIMEOUT
+#undef RES_ARENA_TIMEOUT_RETVAL
+#undef RES_ARENA_PENDING_CNT_TIMEOUT
+
+#define RES_ARENA_RESET_TIMEOUT(ts) RES_RESET_TIMEOUT(ts)
+#define RES_ARENA_TIMEOUT_RETVAL (ret)
+#define RES_ARENA_PENDING_CNT_TIMEOUT __RES_CHECK_TIMEOUT(ts, ret, 0, false)
 
 #include "rqspinlock.c"
 #undef resilient_queued_spin_lock_slowpath
