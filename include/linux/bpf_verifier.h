@@ -274,7 +274,14 @@ struct bpf_reference_state {
 	/* Each reference object has a type. Ensure REF_TYPE_PTR is zero to
 	 * default to pointer reference on zero initialization of a state.
 	 */
-	enum { REF_TYPE_PTR = 0, REF_TYPE_BPF_LOCK, REF_TYPE_RES_LOCK, REF_TYPE_RES_LOCK_COND } type;
+	enum {
+		REF_TYPE_PTR			= 0,
+		REF_TYPE_BPF_LOCK		= (1 << 0),
+		REF_TYPE_RES_LOCK		= (1 << 1),
+		REF_TYPE_RES_LOCK_COND		= (1 << 2),
+		REF_TYPE_ARENA_RES_LOCK		= (1 << 3),
+		REF_TYPE_ARENA_RES_LOCK_COND	= (1 << 4),
+	} type;
 	/* Track each reference created with a unique id, even if the same
 	 * instruction creates the reference multiple times (eg, via CALL).
 	 */
@@ -601,6 +608,11 @@ struct bpf_insn_aux_data {
 	 * bpf_fastcall pattern.
 	 */
 	u8 fastcall_spills_num:3;
+	bool use_shadow_kfunc_id;
+	/* arena argument passed to call instruction */
+	int arena_arg;
+	/* Check if resilient lock is called with both arena and non-arena args */
+	bool non_arena_arg;
 
 	/* below fields are initialized once */
 	unsigned int orig_idx; /* original instruction index */
