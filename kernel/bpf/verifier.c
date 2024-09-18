@@ -1392,7 +1392,7 @@ static int release_lock_state(struct bpf_func_state *state, int type, int id, vo
 
 	last_idx = state->acquired_refs - 1;
 	for (i = 0; i < state->acquired_refs; i++) {
-		if (state->refs[i].type != type)
+		if (!(state->refs[i].type & type))
 			continue;
 		if (state->refs[i].id == id && state->refs[i].ptr == ptr) {
 			if (last_idx && i != last_idx)
@@ -1414,10 +1414,10 @@ static struct bpf_reference_state *find_lock_state(struct bpf_verifier_env *env,
 	for (i = 0; i < state->acquired_refs; i++) {
 		struct bpf_reference_state *s = &state->refs[i];
 
-		if (s->type != REF_TYPE_RES_LOCK && s->type != REF_TYPE_BPF_LOCK) {
-			if (cond && s->type != REF_TYPE_RES_LOCK_COND)
-				continue;
-		}
+		if (s->type == REF_TYPE_PTR)
+			continue;
+		if (cond && !(s->type & (REF_TYPE_RES_LOCK_COND | REF_TYPE_ARENA_RES_LOCK_COND)))
+			continue;
 
 		if (s->id == id && s->ptr == ptr)
 			return s;
@@ -2844,6 +2844,8 @@ static struct btf *find_kfunc_desc_btf(struct bpf_verifier_env *env, s16 offset)
 	return btf_vmlinux ?: ERR_PTR(-ENOENT);
 }
 
+static int get_shadow_kfunc_id(u32 func_id, s16 offset);
+
 static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
 {
 	const struct btf_type *func, *func_proto;
@@ -2968,7 +2970,13 @@ static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
 	if (!err)
 		sort(tab->descs, tab->nr_descs, sizeof(tab->descs[0]),
 		     kfunc_desc_cmp_by_id_off, NULL);
-	return err;
+	/* If we have a shadow kfunc for this kfunc ID, add the kfunc entry for
+	 * it, since we may need to patch the call to the other kfunc later.
+	 */
+	func_id = get_shadow_kfunc_id(func_id, offset);
+	if (!func_id)
+		return err;
+	return add_kfunc_call(env, func_id, offset);
 }
 
 static int kfunc_desc_cmp_by_imm_off(const void *a, const void *b)
@@ -7727,7 +7735,7 @@ static int check_kfunc_mem_size_reg(struct bpf_verifier_env *env, struct bpf_reg
  * object got locked and clears it after bpf_spin_unlock.
  */
 static int process_spin_lock(struct bpf_verifier_env *env, int regno,
-			     bool is_lock, bool res_lock)
+			     bool is_lock, bool res_lock, bool arena_lock)
 {
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
 	const char *lock_str = res_lock ? "bpf_res_spin" : "bpf_spin";
@@ -7739,7 +7747,7 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 	struct btf_record *rec;
 	int err;
 
-	if (!is_const) {
+	if (!is_const && !arena_lock) {
 		verbose(env,
 			"R%d doesn't have constant offset. bpf_spin_lock has to be at the constant offset\n",
 			regno);
@@ -7772,7 +7780,9 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 		void *ptr;
 		int type;
 
-		if (map)
+		if (arena_lock)
+			ptr = env->prog->aux->arena;
+		else if (map)
 			ptr = map;
 		else
 			ptr = btf;
@@ -7801,7 +7811,7 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 			return -EINVAL;
 		}
 
-		type = res_lock ? REF_TYPE_RES_LOCK_COND : REF_TYPE_BPF_LOCK;
+		type = res_lock ? (arena_lock ? REF_TYPE_ARENA_RES_LOCK_COND : REF_TYPE_RES_LOCK_COND) : REF_TYPE_BPF_LOCK;
 		err = acquire_lock_state(env, env->insn_idx, type, reg->id, ptr);
 		if (err < 0) {
 			verbose(env, "Failed to acquire lock state\n");
@@ -7813,7 +7823,9 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 		void *ptr;
 		int type;
 
-		if (map)
+		if (arena_lock)
+			ptr = env->prog->aux->arena;
+		else if (map)
 			ptr = map;
 		else
 			ptr = btf;
@@ -7827,9 +7839,13 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 		 * REF_TYPE_RES_LOCK or dropped upon checking return value of
 		 * lock function/
 		 */
-		type = res_lock ? REF_TYPE_RES_LOCK : REF_TYPE_BPF_LOCK;
+		type = res_lock ? (arena_lock ? REF_TYPE_ARENA_RES_LOCK : REF_TYPE_RES_LOCK) : REF_TYPE_BPF_LOCK;
 		s = find_lock_state(env, reg->id, ptr, false);
-		if (s && s->type != type) {
+		if (!s) {
+			verbose(env, "%s_unlock without taking a lock\n", lock_str);
+			return -EINVAL;
+		}
+		if (s->type != type) {
 			verbose(env, "Using different lock APIs to unlock lock\n");
 			return -EINVAL;
 		}
@@ -9079,11 +9095,11 @@ skip_type_check:
 			return -EACCES;
 		}
 		if (meta->func_id == BPF_FUNC_spin_lock) {
-			err = process_spin_lock(env, regno, true, false);
+			err = process_spin_lock(env, regno, true, false, false);
 			if (err)
 				return err;
 		} else if (meta->func_id == BPF_FUNC_spin_unlock) {
-			err = process_spin_lock(env, regno, false, false);
+			err = process_spin_lock(env, regno, false, false, false);
 			if (err)
 				return err;
 		} else {
@@ -11389,6 +11405,8 @@ enum special_kfunc_type {
 	KF_bpf_get_kmem_cache,
 	KF_bpf_res_spin_lock,
 	KF_bpf_res_spin_unlock,
+	KF_bpf_arena_res_spin_lock,
+	KF_bpf_arena_res_spin_unlock,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -11458,6 +11476,19 @@ BTF_ID_UNUSED
 BTF_ID(func, bpf_get_kmem_cache)
 BTF_ID(func, bpf_res_spin_lock)
 BTF_ID(func, bpf_res_spin_unlock)
+BTF_ID(func, bpf_arena_res_spin_lock)
+BTF_ID(func, bpf_arena_res_spin_unlock)
+
+static int get_shadow_kfunc_id(u32 func_id, s16 offset)
+{
+	if (offset)
+		return 0;
+	if (func_id == special_kfunc_list[KF_bpf_res_spin_lock])
+		return special_kfunc_list[KF_bpf_arena_res_spin_lock];
+	else if (func_id == special_kfunc_list[KF_bpf_res_spin_unlock])
+		return special_kfunc_list[KF_bpf_arena_res_spin_unlock];
+	return 0;
+}
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -11776,7 +11807,7 @@ static int check_reg_allocation_locked(struct bpf_verifier_env *env, struct bpf_
 	if (!env->cur_state->active_lock)
 		return -EINVAL;
 	s = find_lock_state(env, id, ptr, false);
-	if (!s) {
+	if (!s || s->type & (REF_TYPE_ARENA_RES_LOCK | REF_TYPE_ARENA_RES_LOCK_COND)) {
 		verbose(env, "held lock and object are not in the same allocation\n");
 		return -EINVAL;
 	}
@@ -12073,6 +12104,7 @@ static bool check_css_task_iter_allowlist(struct bpf_verifier_env *env)
 static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_arg_meta *meta,
 			    int insn_idx)
 {
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[insn_idx];
 	const char *func_name = meta->func_name, *ref_tname;
 	const struct btf *btf = meta->btf;
 	const struct btf_param *args;
@@ -12533,17 +12565,34 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				return ret;
 			break;
 		case KF_ARG_PTR_TO_SPIN_LOCK:
-			if (reg->type != PTR_TO_MAP_VALUE && reg->type != (PTR_TO_BTF_ID | MEM_ALLOC)) {
-				verbose(env, "arg#%d doesn't point to map value or allocated object\n", i);
+			if (reg->type != PTR_TO_MAP_VALUE && reg->type != (PTR_TO_BTF_ID | MEM_ALLOC) && reg->type != PTR_TO_ARENA) {
+				verbose(env, "arg#%d doesn't point to map value or allocated object or arena\n", i);
 				return -EINVAL;
 			}
 			if (!is_bpf_res_spin_lock_kfunc(meta->func_id))
 				return -EFAULT;
 			meta->lock_id = reg->id;
-			meta->lock_ptr = reg->type == PTR_TO_MAP_VALUE ? (void *)reg->map_ptr : reg->btf;
-			ret = process_spin_lock(env, regno, meta->func_id == special_kfunc_list[KF_bpf_res_spin_lock], true);
+			meta->lock_ptr = reg->type == PTR_TO_ARENA ? env->prog->aux->arena :
+					 (reg->type == PTR_TO_MAP_VALUE ? (void *)reg->map_ptr : reg->btf);
+			ret = process_spin_lock(env, regno, meta->func_id == special_kfunc_list[KF_bpf_res_spin_lock], true,
+						reg->type == PTR_TO_ARENA);
 			if (ret < 0)
 				return ret;
+			if (reg->type == PTR_TO_ARENA) {
+				aux->use_shadow_kfunc_id = true;
+				/* Lock is always first argument for resilient
+				 * lock kfuncs.
+				 */
+				aux->arena_arg = 1;
+			} else {
+				aux->non_arena_arg = true;
+			}
+
+			if (aux->arena_arg && aux->non_arena_arg) {
+				verbose(env, "kfunc %s at insn %d cannot be called with both arena and non-arena argument\n",
+					meta->func_name, env->insn_idx);
+				return -EINVAL;
+			}
 			break;
 		}
 	}
@@ -15270,7 +15319,8 @@ static void mark_ptr_or_null_reg(struct bpf_verifier_state *vstate,
 	if (type_may_be_null(reg->type) && reg->id == id &&
 	    (is_rcu_reg(reg) || !WARN_ON_ONCE(!reg->id))) {
 		if (is_null && reg->type == (LOCK_CONDITION | PTR_MAYBE_NULL)) {
-			bool release = !release_lock_state(state, REF_TYPE_RES_LOCK_COND, reg->lock_id, reg->lock_ptr);
+			bool release = !release_lock_state(state, REF_TYPE_RES_LOCK_COND | REF_TYPE_ARENA_RES_LOCK_COND,
+							   reg->lock_id, reg->lock_ptr);
 
 			if (release)
 				vstate->active_lock--;
@@ -15316,8 +15366,15 @@ static void mark_ptr_or_null_reg(struct bpf_verifier_state *vstate,
 
 		if (reg->type == LOCK_CONDITION) {
 			for (int i = 0; i < state->acquired_refs; i++) {
-				if (state->refs[i].id == reg->lock_id && state->refs[i].ptr == reg->lock_ptr)
+				if (!(state->refs[i].type & (REF_TYPE_RES_LOCK_COND | REF_TYPE_ARENA_RES_LOCK_COND)))
+					continue;
+				if (state->refs[i].id != reg->lock_id || state->refs[i].ptr != reg->lock_ptr)
+					continue;
+				if (state->refs[i].type == REF_TYPE_ARENA_RES_LOCK_COND)
+					state->refs[i].type = REF_TYPE_ARENA_RES_LOCK;
+				else
 					state->refs[i].type = REF_TYPE_RES_LOCK;
+				break;
 			}
 		}
 	}
@@ -20485,7 +20542,9 @@ static void __fixup_collection_insert_kfunc(struct bpf_insn_aux_data *insn_aux,
 static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    struct bpf_insn *insn_buf, int insn_idx, int *cnt)
 {
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[insn_idx];
 	const struct bpf_kfunc_desc *desc;
+	int shadow_kfunc_id;
 
 	if (!insn->imm) {
 		verbose(env, "invalid kernel function call not eliminated in verifier pass\n");
@@ -20494,6 +20553,11 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 
 	*cnt = 0;
 
+	if (aux->use_shadow_kfunc_id) {
+		shadow_kfunc_id = get_shadow_kfunc_id(insn->imm, insn->off);
+		if (shadow_kfunc_id)
+			insn->imm = shadow_kfunc_id;
+	}
 	/* insn->imm has the btf func_id. Replace it with an offset relative to
 	 * __bpf_call_base, unless the JIT needs to call functions that are
 	 * further than 32 bits away (bpf_jit_supports_far_kfunc_call()).
@@ -20581,6 +20645,18 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn_buf[1] = ld_addrs[1];
 		insn_buf[2] = *insn;
 		*cnt = 3;
+	} else if ((desc->func_id == special_kfunc_list[KF_bpf_arena_res_spin_lock] ||
+		    desc->func_id == special_kfunc_list[KF_bpf_arena_res_spin_unlock]) && aux->arena_arg) {
+		struct bpf_insn arena_arg[3] = {
+			BPF_LD_IMM64(BPF_REG_AX, (long)bpf_arena_get_kern_vm_start(env->prog->aux->arena)),
+			BPF_ALU64_REG(BPF_ADD, aux->arena_arg, BPF_REG_AX)
+		};
+
+		insn_buf[0] = arena_arg[0];
+		insn_buf[1] = arena_arg[1];
+		insn_buf[2] = arena_arg[2];
+		insn_buf[3] = *insn;
+		*cnt = 4;
 	}
 	return 0;
 }
