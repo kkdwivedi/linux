@@ -5,8 +5,10 @@
 # asm headers from the host architecture.)
 
 mandatory-y += atomic.h
+mandatory-y += atomic_nofault.h
 mandatory-y += archrandom.h
 mandatory-y += barrier.h
+mandatory-y += barrier_nofault.h
 mandatory-y += bitops.h
 mandatory-y += bug.h
 mandatory-y += cacheflush.h
@@ -47,6 +49,7 @@ mandatory-y += pgalloc.h
 mandatory-y += preempt.h
 mandatory-y += runtime-const.h
 mandatory-y += rwonce.h
+mandatory-y += rwonce_nofault.h
 mandatory-y += sections.h
 mandatory-y += serial.h
 mandatory-y += shmparam.h
