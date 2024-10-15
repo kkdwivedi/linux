@@ -238,5 +238,11 @@ extern void __try_cmpxchg_nofault_wrong_size(void);
 	bool __ret = __try_cmpxchg_nofault(&(_ptr)->counter, _oldp, _nval, _label);	\
 	__ret;										\
 								     })
+#define arch_atomic_fetch_or_nofault(_val, _ptr, _label) ({					\
+	typeof((_ptr)->counter) __val = arch_atomic_read_nofault(_ptr, _label);			\
+												\
+	do {  } while (!arch_atomic_try_cmpxchg_nofault(_ptr, &__val, __val | _val, _label));	\
+	__val;											\
+							 })
 
 #endif /* _ASM_X86_ATOMIC_NOFAULT_H */

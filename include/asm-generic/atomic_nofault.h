@@ -25,6 +25,14 @@
 		goto _label;				\
 	})
 
+#define arch_atomic_fetch_or_acquire(_nval, _ptr, _label)	\
+	({							\
+		typecheck(atomic_t *, _ptr);			\
+		int __nval = _nval;				\
+		goto _label;					\
+		(_nval);					\
+	})
+
 #define arch_xchg_nofault(_ptr, _nval, _label)	\
 	({					\
 		goto _label;			\

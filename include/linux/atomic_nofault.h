@@ -25,6 +25,21 @@
 #define raw_atomic_andnot_nofault(_val, _ptr, _label) arch_atomic_and_nofault((~(_val)), _ptr, _label)
 #endif
 
+#if defined(arch_atomic_fetch_or_acquire_nofault)
+#define raw_atomic_fetch_or_acquire_nofault(_nval, _ptr, _label) \
+	arch_atomic_fetch_or_acquire_nofault(_nval, _ptr, _label)
+#elif defined(arch_atomic_fetch_or_relaxed_nofault)
+#define raw_atomic_fetch_or_acquire_nofault(_nval, _ptr, _label)			\
+	({										\
+		int __val = arch_atomic_fetch_or_relaxed_nofault(_nval, _oldp, _label); \
+		__atomic_acquire_fence();						\
+		__val;									\
+	})
+#else
+#define raw_atomic_fetch_or_acquire_nofault(_nval, _ptr, _label) \
+	arch_atomic_fetch_or_nofault(_nval, _ptr, _label)
+#endif
+
 #if defined(arch_atomic_read_acquire_nofault)
 #define raw_atomic_read_acquire_nofault(_ptr, _label) \
 	arch_atomic_read_acquire_nofault(_ptr, _label)
