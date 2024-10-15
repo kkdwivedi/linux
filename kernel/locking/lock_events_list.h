@@ -55,6 +55,7 @@ LOCK_EVENT(lock_no_node)	/* # of locking ops w/o using percpu node    */
 LOCK_EVENT(rqspinlock_lock_timeout)		/* # of locking ops that timeout	*/
 LOCK_EVENT(rqspinlock_lock_corrupt)		/* # of locking ops that fail due to corruption */
 LOCK_EVENT(rqspinlock_lock_corrupt_timeout)	/* # of locking ops that timeout due to corruption */
+LOCK_EVENT(rqspinlock_lock_fault)		/* # of locking ops that fail due to page faults */
 
 /*
  * Locking events for rwsem
