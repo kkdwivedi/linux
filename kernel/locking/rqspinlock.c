@@ -26,6 +26,8 @@
 #include <trace/events/lock.h>
 #include <asm/rqspinlock.h>
 #include <linux/timekeeping.h>
+#include <asm/barrier_nofault.h>
+#include <linux/atomic_nofault.h>
 
 /*
  * Include queued spinlock definitions and statistics code
@@ -148,8 +150,13 @@ dec:
 
 static bool is_lock_released(struct qspinlock *lock, u32 mask, struct rqspinlock_timeout *ts)
 {
-	if (!(atomic_read_acquire(&lock->val) & (mask)))
+	/*
+	 * It's not worth it to use separate non-faulting load for the non-arena
+	 * path, given this is not the hot-path, simply rely on faulting atomics.
+	 */
+	if (!(raw_atomic_read_acquire_nofault(&lock->val, fault) & mask))
 		return true;
+fault:
 	return false;
 }
 
@@ -346,6 +353,19 @@ static DEFINE_PER_CPU_ALIGNED(struct qnode, qnodes[_Q_MAX_NODES]);
 
 #define RES_NEXT_DEFAULT(lock) (NULL)
 
+#define resilient_atomic_cond_read_relaxed(v, cond_expr, label) atomic_cond_read_relaxed(v, (cond_expr))
+#define resilient_atomic_cond_read_acquire(v, cond_expr, label) atomic_cond_read_acquire(v, (cond_expr))
+#define resilient_queued_fetch_set_pending_acquire(lock, label) queued_fetch_set_pending_acquire(lock)
+#define resilient_clear_pending(lock, label) clear_pending(lock)
+#define resilient_clear_pending_set_locked(lock, label) clear_pending_set_locked(lock)
+#define resilient_set_locked(lock, label) set_locked(lock)
+#define resilient_queued_spin_trylock(lock, label) queued_spin_trylock(lock)
+#define resilient_smp_cond_load_acquire(v, cond_expr, label) smp_cond_load_acquire(v, cond_expr)
+#define resilient_xchg_tail(p, v, label) xchg_tail(p, v)
+#define resilient_atomic_try_cmpxchg_relaxed(p, oldp, new, label) atomic_try_cmpxchg_relaxed(p, oldp, new)
+#define resilient_atomic_try_cmpxchg_acquire(p, oldp, new, label) atomic_try_cmpxchg_acquire(p, oldp, new)
+#define resilient_try_cmpxchg_tail(lock, tail, new_tail, label) try_cmpxchg_tail(lock, tail, new_tail)
+
 #define RES_ARENA_ACTIVE 0
 #define RES_ARENA_RESET_TIMEOUT(ts) (void)0
 #define RES_ARENA_TIMEOUT_RETVAL 0
@@ -419,9 +439,8 @@ int __lockfunc resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 v
 	RES_ARENA_RESET_TIMEOUT(ts);
 	if (val == _Q_PENDING_VAL) {
 		int cnt = _Q_PENDING_LOOPS;
-		val = atomic_cond_read_relaxed(&lock->val,
-					       (VAL != _Q_PENDING_VAL) || !cnt-- ||
-					       RES_ARENA_PENDING_CNT_TIMEOUT);
+		val = resilient_atomic_cond_read_relaxed(&lock->val, (VAL != _Q_PENDING_VAL) ||
+							 cnt-- || RES_ARENA_PENDING_CNT_TIMEOUT, fault);
 	}
 
 	/*
@@ -447,7 +466,7 @@ int __lockfunc resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 v
 	 *
 	 * 0,0,* -> 0,1,* -> 0,0,1 pending, trylock
 	 */
-	val = queued_fetch_set_pending_acquire(lock);
+	val = resilient_queued_fetch_set_pending_acquire(lock, fault);
 
 	/*
 	 * If we observe contention, there is a concurrent locker.
@@ -460,7 +479,7 @@ int __lockfunc resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 v
 
 		/* Undo PENDING if we set it. */
 		if (!(val & _Q_PENDING_MASK))
-			clear_pending(lock);
+			resilient_clear_pending(lock, fault);
 
 		goto queue;
 	}
@@ -483,7 +502,9 @@ int __lockfunc resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 v
 	 */
 	if (val & _Q_LOCKED_MASK) {
 		RES_RESET_TIMEOUT(ts);
-		smp_cond_load_acquire(&lock->locked, !VAL || RES_CHECK_TIMEOUT(ts, ret, _Q_LOCKED_MASK));
+		resilient_smp_cond_load_acquire(&lock->locked,
+						!VAL || RES_CHECK_TIMEOUT(ts, ret, _Q_LOCKED_MASK),
+						fault_release_entry);
 	}
 
 	if (ret) {
@@ -496,7 +517,7 @@ int __lockfunc resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 v
 		 *
 		 * *,1,* -> *,0,*
 		 */
-		clear_pending(lock);
+		resilient_clear_pending(lock, fault_release_entry);
 		lockevent_inc(rqspinlock_lock_timeout);
 		goto release_entry;
 	}
@@ -506,7 +527,7 @@ int __lockfunc resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 v
 	 *
 	 * 0,1,0 -> 0,0,1
 	 */
-	clear_pending_set_locked(lock);
+	resilient_clear_pending_set_locked(lock, fault_release_entry);
 	lockevent_inc(lock_pending);
 	return 0;
 
@@ -539,7 +560,7 @@ queue:
 	if (unlikely(idx >= _Q_MAX_NODES)) {
 		lockevent_inc(lock_no_node);
 		RES_RESET_TIMEOUT(ts);
-		while (!queued_spin_trylock(lock)) {
+		while (!resilient_queued_spin_trylock(lock, fault_release_node)) {
 			if (RES_CHECK_TIMEOUT(ts, ret, ~0u)) {
 				lockevent_inc(rqspinlock_lock_timeout);
 				goto release_node;
@@ -570,7 +591,7 @@ queue:
 	 * attempt the trylock once more in the hope someone let go while we
 	 * weren't watching.
 	 */
-	if (queued_spin_trylock(lock))
+	if (resilient_queued_spin_trylock(lock, fault_release_node))
 		goto release;
 
 	/*
@@ -599,7 +620,7 @@ queue:
 	 *
 	 * p,*,* -> n,*,*
 	 */
-	old = xchg_tail(lock, tail);
+	old = resilient_xchg_tail(lock, tail, fault_release_signal);
 	next = RES_NEXT_DEFAULT(lock);
 
 	/*
@@ -684,8 +705,9 @@ queue:
 	 * does not imply a full barrier.
 	 */
 	RES_RESET_TIMEOUT(ts);
-	val = atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_PENDING_MASK) ||
-				       RES_CHECK_TIMEOUT(ts, ret, _Q_LOCKED_PENDING_MASK));
+	val = resilient_atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_PENDING_MASK) ||
+						 RES_CHECK_TIMEOUT(ts, ret, _Q_LOCKED_PENDING_MASK),
+						 fault_release_signal);
 
 waitq_timeout:
 	if (ret) {
@@ -705,7 +727,7 @@ waitq_timeout:
 		 * owner in charge, and it will eventually either set locked bit to 0,
 		 * or leave it as 1, allowing us to make progress.
 		 */
-		if (!try_cmpxchg_tail(lock, tail, 0)) {
+		if (!resilient_try_cmpxchg_tail(lock, tail, 0, fault_release_signal)) {
 			int old_ret = ret;
 			ret = 0;
 			RES_ARENA_RESET_TIMEOUT(ts);
@@ -751,7 +773,7 @@ waitq_timeout:
 	 *       PENDING will make the uncontended transition fail.
 	 */
 	if ((val & _Q_TAIL_MASK) == tail) {
-		if (atomic_try_cmpxchg_relaxed(&lock->val, &val, _Q_LOCKED_VAL)) {
+		if (resilient_atomic_try_cmpxchg_relaxed(&lock->val, &val, _Q_LOCKED_VAL, fault_release_signal)) {
 			/*
 			 * If we succeeded in getting the lock, ensure we don't
 			 * have any stale nodes linked after us waiting to be
@@ -772,7 +794,7 @@ waitq_timeout:
 	 * which will then detect the remaining tail and queue behind us
 	 * ensuring we'll see a @next.
 	 */
-	set_locked(lock);
+	resilient_set_locked(lock, fault_release_signal);
 
 	/*
 	 * contended path; wait for next if not observed yet, release.
@@ -804,6 +826,18 @@ release_node:
 release_entry:
 	release_held_lock_entry();
 	return ret;
+#ifdef RES_ARENA_ENABLED
+fault_release_signal:
+	signal_stale_waiter(lock, node);
+fault_release_node:
+	trace_contention_end(lock, 0);
+	release_qnode(node);
+fault_release_entry:
+	release_held_lock_entry();
+fault:
+	lockevent_inc(rqspinlock_lock_fault);
+	return -EFAULT;
+#endif
 }
 EXPORT_SYMBOL(resilient_queued_spin_lock_slowpath);
 
@@ -812,6 +846,19 @@ EXPORT_SYMBOL(resilient_queued_spin_lock_slowpath);
 #define resilient_queued_spin_lock_slowpath arena_resilient_queued_spin_lock_slowpath
 
 #undef RES_NEXT_DEFAULT
+
+#undef resilient_atomic_cond_read_relaxed
+#undef resilient_atomic_cond_read_acquire
+#undef resilient_queued_fetch_set_pending_acquire
+#undef resilient_clear_pending
+#undef resilient_clear_pending_set_locked
+#undef resilient_set_locked
+#undef resilient_queued_spin_trylock
+#undef resilient_smp_cond_load_acquire
+#undef resilient_xchg_tail
+#undef resilient_atomic_try_cmpxchg_relaxed
+#undef resilient_atomic_try_cmpxchg_acquire
+#undef resilient_try_cmpxchg_tail
 
 #undef RES_ARENA_ACTIVE
 #undef RES_ARENA_RESET_TIMEOUT
@@ -826,6 +873,20 @@ EXPORT_SYMBOL(resilient_queued_spin_lock_slowpath);
 
 #define RES_NEXT_DEFAULT(lock) ((struct mcs_spinlock *)(lock))
 
+#define resilient_atomic_cond_read_relaxed(v, cond_expr, label) raw_atomic_cond_read_relaxed_nofault(v, (cond_expr), label)
+#define resilient_atomic_cond_read_acquire(v, cond_expr, label) raw_atomic_cond_read_acquire_nofault(v, (cond_expr), label)
+#define resilient_queued_fetch_set_pending_acquire(lock, label) arena_queued_fetch_set_pending_acquire(lock, label)
+#define resilient_clear_pending(lock, label) arena_clear_pending(lock, label)
+#define resilient_clear_pending_set_locked(lock, label) arena_clear_pending_set_locked(lock, label)
+#define resilient_set_locked(lock, label) arena_set_locked(lock, label)
+#define resilient_queued_spin_trylock(lock, label) arena_queued_spin_trylock(lock, label)
+#define resilient_smp_cond_load_acquire(v, cond_expr, label) smp_cond_load_acquire_nofault(v, cond_expr, label)
+#define resilient_xchg_tail(p, v, label) arena_xchg_tail(p, v, label)
+#define resilient_atomic_try_cmpxchg_relaxed(p, oldp, new, label) raw_atomic_try_cmpxchg_relaxed_nofault(p, oldp, new, label)
+#define resilient_atomic_try_cmpxchg_acquire(p, oldp, new, label) raw_atomic_try_cmpxchg_acquire_nofault(p, oldp, new, label)
+#define resilient_try_cmpxchg_tail(lock, tail, new_tail, label) arena_try_cmpxchg_tail(lock, tail, new_tail, label)
+
+#define RES_ARENA_ENABLED
 #define RES_ARENA_ACTIVE 1
 #define RES_ARENA_RESET_TIMEOUT(ts) RES_RESET_TIMEOUT(ts)
 #define RES_ARENA_TIMEOUT_RETVAL (ret)
