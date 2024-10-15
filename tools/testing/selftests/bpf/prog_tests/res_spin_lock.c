@@ -46,8 +46,16 @@ static void test_res_spin_lock_success(bool arena)
 	if (!ASSERT_OK_PTR(skel, "res_spin_lock__open_and_load"))
 		return;
 
+
 	/* Arena init */
 	if (arena) {
+		prog_fd = bpf_program__fd(skel->progs.res_spin_lock_test_nofault_atomic);
+		err = bpf_prog_test_run_opts(prog_fd, &topts);
+		if (!ASSERT_OK(err, "error"))
+			goto end;
+		if (!ASSERT_OK(topts.retval, "retval"))
+			goto end;
+
 		prog_fd = bpf_program__fd(skel->progs.res_arena_init);
 		err = bpf_prog_test_run_opts(prog_fd, NULL);
 		if (!ASSERT_OK(err, "error"))
