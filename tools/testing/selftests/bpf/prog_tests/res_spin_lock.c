@@ -30,7 +30,7 @@ static void *spin_lock_thread(void *arg)
 	pthread_exit(arg);
 }
 
-static void test_res_spin_lock_success(void)
+static void test_res_spin_lock_success(bool arena)
 {
 	LIBBPF_OPTS(bpf_test_run_opts, topts,
 		.data_in = &pkt_v4,
@@ -45,8 +45,19 @@ static void test_res_spin_lock_success(void)
 	skel = res_spin_lock__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "res_spin_lock__open_and_load"))
 		return;
+
+	/* Arena init */
+	if (arena) {
+		prog_fd = bpf_program__fd(skel->progs.res_arena_init);
+		err = bpf_prog_test_run_opts(prog_fd, NULL);
+		if (!ASSERT_OK(err, "error"))
+			goto end;
+		if (!ASSERT_OK(topts.retval, "retval"))
+			goto end;
+	}
+
 	/* AA deadlock */
-	prog_fd = bpf_program__fd(skel->progs.res_spin_lock_test);
+	prog_fd = bpf_program__fd(!arena ? skel->progs.res_spin_lock_test : skel->progs.res_spin_lock_test_arena);
 	err = bpf_prog_test_run_opts(prog_fd, &topts);
 	ASSERT_OK(err, "error");
 	ASSERT_OK(topts.retval, "retval");
@@ -63,7 +74,7 @@ static void test_res_spin_lock_success(void)
 
 	/* Multi-threaded ABBA deadlock. */
 
-	prog_fd = bpf_program__fd(skel->progs.res_spin_lock_test_AB);
+	prog_fd = bpf_program__fd(!arena ? skel->progs.res_spin_lock_test_AB : skel->progs.res_spin_lock_test_AB_arena);
 	for (i = 0; i < 16; i++) {
 		int err;
 
@@ -73,7 +84,7 @@ static void test_res_spin_lock_success(void)
 	}
 
 	topts.repeat = 1000;
-	int fd = bpf_program__fd(skel->progs.res_spin_lock_test_BA);
+	int fd = bpf_program__fd(!arena ? skel->progs.res_spin_lock_test_BA : skel->progs.res_spin_lock_test_BA_arena);
 	while (!topts.retval && !err && !skel->bss->err) {
 		err = bpf_prog_test_run_opts(fd, &topts);
 	}
@@ -89,6 +100,40 @@ static void test_res_spin_lock_success(void)
 		if (!ASSERT_EQ(ret, &prog_fd, "ret == prog_fd"))
 			goto end;
 	}
+	topts.repeat = 1;
+	if (arena) {
+		prog_fd = bpf_program__fd(skel->progs.res_spin_lock_test_held_lock_max_arena);
+		err = bpf_prog_test_run_opts(prog_fd, &topts);
+		ASSERT_OK(err, "error");
+		ASSERT_OK(topts.retval, "retval");
+
+		/* After this, two locks are useless... */
+		prog_fd = bpf_program__fd(skel->progs.res_spin_lock_test_ooo_elision);
+		err = bpf_prog_test_run_opts(prog_fd, &topts);
+		if (!ASSERT_OK(err, "error ooo elision"))
+			goto end;
+		if (!ASSERT_OK(topts.retval, "retval ooo elision"))
+			goto end;
+
+		/* Just checking bad values now */
+		prog_fd = bpf_program__fd(skel->progs.res_spin_lock_test_oob_lock_idx);
+		topts.retval = 0;
+		topts.repeat = 1;
+		err = bpf_prog_test_run_opts(prog_fd, &topts);
+		if (!ASSERT_OK(err, "error oob lock_idx"))
+			goto end;
+		if (!ASSERT_OK(topts.retval, "retval oob lock_idx"))
+			goto end;
+
+		prog_fd = bpf_program__fd(skel->progs.res_spin_lock_test_fault_lock_idx);
+		topts.retval = 0;
+		topts.repeat = 1;
+		err = bpf_prog_test_run_opts(prog_fd, &topts);
+		if (!ASSERT_OK(err, "error fault lock_idx"))
+			goto end;
+		if (!ASSERT_OK(topts.retval, "retval fault lock_idx"))
+			goto end;
+	}
 end:
 	res_spin_lock__destroy(skel);
 	return;
@@ -97,7 +142,10 @@ end:
 void test_res_spin_lock(void)
 {
 	if (test__start_subtest("res_spin_lock_success"))
-		test_res_spin_lock_success();
+		test_res_spin_lock_success(false);
+	skip = false;
+	if (test__start_subtest("res_spin_lock_success arena"))
+		test_res_spin_lock_success(true);
 	if (test__start_subtest("res_spin_lock_failure"))
 		test_res_spin_lock_failure();
 }
