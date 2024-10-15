@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2024 Meta Platforms, Inc. and affiliates. */
+#define BPF_NO_KFUNC_PROTOTYPES
 #include <vmlinux.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_helpers.h>
 #include "bpf_misc.h"
 #include "bpf_compiler.h"
 #include "bpf_experimental.h"
+#include "bpf_arena_common.h"
 
 #define EDEADLK 35
+
+struct lock_condition *bpf_res_spin_lock(struct bpf_spin_lock *) __ksym;
+void bpf_res_spin_unlock(struct bpf_spin_lock *) __ksym;
 
 struct arr_elem {
 	struct bpf_spin_lock lock;
@@ -19,6 +24,12 @@ struct {
 	__type(key, int);
 	__type(value, struct arr_elem);
 } arrmap SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARENA);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__uint(max_entries, 10); /* number of pages */
+} arena SEC(".maps");
 
 struct bpf_spin_lock lockA __hidden SEC(".data.A");
 struct bpf_spin_lock lockB __hidden SEC(".data.B");
@@ -80,7 +91,88 @@ int res_spin_lock_test_BA(struct __sk_buff *ctx)
 	else
 		err = -EDEADLK;
 	bpf_res_spin_unlock(&lockB);
-	return -EDEADLK;
+	return err;
+}
+
+static inline struct lock_condition *bpf_res_spin_lock_arena(struct bpf_spin_lock __arena *lock)
+{
+	return bpf_res_spin_lock((struct bpf_spin_lock *)lock);
+}
+
+static inline void bpf_res_spin_unlock_arena(struct bpf_spin_lock __arena *lock)
+{
+	bpf_res_spin_unlock((struct bpf_spin_lock *)lock);
+}
+
+struct bpf_spin_lock __arena *lockA_arena;
+struct bpf_spin_lock __arena *lockB_arena;
+
+void *ptr;
+
+SEC("syscall")
+int res_arena_init(void *ctx)
+{
+	lockA_arena = bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
+	lockB_arena = lockA_arena + 1;
+	__builtin_memset(lockA_arena, 0, sizeof(*lockA_arena));
+	__builtin_memset(lockB_arena, 0, sizeof(*lockB_arena));
+	return !lockA_arena;
+}
+
+SEC("tc")
+int res_spin_lock_test_arena(struct __sk_buff *ctx)
+{
+	struct lock_condition *r;
+
+	/* FIXME: Use arena map for verifier to pick it up */
+	ptr = &arena;
+	r = bpf_res_spin_lock_arena(lockA_arena);
+	if (!r)
+		return -EDEADLK;
+	if (bpf_res_spin_lock_arena(lockA_arena)) {
+		bpf_res_spin_unlock_arena(lockA_arena);
+		bpf_res_spin_unlock_arena(lockA_arena);
+		return -1;
+	}
+	bpf_res_spin_unlock_arena(lockA_arena);
+	return 0;
+}
+
+SEC("tc")
+int res_spin_lock_test_AB_arena(struct __sk_buff *ctx)
+{
+	struct lock_condition *r;
+
+	/* FIXME: Use arena map for verifier to pick it up */
+	ptr = &arena;
+	r = bpf_res_spin_lock_arena(lockA_arena);
+	if (!r)
+		return 0;
+	/* Only unlock if we took the lock. */
+	if (bpf_res_spin_lock_arena(lockB_arena)) {
+		for (int i = 0; i < 10000; i++);
+		bpf_res_spin_unlock_arena(lockB_arena);
+	}
+	bpf_res_spin_unlock_arena(lockA_arena);
+	return 0;
+}
+
+SEC("tc")
+int res_spin_lock_test_BA_arena(struct __sk_buff *ctx)
+{
+	struct lock_condition *r;
+
+	/* FIXME: Use arena map for verifier to pick it up */
+	ptr = &arena;
+	r = bpf_res_spin_lock_arena(lockB_arena);
+	if (!r)
+		return 0;
+	if (bpf_res_spin_lock_arena(lockA_arena))
+		bpf_res_spin_unlock_arena(lockA_arena);
+	else
+		err = -EDEADLK;
+	bpf_res_spin_unlock_arena(lockB_arena);
+	return err;
 }
 
 SEC("tc")
