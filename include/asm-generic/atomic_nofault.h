@@ -10,6 +10,7 @@
 	({					\
 		typecheck(atomic_t *, _ptr);	\
 		goto _label;			\
+		READ_ONCE(*_ptr);		\
 	})
 
 #define arch_atomic_add_nofault(_nval, _ptr, _label)	\
@@ -26,9 +27,18 @@
 		goto _label;				\
 	})
 
+#define arch_atomic_fetch_or_acquire(_nval, _ptr, _label)	\
+	({							\
+		typecheck(atomic_t *, _ptr);			\
+		int __nval = _nval;				\
+		goto _label;					\
+		(_nval);					\
+	})
+
 #define arch_xchg_nofault(_ptr, _nval, _label)	\
 	({					\
 		goto _label;			\
+		(_nval);			\
 	})
 
 #define arch_atomic_try_cmpxchg(_ptr, _oldp, _nval, _label)	\
@@ -36,6 +46,7 @@
 		typecheck(atomic_t *, _ptr);			\
 		int __nval = _nval;				\
 		goto _label;					\
+		false;						\
 	})
 
 #endif /* __ASM_GENERIC_ATOMIC_NOFAULT_H */
