@@ -333,9 +333,44 @@ timeout:
 	return -EDEADLK;
 }
 
+static inline int arena_resilient_virt_spin_lock(struct qspinlock *lock)
+{
+	struct rqspinlock_timeout ts;
+	int val, ret = 0;
+
+	RES_INIT_TIMEOUT(ts, RES_DEF_TIMEOUT);
+
+	grab_held_lock_entry(lock);
+	RES_RESET_TIMEOUT(ts);
+retry:
+	val = raw_atomic_read_nofault(&lock->val, fault);
+
+	if (val || !raw_atomic_try_cmpxchg_nofault(&lock->val, &val, _Q_LOCKED_VAL, fault)) {
+		if (RES_CHECK_TIMEOUT(ts, ret, ~0u)) {
+			lockevent_inc(rqspinlock_lock_timeout);
+			goto timeout;
+		}
+		cpu_relax();
+		goto retry;
+	}
+
+	return 0;
+fault:
+	release_held_lock_entry();
+	return -EFAULT;
+timeout:
+	release_held_lock_entry();
+	return -EDEADLK;
+}
+
 #else
 
 static __always_inline int resilient_virt_spin_lock(struct qspinlock *lock)
+{
+	return 0;
+}
+
+static __always_inline int arena_resilient_virt_spin_lock(struct qspinlock *lock)
 {
 	return 0;
 }
@@ -885,6 +920,8 @@ EXPORT_SYMBOL(resilient_queued_spin_lock_slowpath);
 #define resilient_atomic_try_cmpxchg_relaxed(p, oldp, new, label) raw_atomic_try_cmpxchg_relaxed_nofault(p, oldp, new, label)
 #define resilient_atomic_try_cmpxchg_acquire(p, oldp, new, label) raw_atomic_try_cmpxchg_acquire_nofault(p, oldp, new, label)
 #define resilient_try_cmpxchg_tail(lock, tail, new_tail, label) arena_try_cmpxchg_tail(lock, tail, new_tail, label)
+
+#define resilient_virt_spin_lock arena_resilient_virt_spin_lock
 
 #define RES_ARENA_ENABLED
 #define RES_ARENA_ACTIVE 1
