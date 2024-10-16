@@ -14,6 +14,13 @@
 
 struct qspinlock;
 
+#ifndef resilient_virt_spin_lock_enabled
+static __always_inline bool resilient_virt_spin_lock_enabled(void)
+{
+	return false;
+}
+#endif
+
 /*
  * Default timeout for waiting loops is 0.5 seconds
  */
