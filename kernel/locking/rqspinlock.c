@@ -274,6 +274,34 @@ static noinline int check_deadlock(struct qspinlock *lock, u32 mask,
 	return 0;
 }
 
+static DEFINE_PER_CPU(int, report_nest_cnt);
+static DEFINE_PER_CPU(bool, report_flag);
+static arch_spinlock_t report_lock;
+
+static void report_violation(const char *s)
+{
+	struct rqspinlock_held *rqh = this_cpu_ptr(&held_locks);
+
+	if (this_cpu_inc_return(report_nest_cnt) != 1) {
+		this_cpu_dec(report_nest_cnt);
+		return;
+	}
+	if (this_cpu_read(report_flag))
+		goto end;
+	this_cpu_write(report_flag, true);
+	arch_spin_lock(&report_lock);
+
+	pr_err("CPU %d: %s", smp_processor_id(), s);
+	pr_info("Held locks: %d\n", rqh->cnt);
+	for (int i = 0; i < min(RES_NR_HELD, rqh->cnt); i++)
+		pr_info("Held lock[%2d] = 0x%px\n", i, rqh->locks[i]);
+	dump_stack();
+
+	arch_spin_unlock(&report_lock);
+end:
+	this_cpu_dec(report_nest_cnt);
+}
+
 static noinline int check_timeout(struct qspinlock *lock, u32 mask,
 				  struct rqspinlock_timeout *ts,
 				  bool deadlock)
@@ -288,8 +316,10 @@ static noinline int check_timeout(struct qspinlock *lock, u32 mask,
 		return 0;
 	}
 
-	if (time > end)
+	if (time > end) {
+		report_violation("rqspinlock: Timeout detected!\n");
 		return -EDEADLK;
+	}
 
 	/*
 	 * A millisecond interval passed from last time? Trigger deadlock
@@ -298,8 +328,13 @@ static noinline int check_timeout(struct qspinlock *lock, u32 mask,
 	if (prev + NSEC_PER_MSEC < time) {
 		ts->cur = time;
 
-		if (deadlock)
-			return check_deadlock(lock, mask, ts);
+		if (deadlock) {
+			int ret = check_deadlock(lock, mask, ts);
+
+			if (ret)
+				report_violation("rqspinlock: Deadlock detected!\n");
+			return ret;
+		}
 	}
 
 	return 0;
