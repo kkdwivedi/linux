@@ -11916,6 +11916,9 @@ __bpf_kfunc int bpf_dynptr_from_skb(struct __sk_buff *s, u64 flags,
 	struct bpf_dynptr_kern *ptr = (struct bpf_dynptr_kern *)ptr__uninit;
 	struct sk_buff *skb = (struct sk_buff *)s;
 
+	if (bpf_is_tp_trusted_arg_bad(s))
+		return -EINVAL;
+
 	if (flags) {
 		bpf_dynptr_set_null(ptr);
 		return -EINVAL;

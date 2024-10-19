@@ -74,6 +74,13 @@ __bpf_kfunc struct bpf_cpumask *bpf_cpumask_create(void)
  */
 __bpf_kfunc struct bpf_cpumask *bpf_cpumask_acquire(struct bpf_cpumask *cpumask)
 {
+	/* Returning NULL is fine; we can only be in this position if our
+	 * argument was NULL already, so this means the verifier will treat
+	 * these as PTR_SOFT_NULL as they must be from a raw_tp program. We
+	 * don't need to mark kfunc KF_RET_NULL.
+	 */
+	if (bpf_is_tp_trusted_arg_bad(cpumask))
+		return NULL;
 	refcount_inc(&cpumask->usage);
 	return cpumask;
 }

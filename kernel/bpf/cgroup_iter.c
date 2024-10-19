@@ -316,6 +316,10 @@ __bpf_kfunc int bpf_iter_css_new(struct bpf_iter_css *it,
 	BUILD_BUG_ON(__alignof__(struct bpf_iter_css_kern) != __alignof__(struct bpf_iter_css));
 
 	kit->start = NULL;
+
+	if (bpf_is_tp_trusted_arg_bad(start))
+		return -EINVAL;
+
 	switch (flags) {
 	case BPF_CGROUP_ITER_DESCENDANTS_PRE:
 	case BPF_CGROUP_ITER_DESCENDANTS_POST:

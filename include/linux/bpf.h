@@ -30,6 +30,7 @@
 #include <linux/static_call.h>
 #include <linux/memcontrol.h>
 #include <linux/cfi.h>
+#include <linux/once_lite.h>
 
 struct bpf_verifier_env;
 struct bpf_verifier_log;
@@ -3466,5 +3467,21 @@ static inline bool bpf_is_subprog(const struct bpf_prog *prog)
 {
 	return prog->aux->func_idx != 0;
 }
+
+#define bpf_is_tp_trusted_arg_bad(ptr)                                                    \
+	({                                                                                \
+		bool __cond = !(ptr) || ((long long)ptr) <= S16_MAX ||                    \
+			      IS_ERR(ptr);                                                \
+		if (unlikely(__cond)) {                                                   \
+			if (__ONCE_LITE_IF(true)) {                                       \
+				pr_err("BPF: '" #ptr                                      \
+				       "' trusted parameter passed to kfunc '%s' "        \
+				       "is error pointer. The kernel needs to be fixed!", \
+				       __func__);                                         \
+				dump_stack();                                             \
+			}                                                                 \
+		}                                                                         \
+		__cond;                                                                   \
+	})
 
 #endif /* _LINUX_BPF_H */

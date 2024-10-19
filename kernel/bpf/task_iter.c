@@ -906,6 +906,10 @@ __bpf_kfunc int bpf_iter_css_task_new(struct bpf_iter_css_task *it,
 	BUILD_BUG_ON(__alignof__(struct bpf_iter_css_task_kern) !=
 					__alignof__(struct bpf_iter_css_task));
 	kit->css_it = NULL;
+
+	if (bpf_is_tp_trusted_arg_bad(css))
+		return -EINVAL;
+
 	switch (flags) {
 	case CSS_TASK_ITER_PROCS | CSS_TASK_ITER_THREADED:
 	case CSS_TASK_ITER_PROCS:

@@ -230,6 +230,10 @@ protection afforded by the KF_TRUSTED_ARGS flag described below.
 2.4.4 KF_TRUSTED_ARGS flag
 --------------------------
 
+NOTE: Due to compatibility concerns, kfuncs taking KF_TRUSTED_ARGS and callable
+from raw_tp programs MUST use the bpf_is_tp_trusted_arg_bad macro to check and
+return an error for each of the trusted pointers.
+
 The KF_TRUSTED_ARGS flag is used for kfuncs taking pointer arguments. It
 indicates that the all pointer arguments are valid, and that all pointers to
 BTF objects have been passed in their unmodified form (that is, at a zero
