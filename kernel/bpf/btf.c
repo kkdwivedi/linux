@@ -6389,6 +6389,12 @@ static bool prog_args_trusted(const struct bpf_prog *prog)
 	}
 }
 
+static bool prog_args_trusted_soft_null(const struct bpf_prog *prog)
+{
+	return prog->type == BPF_PROG_TYPE_TRACING &&
+	       prog->expected_attach_type == BPF_TRACE_RAW_TP;
+}
+
 int btf_ctx_arg_offset(const struct btf *btf, const struct btf_type *func_proto,
 		       u32 arg_no)
 {
@@ -6558,8 +6564,11 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	if (prog_args_trusted(prog))
 		info->reg_type |= PTR_TRUSTED;
 
-	if (btf_param_match_suffix(btf, &args[arg], "__nullable"))
+	if (btf_param_match_suffix(btf, &args[arg], "__nullable")) {
 		info->reg_type |= PTR_MAYBE_NULL;
+	} else if (prog_args_trusted_soft_null(prog)){
+		info->reg_type |= PTR_SOFT_NULL;
+	}
 
 	if (tgt_prog) {
 		enum bpf_prog_type tgt_type;

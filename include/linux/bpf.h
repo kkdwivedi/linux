@@ -700,6 +700,11 @@ enum bpf_type_flag {
 	 */
 	MEM_ALIGNED		= BIT(17 + BPF_BASE_TYPE_BITS),
 
+	/* Pointer is NULL, but allowed to dereferenced without checks. However,
+	 * must be checked before being passed into kfuncs expecting trusted args.
+	 */
+	PTR_SOFT_NULL		= BIT(18 + BPF_BASE_TYPE_BITS),
+
 	__BPF_TYPE_FLAG_MAX,
 	__BPF_TYPE_LAST_FLAG	= __BPF_TYPE_FLAG_MAX - 1,
 };

@@ -895,7 +895,7 @@ static inline bool bpf_prog_check_recur(const struct bpf_prog *prog)
 	}
 }
 
-#define BPF_REG_TRUSTED_MODIFIERS (MEM_ALLOC | PTR_TRUSTED | NON_OWN_REF)
+#define BPF_REG_TRUSTED_MODIFIERS (MEM_ALLOC | PTR_TRUSTED | NON_OWN_REF | PTR_SOFT_NULL)
 
 static inline bool bpf_type_has_unsafe_modifiers(u32 type)
 {
@@ -930,6 +930,11 @@ static inline bool type_is_sk_pointer(enum bpf_reg_type type)
 static inline bool type_may_be_null(u32 type)
 {
 	return type & PTR_MAYBE_NULL;
+}
+
+static inline bool type_may_be_or_soft_null(u32 type)
+{
+	return type & (PTR_MAYBE_NULL | PTR_SOFT_NULL);
 }
 
 static inline void mark_reg_scratched(struct bpf_verifier_env *env, u32 regno)

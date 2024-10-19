@@ -392,6 +392,8 @@ static bool reg_not_null(const struct bpf_reg_state *reg)
 	type = reg->type;
 	if (type_may_be_null(type))
 		return false;
+	if (type & PTR_SOFT_NULL)
+		return false;
 
 	type = base_type(type);
 	return type == PTR_TO_SOCKET ||
@@ -1859,7 +1861,7 @@ static void mark_ptr_not_null_reg(struct bpf_reg_state *reg)
 		return;
 	}
 
-	reg->type &= ~PTR_MAYBE_NULL;
+	reg->type &= ~(PTR_MAYBE_NULL | PTR_SOFT_NULL);
 }
 
 static void mark_reg_graph_node(struct bpf_reg_state *regs, u32 regno,
@@ -15094,7 +15096,7 @@ static void mark_ptr_or_null_reg(struct bpf_func_state *state,
 				 struct bpf_reg_state *reg, u32 id,
 				 bool is_null)
 {
-	if (type_may_be_null(reg->type) && reg->id == id &&
+	if (type_may_be_or_soft_null(reg->type) && reg->id == id &&
 	    (is_rcu_reg(reg) || !WARN_ON_ONCE(!reg->id))) {
 		/* Old offset (both fixed and variable parts) should have been
 		 * known-zero, because we don't allow pointer arithmetic on
@@ -15544,7 +15546,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	 */
 	if (!is_jmp32 && BPF_SRC(insn->code) == BPF_X &&
 	    __is_pointer_value(false, src_reg) && __is_pointer_value(false, dst_reg) &&
-	    type_may_be_null(src_reg->type) != type_may_be_null(dst_reg->type) &&
+	    type_may_be_or_soft_null(src_reg->type) != type_may_be_or_soft_null(dst_reg->type) &&
 	    base_type(src_reg->type) != PTR_TO_BTF_ID &&
 	    base_type(dst_reg->type) != PTR_TO_BTF_ID) {
 		eq_branch_regs = NULL;
@@ -15560,7 +15562,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			break;
 		}
 		if (eq_branch_regs) {
-			if (type_may_be_null(src_reg->type))
+			if (type_may_be_or_soft_null(src_reg->type))
 				mark_ptr_not_null_reg(&eq_branch_regs[insn->src_reg]);
 			else
 				mark_ptr_not_null_reg(&eq_branch_regs[insn->dst_reg]);
@@ -19829,6 +19831,7 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 			convert_ctx_access = bpf_xdp_sock_convert_ctx_access;
 			break;
 		case PTR_TO_BTF_ID:
+		case PTR_TO_BTF_ID | PTR_TRUSTED | PTR_SOFT_NULL:
 		case PTR_TO_BTF_ID | PTR_UNTRUSTED:
 		/* PTR_TO_BTF_ID | MEM_ALLOC always has a valid lifetime, unlike
 		 * PTR_TO_BTF_ID, and an active ref_obj_id, but the same cannot
