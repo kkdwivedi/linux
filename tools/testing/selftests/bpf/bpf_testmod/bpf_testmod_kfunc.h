@@ -159,25 +159,4 @@ void bpf_kfunc_trusted_task_test(struct task_struct *ptr) __ksym;
 void bpf_kfunc_trusted_num_test(int *ptr) __ksym;
 void bpf_kfunc_rcu_task_test(struct task_struct *ptr) __ksym;
 
-int bpf_kfunc_read_once_nofault_8_test(void *p) __ksym;
-int bpf_kfunc_read_once_nofault_16_test(void *p) __ksym;
-int bpf_kfunc_read_once_nofault_32_test(void *p) __ksym;
-int bpf_kfunc_write_once_nofault_8_test(void *p, int val) __ksym;
-int bpf_kfunc_write_once_nofault_16_test(void *p, int val) __ksym;
-int bpf_kfunc_write_once_nofault_32_test(void *p, int val) __ksym;
-int bpf_kfunc_smp_load_acquire_nofault_32_test(void *p) __ksym;
-int bpf_kfunc_smp_store_release_nofault_32_test(void *p, int val) __ksym;
-int bpf_kfunc_read_relaxed_nofault_32_test(void *p) __ksym;
-int bpf_kfunc_read_acquire_nofault_32_test(void *p) __ksym;
-int bpf_kfunc_add_nofault_32_test(void *p, int i) __ksym;
-int bpf_kfunc_and_nofault_32_test(void *p, int i) __ksym;
-int bpf_kfunc_andnot_nofault_32_test(void *p, int i) __ksym;
-int bpf_kfunc_cond_load_relaxed_nofault_32_test(void *p) __ksym;
-int bpf_kfunc_cond_load_acquire_nofault_32_test(void *p) __ksym;
-int bpf_kfunc_xchg_relaxed_nofault_32_test(void *p, int nval) __ksym;
-int bpf_kfunc_xchg_nofault_32_test(void *p, int nval) __ksym;
-int bpf_kfunc_try_cmpxchg_relaxed_nofault_32_test(void *p, int *oldp, int nval) __ksym;
-int bpf_kfunc_try_cmpxchg_acquire_nofault_32_test(void *p, int *oldp, int nval) __ksym;
-int bpf_kfunc_try_cmpxchg_nofault_32_test(void *p, int *oldp, int nval) __ksym;
-
 #endif /* _BPF_TESTMOD_KFUNC_H */

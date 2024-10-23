@@ -8,7 +8,6 @@
 #include "bpf_compiler.h"
 #include "bpf_experimental.h"
 #include "bpf_arena_common.h"
-#include "bpf_testmod/bpf_testmod_kfunc.h"
 
 #define EDEADLK 35
 
@@ -231,48 +230,6 @@ end:
 	 * detection won't be expedited due to lack of held lock entry.
 	 */
 	return ret ?: (time > 32000000 ? 0 : 1);
-}
-
-static __noinline int res_check_atomic(void *addr, int exp_ret)
-{
-	int old = 0;
-	int new = 0;
-
-#define X(op, ...) if (bpf_kfunc##_##op##_test(__VA_ARGS__) != exp_ret) return 1
-	X(read_once_nofault_8, addr);
-	X(read_once_nofault_16, addr);
-	X(read_once_nofault_32, addr);
-	X(write_once_nofault_8, addr, 0);
-	X(write_once_nofault_16, addr, 0);
-	X(write_once_nofault_32, addr, 0);
-	X(smp_load_acquire_nofault_32, addr);
-	X(smp_store_release_nofault_32, addr, 0);
-	X(read_relaxed_nofault_32, addr);
-	X(read_acquire_nofault_32, addr);
-	X(add_nofault_32, addr, 0);
-	X(and_nofault_32, addr, 0);
-	X(andnot_nofault_32, addr, 0);
-	X(cond_load_relaxed_nofault_32, addr);
-	X(cond_load_acquire_nofault_32, addr);
-	X(xchg_relaxed_nofault_32, addr, new);
-	X(xchg_nofault_32, addr, new);
-	X(try_cmpxchg_relaxed_nofault_32, addr, &old, new);
-	X(try_cmpxchg_acquire_nofault_32, addr, &old, new);
-	X(try_cmpxchg_nofault_32, addr, &old, new);
-#undef X
-	return 0;
-}
-
-SEC("tc")
-int res_spin_lock_test_nofault_atomic(struct __sk_buff *ctx)
-{
-	int val;
-
-	if (res_check_atomic(((struct bpf_arena *)&arena)->kern_vm->addr, -14))
-		return 1;
-	if (res_check_atomic(&val, 0))
-		return 1;
-	return 0;
 }
 
 char _license[] SEC("license") = "GPL";
