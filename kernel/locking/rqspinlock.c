@@ -158,7 +158,7 @@ static int poll_lock(struct qspinlock *lock, u32 mask,
 	 * CPUs, ensure we break out in such a case.
 	 */
 	if ((ts->spin++ & 0xff) == 0xff) {
-		if (ts->timeout < ktime_get_mono_fast_ns())
+		if (ts->end < ktime_get_mono_fast_ns())
 			return -EDEADLK;
 	}
 	return 0;
@@ -592,7 +592,7 @@ queue:
 		int val;
 
 		prev = decode_tail(old, qnodes);
-		if (!prev) {
+		if (!prev || prev == node) {
 			signal_stale_waiter(lock, node);
 			lockevent_inc(rqspinlock_lock_corrupt);
 			ret = -ESTALE;
@@ -612,7 +612,21 @@ queue:
 		 * someone randomly due to corruption, they will ensure that we
 		 * are signalled, so never use a timeout here.
 		 */
-		val = arch_mcs_spin_lock_contended(&node->locked);
+		ret = 0;
+		RES_ARENA_RESET_TIMEOUT(ts);
+		val = smp_cond_load_acquire(&node->locked, VAL || RES_ARENA_MCS_NEXT_TIMEOUT);
+		// val = arch_mcs_spin_lock_contended(&node->locked);
+		if (RES_ARENA_TIMEOUT_RETVAL) {
+			signal_stale_waiter(lock, node);
+			lockevent_inc(rqspinlock_lock_corrupt_timeout);
+			// WE can also have LOCKED_VAL set here, as long as we
+			// have been written to by our predecessor, it's fine.
+			// This point is only to absorb predecessor writes
+			// before going away.
+			while (!READ_ONCE(node->locked));
+			ret = -ESTALE;
+			goto release_node;
+		}
 		if (val == RES_TIMEOUT_VAL) {
 			/*
 			 * The wait queue timeout logic will also handle stale
