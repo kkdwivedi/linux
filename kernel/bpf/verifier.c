@@ -19694,6 +19694,7 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 	enum bpf_access_type type;
 	bool is_narrower_load;
 	int epilogue_idx = 0;
+	int reg_type;
 
 	if (ops->gen_epilogue) {
 		epilogue_cnt = ops->gen_epilogue(epilogue_buf, env->prog,
@@ -19812,7 +19813,8 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 			continue;
 		}
 
-		switch ((int)env->insn_aux_data[i + delta].ptr_type) {
+		reg_type = env->insn_aux_data[i + delta].ptr_type;
+		switch (reg_type) {
 		case PTR_TO_CTX:
 			if (!ops->convert_ctx_access)
 				continue;
@@ -19837,6 +19839,16 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 		 * for this case.
 		 */
 		case PTR_TO_BTF_ID | MEM_ALLOC | PTR_UNTRUSTED:
+		/* For raw tracepoint programs, arguments marked as trusted
+		 * pointers may potentially be NULL. Enable PROBE_MEM handling
+		 * for such cases, even when the pointer is seen as trusted in
+		 * the verifier.
+		 */
+		case PTR_TO_BTF_ID | PTR_TRUSTED:
+			if (reg_type == (PTR_TO_BTF_ID | PTR_TRUSTED) &&
+			    (env->prog->type != BPF_PROG_TYPE_TRACING ||
+			     env->prog->expected_attach_type != BPF_TRACE_RAW_TP))
+				continue;
 			if (type == BPF_READ) {
 				if (BPF_MODE(insn->code) == BPF_MEM)
 					insn->code = BPF_LDX | BPF_PROBE_MEM |
