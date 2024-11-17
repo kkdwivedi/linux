@@ -266,6 +266,8 @@ struct bpf_reference_state {
 		REF_TYPE_LOCK		= (1 << 3),
 		REF_TYPE_RES_LOCK 	= (1 << 4),
 		REF_TYPE_RES_LOCK_COND  = (1 << 5),
+		REF_TYPE_ARENA_RES_LOCK	= (1 << 6),
+		REF_TYPE_ARENA_RES_LOCK_COND = (1 << 7),
 	} type;
 	/* Track each reference created with a unique id, even if the same
 	 * instruction creates the reference multiple times (eg, via CALL).
@@ -585,6 +587,8 @@ struct bpf_insn_aux_data {
 	 */
 	u8 fastcall_spills_num:3;
 	bool use_shadow_kfunc_id;
+	bool non_arena_arg;
+	int arena_argno;
 
 	/* below fields are initialized once */
 	unsigned int orig_idx; /* original instruction index */
