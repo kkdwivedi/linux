@@ -12,8 +12,11 @@
 #include <linux/types.h>
 #include <vdso/time64.h>
 #include <linux/percpu.h>
+#include <asm/qspinlock.h>
 
 struct qspinlock;
+
+typedef struct qspinlock rqspinlock_t;
 
 extern int resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val, u64 timeout, bool imm_aa, bool nowarn_aa);
 
@@ -121,5 +124,43 @@ unlock:
 	queued_spin_unlock(lock);
 	this_cpu_dec(rqspinlock_held_locks.cnt);
 }
+
+#define raw_res_spin_lock_init(lock) ({ *(lock) = (struct qspinlock)__ARCH_SPIN_LOCK_UNLOCKED; })
+
+#define raw_res_spin_lock(lock)                          \
+	({                                               \
+		int __ret;                               \
+		preempt_disable();                       \
+		__ret = res_spin_lock(lock, true, true); \
+		if (__ret)                               \
+			preempt_enable();                \
+		__ret;                                   \
+	})
+
+#define raw_res_spin_unlock(lock) ({ res_spin_unlock(lock); preempt_enable(); })
+
+#define raw_res_spin_lock_irq(lock)              \
+	({                                       \
+		int __ret;                       \
+		local_irq_disable();             \
+		__ret = raw_res_spin_lock(lock); \
+		if (__ret)                       \
+			local_irq_enable();      \
+		__ret;                           \
+	})
+
+#define raw_res_spin_unlock_irq(lock) ({ raw_res_spin_unlock(lock); local_irq_enable(); })
+
+#define raw_res_spin_lock_irqsave(lock, flags)    \
+	({                                        \
+		int __ret;                        \
+		local_irq_save(flags);            \
+		__ret = raw_res_spin_lock(lock);  \
+		if (__ret)                        \
+			local_irq_restore(flags); \
+		__ret;                            \
+	})
+
+#define raw_res_spin_unlock_irqrestore(lock, flags) ({ raw_res_spin_unlock(lock); local_irq_restore(flags); })
 
 #endif /* __ASM_GENERIC_RQSPINLOCK_H */
