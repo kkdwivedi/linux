@@ -15,7 +15,7 @@
 
 struct qspinlock;
 
-extern int resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val, u64 timeout);
+extern int resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val, u64 timeout, bool imm_aa);
 
 #ifndef resilient_virt_spin_lock_enabled
 static __always_inline bool resilient_virt_spin_lock_enabled(void)
