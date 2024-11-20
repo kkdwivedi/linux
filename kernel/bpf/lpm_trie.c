@@ -15,7 +15,11 @@
 #include <net/ipv6.h>
 #include <uapi/linux/btf.h>
 #include <linux/btf_ids.h>
+<<<<<<< HEAD
 #include <linux/bpf_mem_alloc.h>
+=======
+#include <asm/rqspinlock.h>
+>>>>>>> 15473984a031 ([?] bpf: Convert lpm_trie.c to rqspinlock)
 
 /* Intermediate node */
 #define LPM_TREE_NODE_FLAG_IM BIT(0)
@@ -36,7 +40,11 @@ struct lpm_trie {
 	size_t				n_entries;
 	size_t				max_prefixlen;
 	size_t				data_size;
+<<<<<<< HEAD
 	raw_spinlock_t			lock;
+=======
+	rqspinlock_t			lock;
+>>>>>>> 15473984a031 ([?] bpf: Convert lpm_trie.c to rqspinlock)
 };
 
 /* This trie implements a longest prefix match algorithm that can be used to
@@ -342,12 +350,18 @@ static long trie_update_elem(struct bpf_map *map,
 	if (key->prefixlen > trie->max_prefixlen)
 		return -EINVAL;
 
+<<<<<<< HEAD
 	/* Allocate and fill a new node. Need to disable migration before
 	 * invoking bpf_mem_cache_alloc().
 	 */
 	new_node = lpm_trie_node_alloc(trie, value, true);
 	if (!new_node)
 		return -ENOMEM;
+=======
+	ret = raw_res_spin_lock_irqsave(&trie->lock, irq_flags);
+	if (ret)
+		return ret;
+>>>>>>> 15473984a031 ([?] bpf: Convert lpm_trie.c to rqspinlock)
 
 	raw_spin_lock_irqsave(&trie->lock, irq_flags);
 
@@ -363,8 +377,7 @@ static long trie_update_elem(struct bpf_map *map,
 	 */
 	slot = &trie->root;
 
-	while ((node = rcu_dereference_protected(*slot,
-					lockdep_is_held(&trie->lock)))) {
+	while ((node = rcu_dereference(*slot))) {
 		matchlen = longest_prefix_match(trie, node, key);
 
 		if (node->prefixlen != matchlen ||
@@ -452,11 +465,20 @@ static long trie_update_elem(struct bpf_map *map,
 out:
 	raw_spin_unlock_irqrestore(&trie->lock, irq_flags);
 
+<<<<<<< HEAD
 	migrate_disable();
 	if (ret)
 		bpf_mem_cache_free(&trie->ma, new_node);
 	bpf_mem_cache_free_rcu(&trie->ma, free_node);
 	migrate_enable();
+=======
+		kfree(new_node);
+		kfree(im_node);
+	}
+
+	raw_res_spin_unlock_irqrestore(&trie->lock, irq_flags);
+	kfree_rcu(free_node, rcu);
+>>>>>>> 15473984a031 ([?] bpf: Convert lpm_trie.c to rqspinlock)
 
 	return ret;
 }
@@ -477,7 +499,13 @@ static long trie_delete_elem(struct bpf_map *map, void *_key)
 	if (key->prefixlen > trie->max_prefixlen)
 		return -EINVAL;
 
+<<<<<<< HEAD
 	raw_spin_lock_irqsave(&trie->lock, irq_flags);
+=======
+	ret = raw_res_spin_lock_irqsave(&trie->lock, irq_flags);
+	if (ret)
+		return ret;
+>>>>>>> 15473984a031 ([?] bpf: Convert lpm_trie.c to rqspinlock)
 
 	/* Walk the tree looking for an exact key/length match and keeping
 	 * track of the path we traverse.  We will need to know the node
@@ -488,8 +516,7 @@ static long trie_delete_elem(struct bpf_map *map, void *_key)
 	trim = &trie->root;
 	trim2 = trim;
 	parent = NULL;
-	while ((node = rcu_dereference_protected(
-		       *trim, lockdep_is_held(&trie->lock)))) {
+	while ((node = rcu_dereference(*trim))) {
 		matchlen = longest_prefix_match(trie, node, key);
 
 		if (node->prefixlen != matchlen ||
@@ -553,12 +580,18 @@ static long trie_delete_elem(struct bpf_map *map, void *_key)
 	free_node = node;
 
 out:
+<<<<<<< HEAD
 	raw_spin_unlock_irqrestore(&trie->lock, irq_flags);
 
 	migrate_disable();
 	bpf_mem_cache_free_rcu(&trie->ma, free_parent);
 	bpf_mem_cache_free_rcu(&trie->ma, free_node);
 	migrate_enable();
+=======
+	raw_res_spin_unlock_irqrestore(&trie->lock, irq_flags);
+	kfree_rcu(free_parent, rcu);
+	kfree_rcu(free_node, rcu);
+>>>>>>> 15473984a031 ([?] bpf: Convert lpm_trie.c to rqspinlock)
 
 	return ret;
 }
@@ -604,7 +637,11 @@ static struct bpf_map *trie_alloc(union bpf_attr *attr)
 			  offsetof(struct bpf_lpm_trie_key_u8, data);
 	trie->max_prefixlen = trie->data_size * 8;
 
+<<<<<<< HEAD
 	raw_spin_lock_init(&trie->lock);
+=======
+	raw_res_spin_lock_init(&trie->lock);
+>>>>>>> 15473984a031 ([?] bpf: Convert lpm_trie.c to rqspinlock)
 
 	/* Allocate intermediate and leaf nodes from the same allocator */
 	leaf_size = sizeof(struct lpm_trie_node) + trie->data_size +
