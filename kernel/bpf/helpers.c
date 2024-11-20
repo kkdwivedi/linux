@@ -23,6 +23,7 @@
 #include <linux/btf_ids.h>
 #include <linux/bpf_mem_alloc.h>
 #include <linux/kasan.h>
+#include <asm/rqspinlock.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -1131,7 +1132,7 @@ struct bpf_async_kern {
 	 * sure that it always fits into space reserved by struct bpf_timer
 	 * regardless of LOCKDEP and spinlock debug flags.
 	 */
-	struct bpf_spin_lock lock;
+	rqspinlock_t lock;
 } __attribute__((aligned(8)));
 
 enum bpf_async_type {
@@ -1242,6 +1243,7 @@ static void bpf_timer_delete_work(struct work_struct *work)
 static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u64 flags,
 			    enum bpf_async_type type)
 {
+	unsigned long irq_flags;
 	struct bpf_async_cb *cb;
 	struct bpf_hrtimer *t;
 	struct bpf_work *w;
@@ -1263,7 +1265,9 @@ static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u
 		return -EINVAL;
 	}
 
-	__bpf_spin_lock_irqsave(&async->lock);
+	ret = raw_res_spin_lock_irqsave(&async->lock, irq_flags);
+	if (ret)
+		return ret;
 	t = async->timer;
 	if (t) {
 		ret = -EBUSY;
@@ -1317,7 +1321,7 @@ static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u
 		ret = -EPERM;
 	}
 out:
-	__bpf_spin_unlock_irqrestore(&async->lock);
+	raw_res_spin_unlock_irqrestore(&async->lock, irq_flags);
 	return ret;
 }
 
@@ -1355,11 +1359,14 @@ static int __bpf_async_set_callback(struct bpf_async_kern *async, void *callback
 {
 	struct bpf_prog *prev, *prog = aux->prog;
 	struct bpf_async_cb *cb;
+	unsigned long irq_flags;
 	int ret = 0;
 
 	if (in_nmi())
 		return -EOPNOTSUPP;
-	__bpf_spin_lock_irqsave(&async->lock);
+	ret = raw_res_spin_lock_irqsave(&async->lock, irq_flags);
+	if (ret)
+		return ret;
 	cb = async->cb;
 	if (!cb) {
 		ret = -EINVAL;
@@ -1391,7 +1398,7 @@ static int __bpf_async_set_callback(struct bpf_async_kern *async, void *callback
 	}
 	rcu_assign_pointer(cb->callback_fn, callback_fn);
 out:
-	__bpf_spin_unlock_irqrestore(&async->lock);
+	raw_res_spin_unlock_irqrestore(&async->lock, irq_flags);
 	return ret;
 }
 
@@ -1411,6 +1418,7 @@ static const struct bpf_func_proto bpf_timer_set_callback_proto = {
 
 BPF_CALL_3(bpf_timer_start, struct bpf_async_kern *, timer, u64, nsecs, u64, flags)
 {
+	unsigned long irq_flags;
 	struct bpf_hrtimer *t;
 	int ret = 0;
 	enum hrtimer_mode mode;
@@ -1419,7 +1427,9 @@ BPF_CALL_3(bpf_timer_start, struct bpf_async_kern *, timer, u64, nsecs, u64, fla
 		return -EOPNOTSUPP;
 	if (flags & ~(BPF_F_TIMER_ABS | BPF_F_TIMER_CPU_PIN))
 		return -EINVAL;
-	__bpf_spin_lock_irqsave(&timer->lock);
+	ret = raw_res_spin_lock_irqsave(&timer->lock, irq_flags);
+	if (ret)
+		return ret;
 	t = timer->timer;
 	if (!t || !t->cb.prog) {
 		ret = -EINVAL;
@@ -1436,7 +1446,7 @@ BPF_CALL_3(bpf_timer_start, struct bpf_async_kern *, timer, u64, nsecs, u64, fla
 
 	hrtimer_start(&t->timer, ns_to_ktime(nsecs), mode);
 out:
-	__bpf_spin_unlock_irqrestore(&timer->lock);
+	raw_res_spin_unlock_irqrestore(&timer->lock, irq_flags);
 	return ret;
 }
 
@@ -1463,13 +1473,16 @@ static void drop_prog_refcnt(struct bpf_async_cb *async)
 BPF_CALL_1(bpf_timer_cancel, struct bpf_async_kern *, timer)
 {
 	struct bpf_hrtimer *t, *cur_t;
+	unsigned long irq_flags;
 	bool inc = false;
 	int ret = 0;
 
 	if (in_nmi())
 		return -EOPNOTSUPP;
 	rcu_read_lock();
-	__bpf_spin_lock_irqsave(&timer->lock);
+	ret = raw_res_spin_lock_irqsave(&timer->lock, irq_flags);
+	if (ret)
+		return ret;
 	t = timer->timer;
 	if (!t) {
 		ret = -EINVAL;
@@ -1512,7 +1525,7 @@ BPF_CALL_1(bpf_timer_cancel, struct bpf_async_kern *, timer)
 drop:
 	drop_prog_refcnt(&t->cb);
 out:
-	__bpf_spin_unlock_irqrestore(&timer->lock);
+	raw_res_spin_unlock_irqrestore(&timer->lock, irq_flags);
 	/* Cancel the timer and wait for associated callback to finish
 	 * if it was running.
 	 */
@@ -1533,12 +1546,14 @@ static const struct bpf_func_proto bpf_timer_cancel_proto = {
 static struct bpf_async_cb *__bpf_async_cancel_and_free(struct bpf_async_kern *async)
 {
 	struct bpf_async_cb *cb;
+	unsigned long irq_flags;
 
 	/* Performance optimization: read async->cb without lock first. */
 	if (!READ_ONCE(async->cb))
 		return NULL;
 
-	__bpf_spin_lock_irqsave(&async->lock);
+	if (raw_res_spin_lock_irqsave(&async->lock, irq_flags))
+		return NULL;
 	/* re-read it under lock */
 	cb = async->cb;
 	if (!cb)
@@ -1549,7 +1564,7 @@ static struct bpf_async_cb *__bpf_async_cancel_and_free(struct bpf_async_kern *a
 	 */
 	WRITE_ONCE(async->cb, NULL);
 out:
-	__bpf_spin_unlock_irqrestore(&async->lock);
+	raw_res_spin_unlock_irqrestore(&async->lock, irq_flags);
 	return cb;
 }
 
