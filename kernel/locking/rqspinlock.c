@@ -80,6 +80,7 @@ struct rqspinlock_timeout {
 	u64 cur;
 	u16 spin;
 	bool imm_aa;
+	bool nowarn_aa;
 };
 
 #define RES_TIMEOUT_VAL	2
@@ -248,7 +249,7 @@ static noinline int check_timeout(struct qspinlock *lock, u32 mask,
 			return 0;
 		ts->imm_aa = false;
 		ret = check_deadlock_AA(lock, mask, ts);
-		if (ret)
+		if (ret && !ts->nowarn_aa)
 			report_violation("rqspinlock: AA deadlock detected!\n");
 		return ret;
 	}
@@ -284,8 +285,13 @@ static noinline int check_timeout(struct qspinlock *lock, u32 mask,
 /*
  * Initialize the 'duration' member with the chosen timeout.
  */
-#define RES_INIT_TIMEOUT(ts, _timeout, _imm_aa) \
-	({ (ts).spin = !(_imm_aa); (ts).duration = _timeout; (ts).imm_aa = _imm_aa; })
+#define RES_INIT_TIMEOUT(ts, _timeout, _imm_aa, _nowarn_aa) \
+	({                                                  \
+		(ts).spin = !(_imm_aa);                     \
+		(ts).duration = _timeout;                   \
+		(ts).imm_aa = _imm_aa;                      \
+		(ts).nowarn_aa = _nowarn_aa;                \
+	})
 
 /*
  * We only need to reset 'timeout_end', 'spin' will just wrap around as necessary.
@@ -356,7 +362,7 @@ static DEFINE_PER_CPU_ALIGNED(struct qnode, qnodes[_Q_MAX_NODES]);
  * contended             :    (*,x,y) +--> (*,0,0) ---> (*,0,1) -'  :
  *   queue               :         ^--'                             :
  */
-int __lockfunc resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val, u64 timeout, bool imm_aa)
+int __lockfunc resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val, u64 timeout, bool imm_aa, bool nowarn_aa)
 {
 	struct mcs_spinlock *prev, *next, *node;
 	struct rqspinlock_timeout ts;
@@ -365,7 +371,7 @@ int __lockfunc resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 v
 
 	BUILD_BUG_ON(CONFIG_NR_CPUS >= (1U << _Q_TAIL_CPU_BITS));
 
-	RES_INIT_TIMEOUT(ts, timeout, imm_aa);
+	RES_INIT_TIMEOUT(ts, timeout, imm_aa, nowarn_aa);
 
 	if (resilient_virt_spin_lock_enabled())
 		return resilient_virt_spin_lock(lock, &ts);
@@ -681,7 +687,7 @@ __bpf_kfunc lock_result_t *bpf_res_spin_lock(struct bpf_res_spin_lock *lock)
 	BUILD_BUG_ON(__alignof__(struct qspinlock) != __alignof__(struct bpf_res_spin_lock));
 
 	preempt_disable();
-	ret = res_spin_lock((struct qspinlock *)lock, false);
+	ret = res_spin_lock((struct qspinlock *)lock, false, false);
 	if (unlikely(ret)) {
 		preempt_enable();
 		return lock_result(ret);
@@ -703,7 +709,7 @@ __bpf_kfunc lock_result_t *bpf_res_spin_lock_irqsave(struct bpf_res_spin_lock *l
 
 	preempt_disable();
 	local_irq_save(flags);
-	ret = res_spin_lock((struct qspinlock *)lock, false);
+	ret = res_spin_lock((struct qspinlock *)lock, false, false);
 	if (unlikely(ret)) {
 		local_irq_restore(flags);
 		preempt_enable();

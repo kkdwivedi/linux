@@ -15,7 +15,7 @@
 
 struct qspinlock;
 
-extern int resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val, u64 timeout, bool imm_aa);
+extern int resilient_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val, u64 timeout, bool imm_aa, bool nowarn_aa);
 
 #ifndef resilient_virt_spin_lock_enabled
 static __always_inline bool resilient_virt_spin_lock_enabled(void)
@@ -91,7 +91,7 @@ dec:
  * res_spin_lock - acquire a queued spinlock
  * @lock: Pointer to queued spinlock structure
  */
-static __always_inline int res_spin_lock(struct qspinlock *lock, bool imm_aa)
+static __always_inline int res_spin_lock(struct qspinlock *lock, bool imm_aa, bool nowarn_aa)
 {
 	int val = 0;
 
@@ -99,7 +99,7 @@ static __always_inline int res_spin_lock(struct qspinlock *lock, bool imm_aa)
 		grab_held_lock_entry(lock);
 		return 0;
 	}
-	return resilient_queued_spin_lock_slowpath(lock, val, RES_DEF_TIMEOUT, imm_aa);
+	return resilient_queued_spin_lock_slowpath(lock, val, RES_DEF_TIMEOUT, imm_aa, nowarn_aa);
 }
 
 static __always_inline void res_spin_unlock(struct qspinlock *lock)
