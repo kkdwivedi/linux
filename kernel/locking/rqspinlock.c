@@ -670,6 +670,7 @@ typedef struct lock_result_t {
 static const lock_result_t result[MAX_ERRNO] = {
 	[ETIMEDOUT] = { .err = -ETIMEDOUT },
 	[EDEADLK] = { .err = -EDEADLK },
+	[EINVAL] = { .err = -EINVAL },
 };
 
 #define lock_result(ret) ((lock_result_t *)&result[-(ret)])
@@ -724,6 +725,48 @@ __bpf_kfunc void bpf_res_spin_unlock_irqrestore(struct bpf_res_spin_lock *lock, 
 	res_spin_unlock((struct qspinlock *)lock);
 	local_irq_restore(flags);
 	preempt_enable();
+}
+
+__bpf_kfunc lock_result_t *bpf_arena_res_spin_lock(struct bpf_res_spin_lock *res_lock, struct bpf_res_spin_lock *lock_arr, u64 lock_cnt)
+{
+	u32 lock_idx = (u32)(unsigned long)res_lock;
+
+	if (unlikely(lock_idx >= lock_cnt))
+		return lock_result(-EINVAL);
+	return bpf_res_spin_lock(&lock_arr[lock_idx]);
+}
+
+__bpf_kfunc void bpf_arena_res_spin_unlock(struct bpf_res_spin_lock *res_lock, struct bpf_res_spin_lock *lock_arr, u64 lock_cnt)
+{
+	u32 lock_idx = (u32)(unsigned long)res_lock;
+
+	if (unlikely(lock_idx >= lock_cnt))
+		return;
+	bpf_res_spin_unlock(&lock_arr[lock_idx]);
+}
+
+__bpf_kfunc lock_result_t *bpf_arena_res_spin_lock_irqsave(struct bpf_res_spin_lock *res_lock,
+							   unsigned long *flags__irq_flag,
+							   struct bpf_res_spin_lock *lock_arr,
+							   u64 lock_cnt)
+{
+	u32 lock_idx = (u32)(unsigned long)res_lock;
+
+	if (unlikely(lock_idx >= lock_cnt))
+		return lock_result(-EINVAL);
+	return bpf_res_spin_lock_irqsave(&lock_arr[lock_idx], flags__irq_flag);
+}
+
+__bpf_kfunc void bpf_arena_res_spin_unlock_irqrestore(struct bpf_res_spin_lock *res_lock,
+						      unsigned long *flags__irq_flag,
+						      struct bpf_res_spin_lock *lock_arr,
+						      u64 lock_cnt)
+{
+	u32 lock_idx = (u32)(unsigned long)res_lock;
+
+	if (unlikely(lock_idx >= lock_cnt))
+		return;
+	bpf_res_spin_unlock_irqrestore(&lock_arr[lock_idx], flags__irq_flag);
 }
 
 __bpf_kfunc_end_defs();
