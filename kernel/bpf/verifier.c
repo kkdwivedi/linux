@@ -3027,6 +3027,8 @@ static struct btf *find_kfunc_desc_btf(struct bpf_verifier_env *env, s16 offset)
 	return btf_vmlinux ?: ERR_PTR(-ENOENT);
 }
 
+static int get_shadow_kfunc_id(u32 func_id, s16 offset);
+
 static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
 {
 	const struct btf_type *func, *func_proto;
@@ -3151,7 +3153,10 @@ static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
 	if (!err)
 		sort(tab->descs, tab->nr_descs, sizeof(tab->descs[0]),
 		     kfunc_desc_cmp_by_id_off, NULL);
-	return err;
+	func_id = get_shadow_kfunc_id(func_id, offset);
+	if (!func_id)
+		return err;
+	return add_kfunc_call(env, func_id, offset);
 }
 
 static int kfunc_desc_cmp_by_imm_off(const void *a, const void *b)
@@ -8034,6 +8039,7 @@ static int check_kfunc_mem_size_reg(struct bpf_verifier_env *env, struct bpf_reg
 static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 			     bool is_lock, bool is_res_lock)
 {
+	struct bpf_private_arena *lock_priv_arena = bpf_get_lock_private_arena(env->prog->aux->arena);
 	const char *lock_str = is_res_lock ? "bpf_res_spin" : "bpf_spin";
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
 	struct bpf_verifier_state *cur = env->cur_state;
@@ -8125,6 +8131,15 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 
 		invalidate_non_owning_refs(env);
 	}
+
+	if (is_res_lock && arena && !lock_priv_arena->addr) {
+		err = bpf_private_arena_init(lock_priv_arena, sizeof(struct bpf_res_spin_lock), 16384);
+		if (err) {
+			verbose(env, "failed to allocate private arena of shadow lock objects\n");
+			return err;
+		}
+	}
+
 	return 0;
 }
 
@@ -11726,6 +11741,9 @@ enum special_kfunc_type {
 	KF_bpf_local_irq_restore,
 	KF_bpf_res_spin_lock,
 	KF_bpf_res_spin_unlock,
+	KF_bpf_arena_res_spin_lock_alloc,
+	KF_bpf_arena_res_spin_lock_free,
+	KF_bpf_private_arena_alloc,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -11797,6 +11815,18 @@ BTF_ID(func, bpf_local_irq_save)
 BTF_ID(func, bpf_local_irq_restore)
 BTF_ID(func, bpf_res_spin_lock)
 BTF_ID(func, bpf_res_spin_unlock)
+BTF_ID(func, bpf_arena_res_spin_lock_alloc)
+BTF_ID(func, bpf_arena_res_spin_lock_free)
+BTF_ID(func, bpf_private_arena_alloc)
+
+static int get_shadow_kfunc_id(u32 func_id, s16 offset)
+{
+	if (offset)
+		return 0;
+	if (func_id == special_kfunc_list[KF_bpf_arena_res_spin_lock_alloc])
+		return special_kfunc_list[KF_bpf_private_arena_alloc];
+	return 0;
+}
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -13022,6 +13052,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    int *insn_idx_p)
 {
 	bool sleepable, rcu_lock, rcu_unlock, preempt_disable, preempt_enable;
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[env->insn_idx];
 	u32 i, nargs, ptr_type_id, release_ref_obj_id;
 	struct bpf_reg_state *regs = cur_regs(env);
 	const char *func_name, *ptr_type_name;
@@ -13076,6 +13107,23 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	if (meta.func_id == special_kfunc_list[KF_bpf_session_cookie]) {
 		meta.r0_size = sizeof(u64);
 		meta.r0_rdonly = false;
+	}
+
+	if (meta.func_id == special_kfunc_list[KF_bpf_arena_res_spin_lock_alloc]) {
+		struct bpf_private_arena *lock_priv_arena = bpf_get_lock_private_arena(env->prog->aux->arena);
+
+		aux->use_shadow_kfunc_id = true;
+		if (!lock_priv_arena) {
+			verbose(env, "no arena associated with program\n");
+			return -EINVAL;
+		}
+		if (!lock_priv_arena->addr) {
+			err = bpf_private_arena_init(lock_priv_arena, sizeof(struct bpf_res_spin_lock), 16384);
+			if (err) {
+				verbose(env, "failed to allocate private arena of shadow lock objects\n");
+				return err;
+			}
+		}
 	}
 
 	if (is_bpf_wq_set_callback_impl_kfunc(meta.func_id)) {
@@ -20922,7 +20970,9 @@ static void __fixup_collection_insert_kfunc(struct bpf_insn_aux_data *insn_aux,
 static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    struct bpf_insn *insn_buf, int insn_idx, int *cnt)
 {
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[insn_idx];
 	const struct bpf_kfunc_desc *desc;
+	int shadow_kfunc_id;
 
 	if (!insn->imm) {
 		verbose(env, "invalid kernel function call not eliminated in verifier pass\n");
@@ -20930,6 +20980,12 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	}
 
 	*cnt = 0;
+
+	if (aux->use_shadow_kfunc_id) {
+		shadow_kfunc_id = get_shadow_kfunc_id(insn->imm, insn->off);
+		if (shadow_kfunc_id)
+			insn->imm = shadow_kfunc_id;
+	}
 
 	/* insn->imm has the btf func_id. Replace it with an offset relative to
 	 * __bpf_call_base, unless the JIT needs to call functions that are
@@ -21018,6 +21074,21 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn_buf[1] = ld_addrs[1];
 		insn_buf[2] = *insn;
 		*cnt = 3;
+	} else if (desc->func_id == special_kfunc_list[KF_bpf_private_arena_alloc]) {
+		struct bpf_private_arena *lock_priv_arena = bpf_get_lock_private_arena(env->prog->aux->arena);
+		struct bpf_insn insns[5] = {
+			BPF_LD_IMM64(BPF_REG_1, (long)&lock_priv_arena->cur),
+			BPF_LD_IMM64(BPF_REG_2, (long)lock_priv_arena->addr),
+			BPF_MOV64_IMM(BPF_REG_3, lock_priv_arena->cnt),
+		};
+
+		insn_buf[0] = insns[0];
+		insn_buf[1] = insns[1];
+		insn_buf[2] = insns[2];
+		insn_buf[3] = insns[3];
+		insn_buf[4] = insns[4];
+		insn_buf[5] = *insn;
+		*cnt = 6;
 	}
 	return 0;
 }

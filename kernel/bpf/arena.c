@@ -50,6 +50,8 @@ struct bpf_arena {
 	struct range_tree rt;
 	struct list_head vma_list;
 	struct mutex lock;
+
+	struct bpf_private_arena lock_priv_arena;
 };
 
 u64 bpf_arena_get_kern_vm_start(struct bpf_arena *arena)
@@ -549,6 +551,28 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt)
 	}
 }
 
+int bpf_private_arena_init(struct bpf_private_arena *priv_arena, u32 cnt, size_t size)
+{
+	void *addr;
+
+	if (!size || size > U32_MAX)
+		return -EINVAL;
+	addr = __vmalloc(round_up(size * cnt, 8), GFP_KERNEL | __GFP_ZERO | __GFP_NOWARN);
+	if (!addr)
+		return -ENOMEM;
+	priv_arena->addr = addr;
+	priv_arena->cnt  = cnt;
+	atomic_set(&priv_arena->cur, 0);
+	return 0;
+}
+
+struct bpf_private_arena *bpf_get_lock_private_arena(struct bpf_arena *arena)
+{
+	if (!arena)
+		return NULL;
+	return &arena->lock_priv_arena;
+}
+
 __bpf_kfunc_start_defs();
 
 __bpf_kfunc void *bpf_arena_alloc_pages(void *p__map, void *addr__ign, u32 page_cnt,
@@ -572,6 +596,18 @@ __bpf_kfunc void bpf_arena_free_pages(void *p__map, void *ptr__ign, u32 page_cnt
 		return;
 	arena_free_pages(arena, (long)ptr__ign, page_cnt);
 }
+
+__bpf_kfunc void *bpf_private_arena_alloc(atomic_t *priv_cur, void *addr, u32 cnt)
+{
+	int cur = atomic_fetch_inc(priv_cur);
+
+	if (cur == cnt) {
+		atomic_dec(priv_cur);
+		return NULL;
+	}
+	return addr + cur * PAGE_SIZE;
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(arena_kfuncs)

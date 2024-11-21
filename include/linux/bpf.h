@@ -566,6 +566,8 @@ static inline void zero_map_value(struct bpf_map *map, void *dst)
 	bpf_obj_memzero(map->record, dst, map->value_size);
 }
 
+struct bpf_private_arena;
+
 void copy_map_value_locked(struct bpf_map *map, void *dst, void *src,
 			   bool lock_src);
 void bpf_timer_cancel_and_free(void *timer);
@@ -576,6 +578,8 @@ void bpf_rb_root_free(const struct btf_field *field, void *rb_root,
 		      struct bpf_spin_lock *spin_lock);
 u64 bpf_arena_get_kern_vm_start(struct bpf_arena *arena);
 u64 bpf_arena_get_user_vm_start(struct bpf_arena *arena);
+int bpf_private_arena_init(struct bpf_private_arena *priv_arena, u32 cnt, size_t size);
+struct bpf_private_arena *bpf_get_lock_private_arena(struct bpf_arena *arena);
 int bpf_obj_name_cpy(char *dst, const char *src, unsigned int size);
 
 struct bpf_offload_dev;
@@ -1499,6 +1503,12 @@ struct btf_mod_pair {
 };
 
 struct bpf_kfunc_desc_tab;
+
+struct bpf_private_arena {
+	void *addr;
+	u32 cnt;
+	atomic_t cur;
+};
 
 struct bpf_prog_aux {
 	atomic64_t refcnt;
