@@ -673,6 +673,7 @@ typedef struct lock_result_t {
 static const lock_result_t result[MAX_ERRNO] = {
 	[ETIMEDOUT] = { .err = -ETIMEDOUT },
 	[EDEADLK] = { .err = -EDEADLK },
+	[EINVAL] = { .err = -EINVAL },
 };
 
 #define lock_result(ret) ((lock_result_t *)&result[-(ret)])
@@ -727,6 +728,61 @@ __bpf_kfunc void bpf_res_spin_unlock_irqrestore(struct bpf_res_spin_lock *lock, 
 	res_spin_unlock((struct qspinlock *)lock);
 	local_irq_restore(flags);
 	preempt_enable();
+}
+
+__bpf_kfunc lock_result_t *bpf_arena_res_spin_lock(struct bpf_res_spin_lock *res_lock, u64 beg, u64 end)
+{
+	void *lock_beg = (void *)beg;
+	void *lock_end = (void *)end;
+	void *lock = res_lock;
+
+	if (lock < lock_beg || lock > lock_end)
+		return lock_result(-EINVAL);
+	if (!IS_ALIGNED((unsigned long)lock, __alignof__(struct bpf_res_spin_lock)))
+		return lock_result(-EINVAL);
+	return bpf_res_spin_lock(lock);
+}
+
+__bpf_kfunc void bpf_arena_res_spin_unlock(struct bpf_res_spin_lock *res_lock, u64 beg, u64 end)
+{
+	void *lock_beg = (void *)beg;
+	void *lock_end = (void *)end;
+	void *lock = res_lock;
+
+	if (lock < lock_beg || lock > lock_end)
+		return;
+	if (!IS_ALIGNED((unsigned long)lock, __alignof__(struct bpf_res_spin_lock)))
+		return;
+	bpf_res_spin_unlock(lock);
+}
+
+__bpf_kfunc lock_result_t *bpf_arena_res_spin_lock_irqsave(struct bpf_res_spin_lock *res_lock,
+							   unsigned long *flags_irq_flag, u64 beg,
+							   u64 end)
+{
+	void *lock_beg = (void *)beg;
+	void *lock_end = (void *)end;
+	void *lock = res_lock;
+
+	if (lock < lock_beg || lock > lock_end)
+		return lock_result(-EINVAL);
+	if (!IS_ALIGNED((unsigned long)lock, __alignof__(struct bpf_res_spin_lock)))
+		return lock_result(-EINVAL);
+	return bpf_res_spin_lock_irqsave(lock, flags_irq_flag);
+}
+
+__bpf_kfunc void bpf_arena_res_spin_unlock_irqrestore(struct bpf_res_spin_lock *res_lock,
+						      unsigned long *flags_irq_flag, u64 beg, u64 end)
+{
+	void *lock_beg = (void *)beg;
+	void *lock_end = (void *)end;
+	void *lock = res_lock;
+
+	if (lock < lock_beg || lock > lock_end)
+		return;
+	if (!IS_ALIGNED((unsigned long)lock, __alignof__(struct bpf_res_spin_lock)))
+		return;
+	bpf_res_spin_unlock_irqrestore(lock, flags_irq_flag);
 }
 
 __bpf_kfunc_end_defs();
