@@ -91,6 +91,14 @@ struct bpf_reg_state {
 			u32 dynptr_id; /* for dynptr slices */
 		};
 
+		struct { /* LOCK_CONDITION */
+			u32 lock_id;
+			int irq_spi;
+			void *lock_ptr;
+			u32 irq_frameno;
+			u32 irq_ref_obj_id;
+		};
+
 		/* For dynptr stack slots */
 		struct {
 			enum bpf_dynptr_type type;
@@ -115,10 +123,20 @@ struct bpf_reg_state {
 			int depth:30;
 		} iter;
 
+		/* For irq stack slots */
+		struct {
+			enum {
+				IRQ_KFUNC_IGNORE,
+				IRQ_NATIVE_KFUNC,
+				IRQ_LOCK_KFUNC,
+			} kfunc_class;
+		} irq;
+
 		/* Max size from any of the above. */
 		struct {
 			unsigned long raw1;
 			unsigned long raw2;
+			unsigned long raw3;
 		} raw;
 
 		u32 subprogno; /* for PTR_TO_FUNC */
@@ -255,9 +273,13 @@ struct bpf_reference_state {
 	 * default to pointer reference on zero initialization of a state.
 	 */
 	enum ref_state_type {
-		REF_TYPE_PTR	= 1,
-		REF_TYPE_IRQ	= 2,
-		REF_TYPE_LOCK	= 3,
+		REF_TYPE_PTR		= (1 << 1),
+		REF_TYPE_IRQ		= (1 << 2),
+		REF_TYPE_LOCK		= (1 << 3),
+		REF_TYPE_RES_LOCK 	= (1 << 4),
+		REF_TYPE_RES_LOCK_IRQ	= (1 << 5),
+		REF_TYPE_RES_LOCK_COND  = (1 << 6),
+		REF_TYPE_RES_LOCK_IRQ_COND  = (1 << 7),
 	} type;
 	/* Track each reference created with a unique id, even if the same
 	 * instruction creates the reference multiple times (eg, via CALL).
