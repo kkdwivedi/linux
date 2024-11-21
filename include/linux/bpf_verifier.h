@@ -91,6 +91,11 @@ struct bpf_reg_state {
 			u32 dynptr_id; /* for dynptr slices */
 		};
 
+		struct { /* LOCK_CONDITION */
+			u32 lock_id;
+			void *lock_ptr;
+		};
+
 		/* For dynptr stack slots */
 		struct {
 			enum bpf_dynptr_type type;
@@ -255,10 +260,12 @@ struct bpf_reference_state {
 	 * default to pointer reference on zero initialization of a state.
 	 */
 	enum ref_state_type {
-		REF_TYPE_PTR	= 1,
-		REF_TYPE_IRQ	= 2,
+		REF_TYPE_PTR		= (1 << 1),
+		REF_TYPE_IRQ		= (1 << 2),
 
-		REF_TYPE_LOCK	= 3,
+		REF_TYPE_LOCK		= (1 << 3),
+		REF_TYPE_RES_LOCK 	= (1 << 4),
+		REF_TYPE_RES_LOCK_COND  = (1 << 5),
 	} type;
 	/* Track each reference created with a unique id, even if the same
 	 * instruction creates the reference multiple times (eg, via CALL).
