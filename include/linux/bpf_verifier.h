@@ -280,6 +280,10 @@ struct bpf_reference_state {
 		REF_TYPE_RES_LOCK_IRQ	= (1 << 5),
 		REF_TYPE_RES_LOCK_COND  = (1 << 6),
 		REF_TYPE_RES_LOCK_IRQ_COND  = (1 << 7),
+		REF_TYPE_ARENA_RES_LOCK = (1 << 8),
+		REF_TYPE_ARENA_RES_LOCK_COND = (1 << 9),
+		REF_TYPE_ARENA_RES_LOCK_IRQ = (1 << 10),
+		REF_TYPE_ARENA_RES_LOCK_IRQ_COND = (1 << 11),
 	} type;
 	/* Track each reference created with a unique id, even if the same
 	 * instruction creates the reference multiple times (eg, via CALL).
@@ -598,6 +602,9 @@ struct bpf_insn_aux_data {
 	 * bpf_fastcall pattern.
 	 */
 	u8 fastcall_spills_num:3;
+	bool use_shadow_kfunc_id:1;
+	bool non_arena_arg:1;
+	bool arena_arg:1;
 
 	/* below fields are initialized once */
 	unsigned int orig_idx; /* original instruction index */

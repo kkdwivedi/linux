@@ -3069,6 +3069,8 @@ static struct btf *find_kfunc_desc_btf(struct bpf_verifier_env *env, s16 offset)
 	return btf_vmlinux ?: ERR_PTR(-ENOENT);
 }
 
+static int get_shadow_kfunc_id(u32 func_id, s16 offset);
+
 static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
 {
 	const struct btf_type *func, *func_proto;
@@ -3193,7 +3195,10 @@ static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
 	if (!err)
 		sort(tab->descs, tab->nr_descs, sizeof(tab->descs[0]),
 		     kfunc_desc_cmp_by_id_off, NULL);
-	return err;
+	func_id = get_shadow_kfunc_id(func_id, offset);
+	if (!func_id)
+		return err;
+	return add_kfunc_call(env, func_id, offset);
 }
 
 static int kfunc_desc_cmp_by_imm_off(const void *a, const void *b)
@@ -8075,7 +8080,7 @@ static int check_kfunc_mem_size_reg(struct bpf_verifier_env *env, struct bpf_reg
  * object got locked and clears it after bpf_spin_unlock.
  */
 static int process_spin_lock(struct bpf_verifier_env *env, int regno,
-			     bool is_lock, bool is_res_lock, bool is_irq)
+			     bool is_lock, bool is_res_lock, bool is_irq, bool is_arena)
 {
 	const char *lock_str = is_res_lock ? "bpf_res_spin" : "bpf_spin";
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
@@ -8088,7 +8093,7 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 	u32 spin_lock_off;
 	int err;
 
-	if (!is_const) {
+	if (!is_const && !is_arena) {
 		verbose(env,
 			"R%d doesn't have constant offset. %s_lock has to be at the constant offset\n",
 			regno, lock_str);
@@ -8102,18 +8107,19 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 				map->name, lock_str);
 			return -EINVAL;
 		}
-	} else {
+	} else if (base_type(reg->type) == PTR_TO_BTF_ID) {
 		btf = reg->btf;
 	}
 
 	rec = reg_btf_record(reg);
-	if (!btf_record_has_field(rec, is_res_lock ? BPF_RES_SPIN_LOCK : BPF_SPIN_LOCK)) {
+	if (!is_arena && !btf_record_has_field(rec, is_res_lock ? BPF_RES_SPIN_LOCK : BPF_SPIN_LOCK)) {
 		verbose(env, "%s '%s' has no valid %s_lock\n", map ? "map" : "local",
 			map ? map->name : "kptr", lock_str);
 		return -EINVAL;
 	}
-	spin_lock_off = is_res_lock ? rec->res_spin_lock_off : rec->spin_lock_off;
-	if (spin_lock_off != val + reg->off) {
+	if (!is_arena)
+		spin_lock_off = is_res_lock ? rec->res_spin_lock_off : rec->spin_lock_off;
+	if (!is_arena && spin_lock_off != val + reg->off) {
 		verbose(env, "off %lld doesn't point to 'struct %s_lock' that is at %d\n",
 			val + reg->off, lock_str, spin_lock_off);
 		return -EINVAL;
@@ -8122,7 +8128,9 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 		void *ptr;
 		int type;
 
-		if (map)
+		if (is_arena)
+			ptr = env->prog->aux->arena;
+		else if (map)
 			ptr = map;
 		else
 			ptr = btf;
@@ -8133,7 +8141,7 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 					"Locking two bpf_spin_locks are not allowed\n");
 				return -EINVAL;
 			}
-		} else if (is_res_lock) {
+		} else if (is_res_lock && !is_arena) {
 			if (find_lock_state(env->cur_state, REF_TYPE_RES_LOCK | REF_TYPE_RES_LOCK_COND, reg->id, ptr)) {
 				verbose(env, "Acquiring the same lock again, AA deadlock detected\n");
 				return -EINVAL;
@@ -8142,9 +8150,9 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 
 		if (is_res_lock)
 			if (is_irq)
-				type = REF_TYPE_RES_LOCK_IRQ_COND;
+				type = is_arena ? REF_TYPE_ARENA_RES_LOCK_IRQ_COND : REF_TYPE_RES_LOCK_IRQ_COND;
 			else
-				type = REF_TYPE_RES_LOCK_COND;
+				type = is_arena ? REF_TYPE_ARENA_RES_LOCK_COND : REF_TYPE_RES_LOCK_COND;
 		else
 			type = REF_TYPE_LOCK;
 		err = acquire_lock_state(env, env->insn_idx, type, reg->id, ptr);
@@ -8156,7 +8164,9 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 		void *ptr;
 		int type;
 
-		if (map)
+		if (is_arena)
+			ptr = env->prog->aux->arena;
+		else if (map)
 			ptr = map;
 		else
 			ptr = btf;
@@ -8168,9 +8178,9 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 
 		if (is_res_lock)
 			if (is_irq)
-				type = REF_TYPE_RES_LOCK_IRQ;
+				type = is_arena ? REF_TYPE_ARENA_RES_LOCK_IRQ : REF_TYPE_RES_LOCK_IRQ;
 			else
-				type = REF_TYPE_RES_LOCK;
+				type = is_arena ? REF_TYPE_ARENA_RES_LOCK : REF_TYPE_RES_LOCK;
 		else
 			type = REF_TYPE_LOCK;
 		if (release_lock_state(env->cur_state, type, reg->id, ptr)) {
@@ -9423,11 +9433,11 @@ skip_type_check:
 			return -EACCES;
 		}
 		if (meta->func_id == BPF_FUNC_spin_lock) {
-			err = process_spin_lock(env, regno, true, false, false);
+			err = process_spin_lock(env, regno, true, false, false, false);
 			if (err)
 				return err;
 		} else if (meta->func_id == BPF_FUNC_spin_unlock) {
-			err = process_spin_lock(env, regno, false, false, false);
+			err = process_spin_lock(env, regno, false, false, false, false);
 			if (err)
 				return err;
 		} else {
@@ -11788,6 +11798,10 @@ enum special_kfunc_type {
 	KF_bpf_res_spin_unlock,
 	KF_bpf_res_spin_lock_irqsave,
 	KF_bpf_res_spin_unlock_irqrestore,
+	KF_bpf_arena_res_spin_lock,
+	KF_bpf_arena_res_spin_unlock,
+	KF_bpf_arena_res_spin_lock_irqsave,
+	KF_bpf_arena_res_spin_unlock_irqrestore,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -11862,6 +11876,25 @@ BTF_ID(func, bpf_res_spin_lock)
 BTF_ID(func, bpf_res_spin_unlock)
 BTF_ID(func, bpf_res_spin_lock_irqsave)
 BTF_ID(func, bpf_res_spin_unlock_irqrestore)
+BTF_ID(func, bpf_arena_res_spin_lock)
+BTF_ID(func, bpf_arena_res_spin_unlock)
+BTF_ID(func, bpf_arena_res_spin_lock_irqsave)
+BTF_ID(func, bpf_arena_res_spin_unlock_irqrestore)
+
+static int get_shadow_kfunc_id(u32 func_id, s16 offset)
+{
+	if (offset)
+		return 0;
+	if (func_id == special_kfunc_list[KF_bpf_res_spin_lock])
+		return special_kfunc_list[KF_bpf_arena_res_spin_lock];
+	else if (func_id == special_kfunc_list[KF_bpf_res_spin_unlock])
+		return special_kfunc_list[KF_bpf_arena_res_spin_unlock];
+	else if (func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave])
+		return special_kfunc_list[KF_bpf_arena_res_spin_lock_irqsave];
+	else if (func_id == special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore])
+		return special_kfunc_list[KF_bpf_arena_res_spin_unlock_irqrestore];
+	return 0;
+}
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -12069,12 +12102,14 @@ static int process_irq_flag(struct bpf_verifier_env *env, int regno,
 	bool irq_save;
 
 	if (meta->func_id == special_kfunc_list[KF_bpf_local_irq_save] ||
-	    meta->func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave]) {
+	    meta->func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave] ||
+	    meta->func_id == special_kfunc_list[KF_bpf_arena_res_spin_lock_irqsave]) {
 		irq_save = true;
 		if (meta->func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave])
 			kfunc_class = IRQ_LOCK_KFUNC;
 	} else if (meta->func_id == special_kfunc_list[KF_bpf_local_irq_restore] ||
-		   meta->func_id == special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore]) {
+		   meta->func_id == special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore] ||
+		   meta->func_id == special_kfunc_list[KF_bpf_arena_res_spin_unlock_irqrestore]) {
 		irq_save = false;
 		if (meta->func_id == special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore])
 			kfunc_class = IRQ_LOCK_KFUNC;
@@ -12299,7 +12334,11 @@ static bool is_bpf_res_spin_lock_kfunc(u32 btf_id)
 	return btf_id == special_kfunc_list[KF_bpf_res_spin_lock] ||
 	       btf_id == special_kfunc_list[KF_bpf_res_spin_unlock] ||
 	       btf_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave] ||
-	       btf_id == special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore];
+	       btf_id == special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore] ||
+	       btf_id == special_kfunc_list[KF_bpf_arena_res_spin_lock] ||
+	       btf_id == special_kfunc_list[KF_bpf_arena_res_spin_unlock] ||
+	       btf_id == special_kfunc_list[KF_bpf_arena_res_spin_lock_irqsave] ||
+	       btf_id == special_kfunc_list[KF_bpf_arena_res_spin_unlock_irqrestore];
 }
 
 static bool is_critical_section_allowed_kfunc(u32 btf_id)
@@ -12564,6 +12603,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 	 * verifier sees.
 	 */
 	for (i = 0; i < nargs; i++) {
+		struct bpf_insn_aux_data *aux = &env->insn_aux_data[env->insn_idx];
 		struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[i + 1];
 		const struct btf_type *t, *ref_t, *resolve_ret;
 		enum bpf_arg_type arg_type = ARG_DONTCARE;
@@ -13032,21 +13072,58 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				return ret;
 			break;
 		case KF_ARG_PTR_TO_RES_SPIN_LOCK:
-			if (reg->type != PTR_TO_MAP_VALUE && reg->type != (PTR_TO_BTF_ID | MEM_ALLOC)) {
-				verbose(env, "arg#%d doesn't point to map value or allocated object\n", i);
+			if (reg->type != PTR_TO_MAP_VALUE && reg->type != (PTR_TO_BTF_ID | MEM_ALLOC) &&
+			    reg->type != PTR_TO_ARENA) {
+				verbose(env, "arg#%d doesn't point to map value or allocated object or arena\n", i);
 				return -EINVAL;
 			}
 
 			if (!is_bpf_res_spin_lock_kfunc(meta->func_id))
 				return -EFAULT;
 			meta->lock_id = reg->id;
-			meta->lock_ptr = reg->type == PTR_TO_MAP_VALUE ? (void *)reg->map_ptr : reg->btf;
+			meta->lock_ptr = reg->type == PTR_TO_ARENA ? env->prog->aux->arena :
+					 (reg->type == PTR_TO_MAP_VALUE ? (void *)reg->map_ptr : reg->btf);
 			ret = process_spin_lock(env, regno, meta->func_id == special_kfunc_list[KF_bpf_res_spin_lock] ||
 						meta->func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave], true,
 						meta->func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave] ||
-						meta->func_id == special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore]);
-			if (ret < 0)
+						meta->func_id == special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore],
+						reg->type == PTR_TO_ARENA);
+			if (ret)
 				return ret;
+			/* Due to code patching, we cannot support both arena
+			 * and non-arena arg for call instruction at same idx.
+			 */
+			if (reg->type == PTR_TO_ARENA) {
+				u32 lock_btf_id = kf_arg_btf_ids[KF_ARG_RES_SPIN_LOCK_ID];
+				struct bpf_arena *arena = env->prog->aux->arena;
+
+				aux->use_shadow_kfunc_id = true;
+				aux->arena_arg = true;
+				if (aux->non_arena_arg) {
+					verbose(env, "cannot pass arena and non-arena pointer at same insn_idx=%d\n", env->insn_idx);
+					return -EINVAL;
+				}
+
+				if (!arena) {
+					verbose(env, "usage of res_spin_lock kfuncs with arena pointer requires an associated arena\n");
+					return -EINVAL;
+				}
+
+				if (!bpf_typed_arena_get_kern_vm_start(arena, lock_btf_id)) {
+					int err = bpf_typed_arena_alloc(arena, lock_btf_id);
+
+					if (err) {
+						verbose(env, "failed to allocate typed arena for res_spin_lock\n");
+						return -ENOMEM;
+					}
+				}
+			} else {
+				aux->non_arena_arg = true;
+				if (aux->arena_arg) {
+					verbose(env, "cannot pass arena and non-arena pointer at same insn_idx=%d\n", env->insn_idx);
+					return -EINVAL;
+				}
+			}
 			break;
 		}
 	}
@@ -15847,19 +15924,26 @@ static void mark_ptr_or_null_regs(struct bpf_verifier_env *env,
 	if (reg->type == (LOCK_CONDITION | PTR_MAYBE_NULL)) {
 		if (is_null) {
 			struct bpf_reference_state *s;
+			int mask = REF_TYPE_RES_LOCK_COND | REF_TYPE_RES_LOCK_IRQ_COND |
+				   REF_TYPE_ARENA_RES_LOCK_COND | REF_TYPE_ARENA_RES_LOCK_IRQ_COND;
 
-			s = find_lock_state(vstate, REF_TYPE_RES_LOCK_COND | REF_TYPE_RES_LOCK_IRQ_COND,
-					    reg->lock_id, reg->lock_ptr);
+			s = find_lock_state(vstate, mask, reg->lock_id, reg->lock_ptr);
 			WARN_ON_ONCE(!s);
 			if (s) {
 				if (s->type == REF_TYPE_RES_LOCK_COND)
 					s->type = REF_TYPE_RES_LOCK;
-				else
+				else if (s->type == REF_TYPE_RES_LOCK_IRQ_COND)
 					s->type = REF_TYPE_RES_LOCK_IRQ;
+				else if (s->type == REF_TYPE_ARENA_RES_LOCK_COND)
+					s->type = REF_TYPE_ARENA_RES_LOCK;
+				else
+					s->type = REF_TYPE_ARENA_RES_LOCK_IRQ;
 			}
 		} else {
-			WARN_ON_ONCE(release_lock_state(vstate, REF_TYPE_RES_LOCK_COND | REF_TYPE_RES_LOCK_IRQ_COND,
-							reg->lock_id, reg->lock_ptr));
+			int mask = REF_TYPE_RES_LOCK_COND | REF_TYPE_RES_LOCK_IRQ_COND |
+				   REF_TYPE_ARENA_RES_LOCK_COND | REF_TYPE_ARENA_RES_LOCK_IRQ_COND;
+
+			WARN_ON_ONCE(release_lock_state(vstate, mask, reg->lock_id, reg->lock_ptr));
 
 			/* For a non-zero irq_ref_obj_id, we need to find and
 			 * clear the IRQ flag created for this lock condition.
@@ -18308,6 +18392,10 @@ static bool refsafe(struct bpf_verifier_state *old, struct bpf_verifier_state *c
 		case REF_TYPE_RES_LOCK_COND:
 		case REF_TYPE_RES_LOCK_IRQ:
 		case REF_TYPE_RES_LOCK_IRQ_COND:
+		case REF_TYPE_ARENA_RES_LOCK:
+		case REF_TYPE_ARENA_RES_LOCK_COND:
+		case REF_TYPE_ARENA_RES_LOCK_IRQ:
+		case REF_TYPE_ARENA_RES_LOCK_IRQ_COND:
 			if (old->refs[i].ptr != cur->refs[i].ptr)
 				return false;
 			break;
@@ -21076,7 +21164,9 @@ static void __fixup_collection_insert_kfunc(struct bpf_insn_aux_data *insn_aux,
 static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    struct bpf_insn *insn_buf, int insn_idx, int *cnt)
 {
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[insn_idx];
 	const struct bpf_kfunc_desc *desc;
+	int shadow_kfunc_id;
 
 	if (!insn->imm) {
 		verbose(env, "invalid kernel function call not eliminated in verifier pass\n");
@@ -21084,6 +21174,12 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	}
 
 	*cnt = 0;
+
+	if (aux->use_shadow_kfunc_id) {
+		shadow_kfunc_id = get_shadow_kfunc_id(insn->imm, insn->off);
+		if (shadow_kfunc_id)
+			insn->imm = shadow_kfunc_id;
+	}
 
 	/* insn->imm has the btf func_id. Replace it with an offset relative to
 	 * __bpf_call_base, unless the JIT needs to call functions that are
@@ -21172,6 +21268,24 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn_buf[1] = ld_addrs[1];
 		insn_buf[2] = *insn;
 		*cnt = 3;
+	} else if (desc->func_id == special_kfunc_list[KF_bpf_arena_res_spin_lock] ||
+		   desc->func_id == special_kfunc_list[KF_bpf_arena_res_spin_unlock] ||
+		   desc->func_id == special_kfunc_list[KF_bpf_arena_res_spin_lock_irqsave] ||
+		   desc->func_id == special_kfunc_list[KF_bpf_arena_res_spin_unlock_irqrestore]) {
+		bool arg_shift = desc->func_id == special_kfunc_list[KF_bpf_arena_res_spin_lock_irqsave] ||
+				 desc->func_id == special_kfunc_list[KF_bpf_arena_res_spin_unlock_irqrestore];
+		struct bpf_arena *arena = env->prog->aux->arena;
+		u32 btf_id = kf_arg_btf_ids[KF_ARG_RES_SPIN_LOCK_ID];
+		struct bpf_insn ld_args[3] = {
+			BPF_LD_IMM64(BPF_REG_2 + arg_shift, (long)bpf_typed_arena_get_kern_vm_start(arena, btf_id)),
+			BPF_MOV64_IMM(BPF_REG_3 + arg_shift, bpf_typed_arena_get_obj_count(arena, btf_id)),
+		};
+
+		insn_buf[0] = ld_args[0];
+		insn_buf[1] = ld_args[1];
+		insn_buf[2] = ld_args[2];
+		insn_buf[3] = *insn;
+		*cnt = 4;
 	}
 	return 0;
 }
