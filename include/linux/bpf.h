@@ -574,8 +574,11 @@ void bpf_list_head_free(const struct btf_field *field, void *list_head,
 			struct bpf_spin_lock *spin_lock);
 void bpf_rb_root_free(const struct btf_field *field, void *rb_root,
 		      struct bpf_spin_lock *spin_lock);
+int bpf_typed_arena_alloc(struct bpf_arena *arena, u32 btf_id);
 u64 bpf_arena_get_kern_vm_start(struct bpf_arena *arena);
+u64 bpf_typed_arena_get_kern_vm_start(struct bpf_arena *arena, u32 btf_id);
 u64 bpf_arena_get_user_vm_start(struct bpf_arena *arena);
+u64 bpf_typed_arena_get_obj_count(struct bpf_arena *arena, u32 btf_id);
 int bpf_obj_name_cpy(char *dst, const char *src, unsigned int size);
 
 struct bpf_offload_dev;

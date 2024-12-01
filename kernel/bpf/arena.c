@@ -42,6 +42,10 @@
 #define GUARD_SZ (1ull << sizeof_field(struct bpf_insn, off) * 8)
 #define KERN_VM_SZ (SZ_4G + GUARD_SZ)
 
+DEFINE_MUTEX(typed_arena_lock);
+
+BTF_ID_LIST_SINGLE(res_spin_lock_btf_id, struct, bpf_res_spin_lock);
+
 struct bpf_arena_region {
 	u64 user_vm_start;
 	u64 user_vm_end;
@@ -54,6 +58,7 @@ struct bpf_arena_region {
 struct bpf_arena {
 	struct bpf_map map;
 	struct bpf_arena_region region;
+	struct bpf_arena_region res_spin_lock_region;
 };
 
 static u64 bpf_arena_region_get_kern_vm_start(struct bpf_arena_region *region)
@@ -64,6 +69,21 @@ static u64 bpf_arena_region_get_kern_vm_start(struct bpf_arena_region *region)
 u64 bpf_arena_get_kern_vm_start(struct bpf_arena *arena)
 {
 	return bpf_arena_region_get_kern_vm_start(arena ? &arena->region : NULL);
+}
+
+u64 bpf_typed_arena_get_kern_vm_start(struct bpf_arena *arena, u32 btf_id)
+{
+	struct bpf_arena_region *region = NULL;
+
+	if (btf_id != res_spin_lock_btf_id[0])
+		return 0;
+	guard(mutex)(&typed_arena_lock);
+	if (arena) {
+		region = &arena->res_spin_lock_region;
+		if (!region->kern_vm)
+			return 0;
+	}
+	return bpf_arena_region_get_kern_vm_start(region);
 }
 
 u64 bpf_arena_get_user_vm_start(struct bpf_arena *arena)
@@ -173,6 +193,48 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 err:
 	free_vm_area(kern_vm);
 	return ERR_PTR(err);
+}
+
+int bpf_typed_arena_alloc(struct bpf_arena *arena, u32 btf_id)
+{
+	/* Descriptor representing a typed arena object is 4 bytes, hence
+	 * max_entries for the typed arena will be the same, as we support
+	 * a single BTF ID (bpf_res_spin_lock) for now.
+	 */
+	u32 max_entries = arena->map.max_entries;
+	struct bpf_arena_region *region;
+	struct vm_struct *kern_vm;
+	int err;
+
+	guard(mutex)(&typed_arena_lock);
+	/* We assume an equivalence between descriptor and object size to choose
+	 * max_entries.
+	 */
+	BUILD_BUG_ON(sizeof(u32) != sizeof(struct bpf_res_spin_lock));
+
+	if (btf_id != res_spin_lock_btf_id[0])
+		return -ENOENT;
+	if (arena->res_spin_lock_region.kern_vm)
+		return 0;
+
+	region = &arena->res_spin_lock_region;
+	/* user_vm_start / map_extra is always 0 for typed arena */
+	err = bpf_arena_get_vm_area(max_entries, 0, &kern_vm);
+	if (err)
+		return err;
+
+	bpf_arena_region_init(region, kern_vm, max_entries, 0);
+	return 0;
+}
+
+u64 bpf_typed_arena_get_obj_count(struct bpf_arena *arena, u32 btf_id)
+{
+	if (btf_id != res_spin_lock_btf_id[0])
+		return 0;
+	if (!bpf_typed_arena_get_kern_vm_start(arena, btf_id))
+		return 0;
+
+	return ((u64)arena->map.max_entries * PAGE_SIZE) / sizeof(struct bpf_res_spin_lock);
 }
 
 static int existing_page_cb(pte_t *ptep, unsigned long addr, void *data)
@@ -578,6 +640,22 @@ static void arena_region_free_pages(struct bpf_arena_region *region, long uaddr,
 	}
 }
 
+static void *bpf_arena_region_alloc_pages(struct bpf_map *map, struct bpf_arena_region *region,
+					  void *addr, u32 page_cnt, int node_id, u64 flags)
+{
+	if (map->map_type != BPF_MAP_TYPE_ARENA || flags || !page_cnt)
+		return NULL;
+	return (void *)arena_region_alloc_pages(region, map, (long)addr, page_cnt, node_id);
+}
+
+static void bpf_arena_region_free_pages(struct bpf_map *map, struct bpf_arena_region *region,
+					void *ptr, u32 page_cnt)
+{
+	if (map->map_type != BPF_MAP_TYPE_ARENA || !page_cnt || !ptr)
+		return;
+	arena_region_free_pages(region, (long)ptr, page_cnt);
+}
+
 __bpf_kfunc_start_defs();
 
 __bpf_kfunc void *bpf_arena_alloc_pages(void *p__map, void *addr__ign, u32 page_cnt,
@@ -586,10 +664,7 @@ __bpf_kfunc void *bpf_arena_alloc_pages(void *p__map, void *addr__ign, u32 page_
 	struct bpf_map *map = p__map;
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
 
-	if (map->map_type != BPF_MAP_TYPE_ARENA || flags || !page_cnt)
-		return NULL;
-
-	return (void *)arena_region_alloc_pages(&arena->region, &arena->map, (long)addr__ign, page_cnt, node_id);
+	return bpf_arena_region_alloc_pages(map, &arena->region, addr__ign, page_cnt, node_id, flags);
 }
 
 __bpf_kfunc void bpf_arena_free_pages(void *p__map, void *ptr__ign, u32 page_cnt)
@@ -597,15 +672,47 @@ __bpf_kfunc void bpf_arena_free_pages(void *p__map, void *ptr__ign, u32 page_cnt
 	struct bpf_map *map = p__map;
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
 
-	if (map->map_type != BPF_MAP_TYPE_ARENA || !page_cnt || !ptr__ign)
-		return;
-	arena_region_free_pages(&arena->region, (long)ptr__ign, page_cnt);
+	return bpf_arena_region_free_pages(map, &arena->region, ptr__ign, page_cnt);
 }
+
+__bpf_kfunc void *bpf_typed_arena_alloc_pages(void *p__map, u32 btf_id, void *addr__ign, u32 page_cnt,
+					      int node_id, u64 flags)
+{
+	struct bpf_map *map = p__map;
+	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
+
+	if (btf_id != res_spin_lock_btf_id[0])
+		return NULL;
+	if (!bpf_typed_arena_get_kern_vm_start(arena, btf_id))
+		if (bpf_typed_arena_alloc(arena, btf_id))
+			return NULL;
+	return bpf_arena_region_alloc_pages(map, &arena->res_spin_lock_region, addr__ign, page_cnt, node_id, flags);
+}
+
+__bpf_kfunc void *bpf_lock_arena_alloc_pages(void *p__map, void *addr__ign, u32 page_cnt,
+					     int node_id, u64 flags)
+{
+	return bpf_typed_arena_alloc_pages(p__map, res_spin_lock_btf_id[0], addr__ign, page_cnt, node_id, flags);
+}
+
+__bpf_kfunc void bpf_typed_arena_free_pages(void *p__map, u32 btf_id, void *ptr__ign, u32 page_cnt)
+{
+	struct bpf_map *map = p__map;
+	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
+
+	if (btf_id != res_spin_lock_btf_id[0])
+		return;
+	return bpf_arena_region_free_pages(map, &arena->res_spin_lock_region, ptr__ign, page_cnt);
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(arena_kfuncs)
 BTF_ID_FLAGS(func, bpf_arena_alloc_pages, KF_TRUSTED_ARGS | KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_arena_free_pages, KF_TRUSTED_ARGS | KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_typed_arena_alloc_pages, KF_TRUSTED_ARGS | KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_lock_arena_alloc_pages, KF_TRUSTED_ARGS | KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_typed_arena_free_pages, KF_TRUSTED_ARGS | KF_SLEEPABLE)
 BTF_KFUNCS_END(arena_kfuncs)
 
 static const struct btf_kfunc_id_set common_kfunc_set = {
