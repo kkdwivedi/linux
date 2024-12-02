@@ -736,12 +736,36 @@ __bpf_kfunc lock_result_t *bpf_arena_res_spin_lock(struct bpf_res_spin_lock *res
 	return bpf_res_spin_lock(&lock_arr[lock_idx]);
 }
 
+static __always_inline bool elide_ooo_unlock(void *lock)
+{
+	struct rqspinlock_held *rqh = this_cpu_ptr(&rqspinlock_held_locks);
+	void **entry = &rqh->locks[rqh->cnt - 1], *top;
+	bool ret = false;
+
+	if (rqh->cnt > RES_NR_HELD)
+		return ret;
+	top = *entry;
+	if (likely(top == lock))
+		return false;
+	/* Provide release ordering when skipping the actual unlock store on the
+	 * lock word, as we will simply return back to the caller after this
+	 * point.
+	 */
+	smp_store_release(entry, NULL);
+	this_cpu_dec(rqspinlock_held_locks.cnt);
+	return true;
+}
+
 __bpf_kfunc void bpf_arena_res_spin_unlock(struct bpf_res_spin_lock *res_lock, struct bpf_res_spin_lock *lock_arr, u64 lock_cnt)
 {
 	u32 lock_idx = (u32)(unsigned long)res_lock;
 
 	if (unlikely(lock_idx >= lock_cnt))
 		return;
+	if (unlikely(elide_ooo_unlock(&lock_arr[lock_idx]))) {
+		preempt_enable();
+		return;
+	}
 	bpf_res_spin_unlock(&lock_arr[lock_idx]);
 }
 
@@ -766,6 +790,11 @@ __bpf_kfunc void bpf_arena_res_spin_unlock_irqrestore(struct bpf_res_spin_lock *
 
 	if (unlikely(lock_idx >= lock_cnt))
 		return;
+	if (unlikely(elide_ooo_unlock(&lock_arr[lock_idx]))) {
+		local_irq_restore(*flags__irq_flag);
+		preempt_enable();
+		return;
+	}
 	bpf_res_spin_unlock_irqrestore(&lock_arr[lock_idx], flags__irq_flag);
 }
 
