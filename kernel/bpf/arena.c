@@ -516,6 +516,7 @@ static long arena_region_alloc_pages(struct bpf_arena_region *region, struct bpf
 {
 	/* user_vm_end/start are fixed before bpf prog runs */
 	long page_cnt_max = (region->user_vm_end - region->user_vm_start) >> PAGE_SHIFT;
+	page_cnt_max = ((u64)map->max_entries * PAGE_SIZE) >> PAGE_SHIFT;
 	u64 kern_vm_start = bpf_arena_region_get_kern_vm_start(region);
 	struct page **pages;
 	long pgoff = 0;
