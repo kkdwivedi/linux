@@ -469,8 +469,6 @@ struct bpf_verifier_state {
 	u32 dfs_depth;
 	u32 callback_unroll_depth;
 	u32 may_goto_depth;
-
-	bool spin_lock_failed;
 };
 
 #define bpf_get_spilled_reg(slot, frame, mask)				\
