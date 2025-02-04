@@ -21,7 +21,9 @@
 #include <linux/mutex.h>
 #include <linux/prefetch.h>
 #include <asm/byteorder.h>
+#ifdef CONFIG_QUEUED_SPINLOCKS
 #include <asm/qspinlock.h>
+#endif
 #include <trace/events/lock.h>
 #include <asm/rqspinlock.h>
 #include <linux/timekeeping.h>
@@ -29,8 +31,10 @@
 /*
  * Include queued spinlock definitions and statistics code
  */
+#ifdef CONFIG_QUEUED_SPINLOCKS
 #include "qspinlock.h"
 #include "rqspinlock.h"
+#endif
 #include "qspinlock_stat.h"
 
 /*
@@ -261,6 +265,39 @@ static noinline int check_timeout(rqspinlock_t *lock, u32 mask,
  * Duration is defined for each spin attempt, so set it here.
  */
 #define RES_RESET_TIMEOUT(ts, _duration) ({ (ts).timeout_end = 0; (ts).duration = _duration; })
+
+/*
+ * Provide a test-and-set fallback for cases when queued spin lock support is
+ * absent from the architecture.
+ */
+int __lockfunc resilient_tas_spin_lock(rqspinlock_t *lock)
+{
+	struct rqspinlock_timeout ts;
+	int val, ret = 0;
+
+	RES_INIT_TIMEOUT(ts);
+	grab_held_lock_entry(lock);
+
+	RES_RESET_TIMEOUT(ts, RES_DEF_TIMEOUT);
+retry:
+	val = atomic_read(&lock->val);
+
+	if (val || !atomic_try_cmpxchg(&lock->val, &val, 1)) {
+		if (RES_CHECK_TIMEOUT(ts, ret, ~0u)) {
+			lockevent_inc(rqspinlock_lock_timeout);
+			goto out;
+		}
+		cpu_relax();
+		goto retry;
+	}
+
+	return 0;
+out:
+	release_held_lock_entry();
+	return ret;
+}
+
+#ifdef CONFIG_QUEUED_SPINLOCKS
 
 /*
  * Per-CPU queue node structures; we can never have more than 4 nested
@@ -610,3 +647,5 @@ err_release_entry:
 	return ret;
 }
 EXPORT_SYMBOL(resilient_queued_spin_lock_slowpath);
+
+#endif /* CONFIG_QUEUED_SPINLOCKS */
