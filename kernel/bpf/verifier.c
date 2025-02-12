@@ -10260,6 +10260,19 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		mark_reg_unknown(env, caller->regs, BPF_REG_0);
 		caller->regs[BPF_REG_0].subreg_def = DEF_NOT_SUBREG;
 
+		/* If the global subprog may throw an exception, explore the
+		 * fallthrough branch in a pushed state, and explore the throw
+		 * path in this state. Our caller will jump to BPF_EXIT when
+		 * env->subprog_info[i].throws_exception is true.
+		 */
+		if (env->subprog_info[subprog].throws_exception) {
+			state = push_stack(env, env->insn_idx + 1, env->insn_idx, false);
+			if (!state) {
+				verbose(env, "failed to push fallthrough state of global subprog call\n");
+				return -ENOMEM;
+			}
+		}
+
 		/* continue with next insn after call */
 		return 0;
 	}
@@ -16580,6 +16593,14 @@ static void mark_subprog_changes_pkt_data(struct bpf_verifier_env *env, int off)
 	subprog->changes_pkt_data = true;
 }
 
+static void mark_subprog_throws_exception(struct bpf_verifier_env *env, int off)
+{
+	struct bpf_subprog_info *subprog;
+
+	subprog = find_containing_subprog(env, off);
+	subprog->throws_exception = true;
+}
+
 /* 't' is an index of a call-site.
  * 'w' is a callee entry point.
  * Eventually this function would be called when env->cfg.insn_state[w] == EXPLORED.
@@ -16593,6 +16614,7 @@ static void merge_callee_effects(struct bpf_verifier_env *env, int t, int w)
 	caller = find_containing_subprog(env, t);
 	callee = find_containing_subprog(env, w);
 	caller->changes_pkt_data |= callee->changes_pkt_data;
+	caller->throws_exception |= callee->throws_exception;
 }
 
 /* non-recursive DFS pseudo code
@@ -17062,6 +17084,8 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 		}
 		if (bpf_helper_call(insn) && bpf_helper_changes_pkt_data(insn->imm))
 			mark_subprog_changes_pkt_data(env, t);
+		if (bpf_pseudo_kfunc_call(insn) && is_bpf_throw_kfunc(insn))
+			mark_subprog_throws_exception(env, t);
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 			struct bpf_kfunc_call_arg_meta meta;
 
@@ -19157,7 +19181,14 @@ static int do_check(struct bpf_verifier_env *env)
 					}
 				}
 				if (insn->src_reg == BPF_PSEUDO_CALL) {
+					int subprog = find_subprog(env, env->insn_idx + insn->imm + 1);
+
 					err = check_func_call(env, insn, &env->insn_idx);
+					if (!err && subprog_is_global(env, subprog) &&
+					    env->subprog_info[subprog].throws_exception) {
+						exception_exit = true;
+						goto process_bpf_exit_full;
+					}
 				} else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 					err = check_kfunc_call(env, insn, &env->insn_idx);
 					if (!err && is_bpf_throw_kfunc(insn)) {
@@ -19204,6 +19235,7 @@ process_bpf_exit_full:
 				 * match caller reference state when it exits.
 				 */
 				err = check_resource_leak(env, exception_exit, !env->cur_state->curframe,
+							  exception_exit ? "thrown exception" :
 							  "BPF_EXIT instruction in main prog");
 				if (err)
 					return err;
