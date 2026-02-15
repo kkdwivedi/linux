@@ -2460,6 +2460,12 @@ populate_extable:
 				pop_r9(&prog);
 			break;
 		}
+		case BPF_JMP | BPF_CALL | BPF_X:
+			if (is_ereg(dst_reg))
+				EMIT3(add_1mod(0x40, dst_reg), 0xff, add_1reg(0xD0, dst_reg));
+			else
+				EMIT2(0xff, add_1reg(0xD0, dst_reg));
+			break;
 
 		case BPF_JMP | BPF_TAIL_CALL:
 			if (imm32)
