@@ -419,6 +419,7 @@ static bool reg_not_null(const struct bpf_reg_state *reg)
 		type == PTR_TO_SOCK_COMMON ||
 		(type == PTR_TO_BTF_ID && is_trusted_reg(reg)) ||
 		(type == PTR_TO_MEM && !(reg->type & PTR_UNTRUSTED)) ||
+		type == PTR_TO_CORO_FRAME ||
 		type == CONST_PTR_TO_MAP;
 }
 
@@ -1461,6 +1462,8 @@ out:
 
 static int copy_reference_state(struct bpf_verifier_state *dst, const struct bpf_verifier_state *src)
 {
+	int i;
+
 	dst->refs = copy_array(dst->refs, src->refs, src->acquired_refs,
 			       sizeof(struct bpf_reference_state), GFP_KERNEL_ACCOUNT);
 	if (!dst->refs)
@@ -1473,6 +1476,21 @@ static int copy_reference_state(struct bpf_verifier_state *dst, const struct bpf
 	dst->active_irq_id = src->active_irq_id;
 	dst->active_lock_id = src->active_lock_id;
 	dst->active_lock_ptr = src->active_lock_ptr;
+
+	for (i = 0; i < dst->acquired_refs; i++) {
+		if (dst->refs[i].type == REF_TYPE_CORO_FRAME && dst->refs[i].coro_frame_slots) {
+			/* coro_frame_size is always a multiple of BPF_REG_SIZE */
+			u32 n = dst->refs[i].coro_frame_size / BPF_REG_SIZE;
+			struct bpf_stack_state *new_slots;
+
+			new_slots = kmemdup(dst->refs[i].coro_frame_slots,
+					    n * sizeof(struct bpf_stack_state),
+					    GFP_KERNEL_ACCOUNT);
+			if (!new_slots)
+				return -ENOMEM;
+			dst->refs[i].coro_frame_slots = new_slots;
+		}
+	}
 	return 0;
 }
 
@@ -1602,6 +1620,8 @@ static void release_reference_state(struct bpf_verifier_state *state, int idx)
 	 * it can detect out-of-order IRQ restore. Hence use memmove to shift
 	 * the array instead of swapping the final element into the deleted idx.
 	 */
+	if (state->refs[idx].type == REF_TYPE_CORO_FRAME)
+		kvfree(state->refs[idx].coro_frame_slots);
 	last_idx = state->acquired_refs - 1;
 	rem = state->acquired_refs - idx - 1;
 	if (last_idx && idx != last_idx)
@@ -1620,6 +1640,18 @@ static bool find_reference_state(struct bpf_verifier_state *state, int ptr_id)
 			return true;
 
 	return false;
+}
+
+static struct bpf_reference_state *find_coro_frame_ref(
+	struct bpf_verifier_state *state, int ref_obj_id)
+{
+	int i;
+
+	for (i = 0; i < state->acquired_refs; i++)
+		if (state->refs[i].type == REF_TYPE_CORO_FRAME &&
+		    state->refs[i].id == ref_obj_id)
+			return &state->refs[i];
+	return NULL;
 }
 
 static int release_lock_state(struct bpf_verifier_state *state, int type, int id, void *ptr)
@@ -1716,6 +1748,10 @@ static void free_verifier_state(struct bpf_verifier_state *state,
 	for (i = 0; i <= state->curframe; i++) {
 		free_func_state(state->frame[i]);
 		state->frame[i] = NULL;
+	}
+	for (i = 0; i < state->acquired_refs; i++) {
+		if (state->refs[i].type == REF_TYPE_CORO_FRAME)
+			kvfree(state->refs[i].coro_frame_slots);
 	}
 	kfree(state->refs);
 	clear_jmp_history(state);
@@ -5133,6 +5169,7 @@ static bool is_spillable_regtype(enum bpf_reg_type type)
 	case PTR_TO_FUNC:
 	case PTR_TO_MAP_KEY:
 	case PTR_TO_ARENA:
+	case PTR_TO_CORO_FRAME:
 		return true;
 	default:
 		return false;
@@ -7721,6 +7758,244 @@ static bool get_func_retval_range(struct bpf_prog *prog,
 	return false;
 }
 
+/*
+ * Coro frame access helpers for PTR_TO_CORO_FRAME -- structurally parallel to stack
+ * access but using non-negative offsets and per-allocation slot arrays.
+ */
+
+static int check_coro_frame_access_within_bounds(struct bpf_verifier_env *env,
+					   int regno, int off, int size,
+					   enum bpf_access_type t)
+{
+	struct bpf_reg_state *reg = reg_state(env, regno);
+	struct bpf_reference_state *href;
+	s64 min_off, max_off;
+
+	href = find_coro_frame_ref(env->cur_state, reg->ref_obj_id);
+	if (!href) {
+		verbose(env, "R%d coro_frame pointer has no reference state\n", regno);
+		return -EINVAL;
+	}
+
+	if (tnum_is_const(reg->var_off)) {
+		min_off = (s64)reg->var_off.value + off;
+		max_off = min_off + size;
+	} else {
+		if (reg->smin_value + off < 0 ||
+		    reg->umax_value + off + size > href->coro_frame_size) {
+			verbose(env, "R%d variable offset coro_frame access out of bounds\n", regno);
+			return -EACCES;
+		}
+		min_off = reg->smin_value + off;
+		max_off = reg->umax_value + off + size;
+	}
+
+	if (min_off < 0 || max_off > href->coro_frame_size) {
+		verbose(env, "invalid coro_frame access off=%lld size=%d (coro_frame_size=%u)\n",
+			min_off, size, href->coro_frame_size);
+		return -EACCES;
+	}
+	return 0;
+}
+
+static int check_coro_frame_write(struct bpf_verifier_env *env, int ptr_regno,
+			    int off, int size, int value_regno, int insn_idx)
+{
+	struct bpf_reg_state *reg = reg_state(env, ptr_regno);
+	struct bpf_verifier_state *vstate = env->cur_state;
+	struct bpf_reference_state *href;
+	struct bpf_reg_state *value_reg = NULL;
+	int spi, i;
+
+	href = find_coro_frame_ref(vstate, reg->ref_obj_id);
+	if (!href) {
+		verbose(env, "R%d coro_frame pointer has no reference state\n", ptr_regno);
+		return -EINVAL;
+	}
+
+	if (!tnum_is_const(reg->var_off)) {
+		/* Variable offset write: mark all possibly-affected bytes as MISC */
+		s64 min_off = reg->smin_value + off;
+		s64 max_off = reg->umax_value + off + size;
+		int start_spi, end_spi;
+
+		if (min_off < 0)
+			min_off = 0;
+		if (max_off > href->coro_frame_size)
+			max_off = href->coro_frame_size;
+
+		start_spi = min_off / BPF_REG_SIZE;
+		end_spi = (max_off - 1) / BPF_REG_SIZE;
+		for (spi = start_spi; spi <= end_spi; spi++) {
+			for (i = 0; i < BPF_REG_SIZE; i++)
+				href->coro_frame_slots[spi].slot_type[i] = STACK_MISC;
+		}
+		return 0;
+	}
+
+	off += reg->var_off.value;
+	spi = off / BPF_REG_SIZE;
+
+	if (value_regno >= 0)
+		value_reg = &vstate->frame[vstate->curframe]->regs[value_regno];
+
+	if (value_reg && !(off % BPF_REG_SIZE) && size == BPF_REG_SIZE &&
+	    value_reg->type == SCALAR_VALUE && env->bpf_capable) {
+		/* Full 8-byte scalar spill */
+		copy_register_state(&href->coro_frame_slots[spi].spilled_ptr, value_reg);
+		for (i = BPF_REG_SIZE; i > 0; i--)
+			href->coro_frame_slots[spi].slot_type[i - 1] = STACK_SPILL;
+	} else if (value_reg && is_spillable_regtype(value_reg->type)) {
+		/* Pointer spill */
+		if (size != BPF_REG_SIZE) {
+			verbose(env, "invalid size of register spill to coro_frame\n");
+			return -EACCES;
+		}
+		copy_register_state(&href->coro_frame_slots[spi].spilled_ptr, value_reg);
+		for (i = BPF_REG_SIZE; i > 0; i--)
+			href->coro_frame_slots[spi].slot_type[i - 1] = STACK_SPILL;
+	} else {
+		/* Scalar write or BPF_ST_MEM: mark affected bytes as MISC */
+		u8 type = STACK_MISC;
+
+		if (value_reg && register_is_null(value_reg))
+			type = STACK_ZERO;
+
+		/* For partial writes, only mark the bytes being written */
+		for (i = 0; i < size; i++) {
+			int byte_spi = (off + i) / BPF_REG_SIZE;
+			int byte_off = (off + i) % BPF_REG_SIZE;
+
+			href->coro_frame_slots[byte_spi].slot_type[byte_off] = type;
+		}
+	}
+	return 0;
+}
+
+static int check_coro_frame_read(struct bpf_verifier_env *env, int ptr_regno,
+			   int off, int size, int dst_regno)
+{
+	struct bpf_reg_state *reg = reg_state(env, ptr_regno);
+	struct bpf_verifier_state *vstate = env->cur_state;
+	struct bpf_func_state *state = vstate->frame[vstate->curframe];
+	struct bpf_reference_state *href;
+	int spi, i;
+
+	href = find_coro_frame_ref(vstate, reg->ref_obj_id);
+	if (!href) {
+		verbose(env, "R%d coro_frame pointer has no reference state\n", ptr_regno);
+		return -EINVAL;
+	}
+
+	if (!tnum_is_const(reg->var_off)) {
+		/* Variable offset: check all bytes in range are initialized */
+		s64 min_off = reg->smin_value + off;
+		s64 max_off = reg->umax_value + off + size;
+
+		for (i = min_off; i < max_off; i++) {
+			int byte_spi = i / BPF_REG_SIZE;
+			int byte_off = i % BPF_REG_SIZE;
+			u8 type = href->coro_frame_slots[byte_spi].slot_type[byte_off];
+
+			if (type != STACK_MISC && type != STACK_ZERO &&
+			    type != STACK_SPILL) {
+				verbose(env, "invalid read from coro_frame off %lld+%d size %d\n",
+					(s64)reg->smin_value + off, (int)(i - min_off), size);
+				return -EACCES;
+			}
+		}
+		if (dst_regno >= 0)
+			mark_reg_unknown(env, state->regs, dst_regno);
+		return 0;
+	}
+
+	off += reg->var_off.value;
+	spi = off / BPF_REG_SIZE;
+
+	if (is_spilled_reg(&href->coro_frame_slots[spi]) &&
+	    size == BPF_REG_SIZE && !(off % BPF_REG_SIZE)) {
+		/* Full register fill */
+		if (dst_regno >= 0) {
+			struct bpf_reg_state *spill_reg = &href->coro_frame_slots[spi].spilled_ptr;
+
+			if (spill_reg->type != SCALAR_VALUE &&
+			    !is_spillable_regtype(spill_reg->type)) {
+				verbose(env, "invalid read from coro_frame off %d size %d\n",
+					off, size);
+				return -EACCES;
+			}
+			copy_register_state(&state->regs[dst_regno], spill_reg);
+		}
+	} else {
+		/* Byte-level read: check all bytes are initialized */
+		for (i = 0; i < size; i++) {
+			int byte_spi = (off + i) / BPF_REG_SIZE;
+			int byte_off = (off + i) % BPF_REG_SIZE;
+			u8 type = href->coro_frame_slots[byte_spi].slot_type[byte_off];
+
+			if (type == STACK_MISC || type == STACK_ZERO ||
+			    type == STACK_SPILL)
+				continue;
+			verbose(env, "invalid read from coro_frame off %d+%d size %d\n",
+				off, i, size);
+			return -EACCES;
+		}
+		if (dst_regno >= 0)
+			mark_reg_unknown(env, state->regs, dst_regno);
+	}
+	return 0;
+}
+
+static int check_coro_frame_range_initialized(struct bpf_verifier_env *env,
+					int regno, int off, int access_size,
+					bool zero_size_allowed)
+{
+	struct bpf_reg_state *reg = reg_state(env, regno);
+	struct bpf_reference_state *href;
+	int i, min_off, max_off;
+
+	if (access_size == 0 && !zero_size_allowed) {
+		verbose(env, "invalid zero-sized read\n");
+		return -EACCES;
+	}
+
+	if (access_size == 0)
+		return 0;
+
+	href = find_coro_frame_ref(env->cur_state, reg->ref_obj_id);
+	if (!href) {
+		verbose(env, "R%d coro_frame pointer has no reference state\n", regno);
+		return -EINVAL;
+	}
+
+	if (tnum_is_const(reg->var_off)) {
+		min_off = max_off = reg->var_off.value + off;
+	} else {
+		min_off = reg->smin_value + off;
+		max_off = reg->umax_value + off;
+	}
+
+	if (min_off < 0 || max_off + access_size > href->coro_frame_size) {
+		verbose(env, "invalid coro_frame access off=[%d,%d] size=%d coro_frame_size=%u\n",
+			min_off, max_off, access_size, href->coro_frame_size);
+		return -EACCES;
+	}
+
+	for (i = min_off; i < max_off + access_size; i++) {
+		int byte_spi = i / BPF_REG_SIZE;
+		int byte_off = i % BPF_REG_SIZE;
+		u8 type = href->coro_frame_slots[byte_spi].slot_type[byte_off];
+
+		if (type == STACK_MISC || type == STACK_ZERO || type == STACK_SPILL)
+			continue;
+		verbose(env, "invalid read from coro_frame R%d off %d+%d size %d\n",
+			regno, min_off, i - min_off, access_size);
+		return -EACCES;
+	}
+
+	return 0;
+}
+
 /* check whether memory at (regno + off) is accessible for t = (read | write)
  * if t==write, value_regno is a register which value is stored into memory
  * if t==read, value_regno is a register which will receive the value from memory
@@ -7916,6 +8191,22 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		else
 			err = check_stack_write(env, regno, off, size,
 						value_regno, insn_idx);
+	} else if (base_type(reg->type) == PTR_TO_CORO_FRAME) {
+		if (type_may_be_null(reg->type)) {
+			verbose(env, "R%d invalid coro_frame access '%s'\n", regno,
+				reg_type_str(env, reg->type));
+			return -EACCES;
+		}
+		err = check_coro_frame_access_within_bounds(env, regno, off, size, t);
+		if (err)
+			return err;
+
+		if (t == BPF_READ)
+			err = check_coro_frame_read(env, regno, off, size,
+					      value_regno);
+		else
+			err = check_coro_frame_write(env, regno, off, size,
+					       value_regno, insn_idx);
 	} else if (reg_is_pkt_pointer(reg)) {
 		if (t == BPF_WRITE && !may_access_direct_pkt_data(env, NULL, t)) {
 			verbose(env, "cannot write into packet\n");
@@ -8438,6 +8729,9 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
 				env,
 				regno, 0, access_size,
 				zero_size_allowed, access_type, meta);
+	case PTR_TO_CORO_FRAME:
+		return check_coro_frame_range_initialized(env, regno, reg->var_off.value,
+						    access_size, zero_size_allowed);
 	case PTR_TO_BTF_ID:
 		return check_ptr_to_btf_access(env, regs, regno, 0,
 					       access_size, BPF_READ, -1);
@@ -9400,6 +9694,7 @@ static const struct bpf_reg_types mem_types = {
 		PTR_TO_MEM,
 		PTR_TO_MEM | MEM_RINGBUF,
 		PTR_TO_BUF,
+		PTR_TO_CORO_FRAME,
 		PTR_TO_BTF_ID | PTR_TRUSTED,
 	},
 };
@@ -9688,6 +9983,7 @@ static int check_func_arg_reg_off(struct bpf_verifier_env *env,
 	case PTR_TO_MEM:
 	case PTR_TO_MEM | MEM_RDONLY:
 	case PTR_TO_MEM | MEM_RINGBUF:
+	case PTR_TO_CORO_FRAME:
 	case PTR_TO_BUF:
 	case PTR_TO_BUF | MEM_RDONLY:
 	case PTR_TO_ARENA:
@@ -10610,7 +10906,8 @@ static int release_reference_nomark(struct bpf_verifier_state *state, int ref_ob
 	int i;
 
 	for (i = 0; i < state->acquired_refs; i++) {
-		if (state->refs[i].type != REF_TYPE_PTR)
+		if (state->refs[i].type != REF_TYPE_PTR &&
+		    state->refs[i].type != REF_TYPE_CORO_FRAME)
 			continue;
 		if (state->refs[i].id == ref_obj_id) {
 			release_reference_state(state, i);
@@ -11499,7 +11796,8 @@ static int check_reference_leak(struct bpf_verifier_env *env, bool exception_exi
 		return 0;
 
 	for (i = 0; i < state->acquired_refs; i++) {
-		if (state->refs[i].type != REF_TYPE_PTR)
+		if (state->refs[i].type != REF_TYPE_PTR &&
+		    state->refs[i].type != REF_TYPE_CORO_FRAME)
 			continue;
 		/* Allow struct_ops programs to return a referenced kptr back to
 		 * kernel. Type checks are performed later in check_return_code.
@@ -12594,6 +12892,7 @@ enum special_kfunc_type {
 	KF_bpf_session_is_return,
 	KF_bpf_stream_vprintk,
 	KF_bpf_stream_print_stack,
+	KF_bpf_coro_frame_alloc,
 };
 
 BTF_ID_LIST(special_kfunc_list)
@@ -12674,6 +12973,7 @@ BTF_ID(func, bpf_arena_reserve_pages)
 BTF_ID(func, bpf_session_is_return)
 BTF_ID(func, bpf_stream_vprintk)
 BTF_ID(func, bpf_stream_print_stack)
+BTF_ID(func, bpf_coro_frame_alloc)
 
 static bool is_task_work_add_kfunc(u32 func_id)
 {
@@ -14138,6 +14438,13 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_ca
 		 * because packet slices are not refcounted (see
 		 * dynptr_type_refcounted)
 		 */
+	} else if (meta->func_id == special_kfunc_list[KF_bpf_coro_frame_alloc]) {
+		mark_reg_known_zero(env, regs, BPF_REG_0);
+		regs[BPF_REG_0].type = PTR_TO_CORO_FRAME;
+		/* Round up to BPF_REG_SIZE so that coro_frame_size can be used
+		 * directly as byte count for slot arrays without further rounding.
+		 */
+		regs[BPF_REG_0].mem_size = round_up(meta->arg_constant.value, BPF_REG_SIZE);
 	} else {
 		return 0;
 	}
@@ -14394,7 +14701,8 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		if (meta.btf != btf_vmlinux ||
 		    (meta.func_id != special_kfunc_list[KF_bpf_obj_new_impl] &&
 		     meta.func_id != special_kfunc_list[KF_bpf_percpu_obj_new_impl] &&
-		     meta.func_id != special_kfunc_list[KF_bpf_refcount_acquire_impl])) {
+		     meta.func_id != special_kfunc_list[KF_bpf_refcount_acquire_impl] &&
+		     meta.func_id != special_kfunc_list[KF_bpf_coro_frame_alloc])) {
 			verbose(env, "acquire kernel function does not return PTR_TO_BTF_ID\n");
 			return -EINVAL;
 		}
@@ -14497,6 +14805,24 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			if (is_kfunc_ret_null(&meta))
 				regs[BPF_REG_0].id = id;
 			regs[BPF_REG_0].ref_obj_id = id;
+
+			if (base_type(regs[BPF_REG_0].type) == PTR_TO_CORO_FRAME) {
+				struct bpf_verifier_state *vs = env->cur_state;
+				struct bpf_reference_state *ref;
+				/* mem_size already rounded up in check_special_kfunc */
+				u32 coro_frame_size = regs[BPF_REG_0].mem_size;
+				u32 num_slots = coro_frame_size / BPF_REG_SIZE;
+
+				/* Convert the just-acquired ref to a coro_frame ref */
+				ref = &vs->refs[vs->acquired_refs - 1];
+				ref->type = REF_TYPE_CORO_FRAME;
+				ref->coro_frame_size = coro_frame_size;
+				ref->coro_frame_slots = kvcalloc(num_slots,
+								 sizeof(struct bpf_stack_state),
+								 GFP_KERNEL_ACCOUNT);
+				if (!ref->coro_frame_slots)
+					return -ENOMEM;
+			}
 		} else if (is_rbtree_node_type(ptr_type) || is_list_node_type(ptr_type)) {
 			ref_set_non_owning(env, &regs[BPF_REG_0]);
 		}
@@ -14977,6 +15303,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 	case PTR_TO_TP_BUFFER:
 	case PTR_TO_BTF_ID:
 	case PTR_TO_MEM:
+	case PTR_TO_CORO_FRAME:
 	case PTR_TO_BUF:
 	case PTR_TO_FUNC:
 	case CONST_PTR_TO_DYNPTR:
@@ -19975,6 +20302,7 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 	case PTR_TO_MAP_KEY:
 	case PTR_TO_MAP_VALUE:
 	case PTR_TO_MEM:
+	case PTR_TO_CORO_FRAME:
 	case PTR_TO_BUF:
 	case PTR_TO_TP_BUFFER:
 		/* If the new min/max/var_off satisfy the old ones and
@@ -20052,47 +20380,52 @@ static struct bpf_reg_state *scalar_reg_for_stack(struct bpf_verifier_env *env,
 	return NULL;
 }
 
-static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
-		      struct bpf_func_state *cur, struct bpf_idmap *idmap,
-		      enum exact_level exact)
+/* Compare slot states of two slot arrays for state pruning/equivalence.
+ *
+ * Used for both stack slots (from bpf_func_state) and coro_frame slots
+ * (from bpf_reference_state). Walk slots of the old (explored) state
+ * and verify the current state is at least as specific. Additional slots
+ * in the current state beyond old_nbytes are ignored, since the explored
+ * (safe) state didn't use them.
+ */
+static bool slotsafe(struct bpf_verifier_env *env,
+		     struct bpf_stack_state *old_slots, int old_nbytes,
+		     struct bpf_stack_state *cur_slots, int cur_nbytes,
+		     struct bpf_idmap *idmap, enum exact_level exact)
 {
 	int i, spi;
 
-	/* walk slots of the explored stack and ignore any additional
-	 * slots in the current stack, since explored(safe) state
-	 * didn't use them
-	 */
-	for (i = 0; i < old->allocated_stack; i++) {
+	for (i = 0; i < old_nbytes; i++) {
 		struct bpf_reg_state *old_reg, *cur_reg;
 
 		spi = i / BPF_REG_SIZE;
 
 		if (exact == EXACT &&
-		    (i >= cur->allocated_stack ||
-		     old->stack[spi].slot_type[i % BPF_REG_SIZE] !=
-		     cur->stack[spi].slot_type[i % BPF_REG_SIZE]))
+		    (i >= cur_nbytes ||
+		     old_slots[spi].slot_type[i % BPF_REG_SIZE] !=
+		     cur_slots[spi].slot_type[i % BPF_REG_SIZE]))
 			return false;
 
-		if (old->stack[spi].slot_type[i % BPF_REG_SIZE] == STACK_INVALID)
+		if (old_slots[spi].slot_type[i % BPF_REG_SIZE] == STACK_INVALID)
 			continue;
 
 		if (env->allow_uninit_stack &&
-		    old->stack[spi].slot_type[i % BPF_REG_SIZE] == STACK_MISC)
+		    old_slots[spi].slot_type[i % BPF_REG_SIZE] == STACK_MISC)
 			continue;
 
-		/* explored stack has more populated slots than current stack
+		/* explored state has more populated slots than current state
 		 * and these slots were used
 		 */
-		if (i >= cur->allocated_stack)
+		if (i >= cur_nbytes)
 			return false;
 
 		/* 64-bit scalar spill vs all slots MISC and vice versa.
 		 * Load from all slots MISC produces unbound scalar.
-		 * Construct a fake register for such stack and call
+		 * Construct a fake register for such slot and call
 		 * regsafe() to ensure scalar ids are compared.
 		 */
-		old_reg = scalar_reg_for_stack(env, &old->stack[spi]);
-		cur_reg = scalar_reg_for_stack(env, &cur->stack[spi]);
+		old_reg = scalar_reg_for_stack(env, &old_slots[spi]);
+		cur_reg = scalar_reg_for_stack(env, &cur_slots[spi]);
 		if (old_reg && cur_reg) {
 			if (!regsafe(env, old_reg, cur_reg, idmap, exact))
 				return false;
@@ -20100,27 +20433,27 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 			continue;
 		}
 
-		/* if old state was safe with misc data in the stack
-		 * it will be safe with zero-initialized stack.
+		/* if old state was safe with misc data in the slot
+		 * it will be safe with zero-initialized data.
 		 * The opposite is not true
 		 */
-		if (old->stack[spi].slot_type[i % BPF_REG_SIZE] == STACK_MISC &&
-		    cur->stack[spi].slot_type[i % BPF_REG_SIZE] == STACK_ZERO)
+		if (old_slots[spi].slot_type[i % BPF_REG_SIZE] == STACK_MISC &&
+		    cur_slots[spi].slot_type[i % BPF_REG_SIZE] == STACK_ZERO)
 			continue;
-		if (old->stack[spi].slot_type[i % BPF_REG_SIZE] !=
-		    cur->stack[spi].slot_type[i % BPF_REG_SIZE])
+		if (old_slots[spi].slot_type[i % BPF_REG_SIZE] !=
+		    cur_slots[spi].slot_type[i % BPF_REG_SIZE])
 			/* Ex: old explored (safe) state has STACK_SPILL in
-			 * this stack slot, but current has STACK_MISC ->
-			 * this verifier states are not equivalent,
+			 * this slot, but current has STACK_MISC ->
+			 * these verifier states are not equivalent,
 			 * return false to continue verification of this path
 			 */
 			return false;
 		if (i % BPF_REG_SIZE != BPF_REG_SIZE - 1)
 			continue;
 		/* Both old and cur are having same slot_type */
-		switch (old->stack[spi].slot_type[BPF_REG_SIZE - 1]) {
+		switch (old_slots[spi].slot_type[BPF_REG_SIZE - 1]) {
 		case STACK_SPILL:
-			/* when explored and current stack slot are both storing
+			/* when explored and current slot are both storing
 			 * spilled registers, check that stored pointers types
 			 * are the same as well.
 			 * Ex: explored safe path could have stored
@@ -20130,21 +20463,21 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 			 * such verifier states are not equivalent.
 			 * return false to continue verification of this path
 			 */
-			if (!regsafe(env, &old->stack[spi].spilled_ptr,
-				     &cur->stack[spi].spilled_ptr, idmap, exact))
+			if (!regsafe(env, &old_slots[spi].spilled_ptr,
+				     &cur_slots[spi].spilled_ptr, idmap, exact))
 				return false;
 			break;
 		case STACK_DYNPTR:
-			old_reg = &old->stack[spi].spilled_ptr;
-			cur_reg = &cur->stack[spi].spilled_ptr;
+			old_reg = &old_slots[spi].spilled_ptr;
+			cur_reg = &cur_slots[spi].spilled_ptr;
 			if (old_reg->dynptr.type != cur_reg->dynptr.type ||
 			    old_reg->dynptr.first_slot != cur_reg->dynptr.first_slot ||
 			    !check_ids(old_reg->ref_obj_id, cur_reg->ref_obj_id, idmap))
 				return false;
 			break;
 		case STACK_ITER:
-			old_reg = &old->stack[spi].spilled_ptr;
-			cur_reg = &cur->stack[spi].spilled_ptr;
+			old_reg = &old_slots[spi].spilled_ptr;
+			cur_reg = &cur_slots[spi].spilled_ptr;
 			/* iter.depth is not compared between states as it
 			 * doesn't matter for correctness and would otherwise
 			 * prevent convergence; we maintain it only to prevent
@@ -20159,8 +20492,8 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 				return false;
 			break;
 		case STACK_IRQ_FLAG:
-			old_reg = &old->stack[spi].spilled_ptr;
-			cur_reg = &cur->stack[spi].spilled_ptr;
+			old_reg = &old_slots[spi].spilled_ptr;
+			cur_reg = &cur_slots[spi].spilled_ptr;
 			if (!check_ids(old_reg->ref_obj_id, cur_reg->ref_obj_id, idmap) ||
 			    old_reg->irq.kfunc_class != cur_reg->irq.kfunc_class)
 				return false;
@@ -20177,7 +20510,27 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 	return true;
 }
 
-static bool refsafe(struct bpf_verifier_state *old, struct bpf_verifier_state *cur,
+static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
+		      struct bpf_func_state *cur, struct bpf_idmap *idmap,
+		      enum exact_level exact)
+{
+	return slotsafe(env, old->stack, old->allocated_stack,
+			cur->stack, cur->allocated_stack, idmap, exact);
+}
+
+static bool coro_frame_safe(struct bpf_verifier_env *env,
+			    struct bpf_reference_state *old_ref,
+			    struct bpf_reference_state *cur_ref,
+			    struct bpf_idmap *idmap, enum exact_level exact)
+{
+	return slotsafe(env,
+			old_ref->coro_frame_slots, old_ref->coro_frame_size,
+			cur_ref->coro_frame_slots, cur_ref->coro_frame_size,
+			idmap, exact);
+}
+
+static bool refsafe(struct bpf_verifier_env *env,
+		    struct bpf_verifier_state *old, struct bpf_verifier_state *cur,
 		    struct bpf_idmap *idmap)
 {
 	int i;
@@ -20213,6 +20566,12 @@ static bool refsafe(struct bpf_verifier_state *old, struct bpf_verifier_state *c
 		case REF_TYPE_RES_LOCK:
 		case REF_TYPE_RES_LOCK_IRQ:
 			if (old->refs[i].ptr != cur->refs[i].ptr)
+				return false;
+			break;
+		case REF_TYPE_CORO_FRAME:
+			if (old->refs[i].coro_frame_size != cur->refs[i].coro_frame_size)
+				return false;
+			if (!coro_frame_safe(env, &old->refs[i], &cur->refs[i], idmap, EXACT))
 				return false;
 			break;
 		default:
@@ -20301,7 +20660,7 @@ static bool states_equal(struct bpf_verifier_env *env,
 	if (old->in_sleepable != cur->in_sleepable)
 		return false;
 
-	if (!refsafe(old, cur, &env->idmap_scratch))
+	if (!refsafe(env, old, cur, &env->idmap_scratch))
 		return false;
 
 	/* for states to be equal callsites have to be the same
