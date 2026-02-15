@@ -2334,6 +2334,10 @@ __bpf_kfunc void bpf_coro_frame_free(void *p)
 	kfree_nolock(p);
 }
 
+__bpf_kfunc void bpf_coro_suspend(void *p__ign)
+{
+}
+
 /* Must be called under migrate_disable(), as required by bpf_mem_free */
 void __bpf_obj_drop_impl(void *p, const struct btf_record *rec, bool percpu)
 {
@@ -4700,6 +4704,7 @@ BTF_ID_FLAGS(func, bpf_dynptr_file_discard)
 BTF_ID_FLAGS(func, bpf_timer_cancel_async)
 BTF_ID_FLAGS(func, bpf_coro_frame_alloc, KF_ACQUIRE | KF_RET_NULL | KF_IMPLICIT_ARGS)
 BTF_ID_FLAGS(func, bpf_coro_frame_free, KF_RELEASE)
+BTF_ID_FLAGS(func, bpf_coro_suspend)
 BTF_KFUNCS_END(common_btf_ids)
 
 static const struct btf_kfunc_id_set common_kfunc_set = {
