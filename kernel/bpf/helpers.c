@@ -2329,9 +2329,9 @@ __bpf_kfunc void *bpf_coro_frame_alloc(u64 size__k, void *ctx__ign, struct bpf_p
 	return kmalloc_nolock(size__k, 0, NUMA_NO_NODE);
 }
 
-__bpf_kfunc void bpf_coro_frame_free(void *p)
+__bpf_kfunc void bpf_coro_frame_free(void *p__coro_frame)
 {
-	kfree_nolock(p);
+	kfree_nolock(p__coro_frame);
 }
 
 __bpf_kfunc void bpf_coro_suspend(void *p__ign)

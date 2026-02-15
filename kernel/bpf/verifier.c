@@ -12637,6 +12637,11 @@ static bool is_kfunc_arg_irq_flag(const struct btf *btf, const struct btf_param 
 	return btf_param_match_suffix(btf, arg, "__irq_flag");
 }
 
+static bool is_kfunc_arg_coro_frame(const struct btf *btf, const struct btf_param *arg)
+{
+	return btf_param_match_suffix(btf, arg, "__coro_frame");
+}
+
 static bool is_kfunc_arg_scalar_with_name(const struct btf *btf,
 					  const struct btf_param *arg,
 					  const char *name)
@@ -12832,6 +12837,7 @@ enum kfunc_ptr_arg_type {
 	KF_ARG_PTR_TO_IRQ_FLAG,
 	KF_ARG_PTR_TO_RES_SPIN_LOCK,
 	KF_ARG_PTR_TO_TASK_WORK,
+	KF_ARG_PTR_TO_CORO_FRAME,
 };
 
 enum special_kfunc_type {
@@ -13094,6 +13100,9 @@ get_kfunc_ptr_arg_type(struct bpf_verifier_env *env,
 
 	if (is_kfunc_arg_res_spin_lock(meta->btf, &args[argno]))
 		return KF_ARG_PTR_TO_RES_SPIN_LOCK;
+
+	if (is_kfunc_arg_coro_frame(meta->btf, &args[argno]))
+		return KF_ARG_PTR_TO_CORO_FRAME;
 
 	if ((base_type(reg->type) == PTR_TO_BTF_ID || reg2btf_ids[base_type(reg->type)])) {
 		if (!btf_type_is_struct(ref_t)) {
@@ -13882,6 +13891,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 		case KF_ARG_PTR_TO_TASK_WORK:
 		case KF_ARG_PTR_TO_IRQ_FLAG:
 		case KF_ARG_PTR_TO_RES_SPIN_LOCK:
+		case KF_ARG_PTR_TO_CORO_FRAME:
 			break;
 		default:
 			verifier_bug(env, "unknown kfunc arg type %d", kf_arg_type);
@@ -14227,6 +14237,13 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				return ret;
 			break;
 		}
+		case KF_ARG_PTR_TO_CORO_FRAME:
+			if (base_type(reg->type) != PTR_TO_CORO_FRAME) {
+				verbose(env, "arg#%d expected coro_frame pointer, but got %s\n",
+					i, reg_type_str(env, reg->type));
+				return -EINVAL;
+			}
+			break;
 		}
 	}
 
