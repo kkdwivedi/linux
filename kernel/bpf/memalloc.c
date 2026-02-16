@@ -112,6 +112,9 @@ struct bpf_mem_cache {
 	atomic_t call_rcu_in_progress;
 	struct llist_head free_llist_extra_rcu;
 
+	void (*dtor)(void *ptr, void *ctx);
+	void *dtor_ctx;
+
 	/* list of objects to be freed after RCU tasks trace GP */
 	struct llist_head free_by_rcu_ttrace;
 	struct llist_head waiting_for_gp_ttrace;
@@ -260,12 +263,15 @@ static void free_one(void *obj, bool percpu)
 	kfree(obj);
 }
 
-static int free_all(struct llist_node *llnode, bool percpu)
+static int free_all(struct llist_node *llnode, bool percpu,
+		    struct bpf_mem_cache *c)
 {
 	struct llist_node *pos, *t;
 	int cnt = 0;
 
 	llist_for_each_safe(pos, t, llnode) {
+		if (c && c->dtor)
+			c->dtor((void *)pos + LLIST_NODE_SZ, c->dtor_ctx);
 		free_one(pos, percpu);
 		cnt++;
 	}
@@ -276,7 +282,7 @@ static void __free_rcu(struct rcu_head *head)
 {
 	struct bpf_mem_cache *c = container_of(head, struct bpf_mem_cache, rcu_ttrace);
 
-	free_all(llist_del_all(&c->waiting_for_gp_ttrace), !!c->percpu_size);
+	free_all(llist_del_all(&c->waiting_for_gp_ttrace), !!c->percpu_size, NULL);
 	atomic_set(&c->call_rcu_ttrace_in_progress, 0);
 }
 
@@ -308,7 +314,7 @@ static void do_call_rcu_ttrace(struct bpf_mem_cache *c)
 	if (atomic_xchg(&c->call_rcu_ttrace_in_progress, 1)) {
 		if (unlikely(READ_ONCE(c->draining))) {
 			llnode = llist_del_all(&c->free_by_rcu_ttrace);
-			free_all(llnode, !!c->percpu_size);
+			free_all(llnode, !!c->percpu_size, NULL);
 		}
 		return;
 	}
@@ -417,7 +423,7 @@ static void check_free_by_rcu(struct bpf_mem_cache *c)
 	dec_active(c, &flags);
 
 	if (unlikely(READ_ONCE(c->draining))) {
-		free_all(llist_del_all(&c->waiting_for_gp), !!c->percpu_size);
+		free_all(llist_del_all(&c->waiting_for_gp), !!c->percpu_size, NULL);
 		atomic_set(&c->call_rcu_in_progress, 0);
 	} else {
 		call_rcu_hurry(&c->rcu, __free_by_rcu);
@@ -635,13 +641,13 @@ static void drain_mem_cache(struct bpf_mem_cache *c)
 	 * Except for waiting_for_gp_ttrace list, there are no concurrent operations
 	 * on these lists, so it is safe to use __llist_del_all().
 	 */
-	free_all(llist_del_all(&c->free_by_rcu_ttrace), percpu);
-	free_all(llist_del_all(&c->waiting_for_gp_ttrace), percpu);
-	free_all(__llist_del_all(&c->free_llist), percpu);
-	free_all(__llist_del_all(&c->free_llist_extra), percpu);
-	free_all(__llist_del_all(&c->free_by_rcu), percpu);
-	free_all(__llist_del_all(&c->free_llist_extra_rcu), percpu);
-	free_all(llist_del_all(&c->waiting_for_gp), percpu);
+	free_all(llist_del_all(&c->free_by_rcu_ttrace), percpu, c);
+	free_all(llist_del_all(&c->waiting_for_gp_ttrace), percpu, c);
+	free_all(__llist_del_all(&c->free_llist), percpu, c);
+	free_all(__llist_del_all(&c->free_llist_extra), percpu, c);
+	free_all(__llist_del_all(&c->free_by_rcu), percpu, c);
+	free_all(__llist_del_all(&c->free_llist_extra_rcu), percpu, c);
+	free_all(llist_del_all(&c->waiting_for_gp), percpu, c);
 }
 
 static void check_mem_cache(struct bpf_mem_cache *c)
@@ -773,6 +779,22 @@ void bpf_mem_alloc_destroy(struct bpf_mem_alloc *ma)
 		}
 		obj_cgroup_put(ma->objcg);
 		destroy_mem_alloc(ma, rcu_in_progress);
+	}
+}
+
+void bpf_mem_alloc_set_dtor(struct bpf_mem_alloc *ma,
+			    void (*dtor)(void *ptr, void *ctx), void *ctx)
+{
+	struct bpf_mem_cache *c;
+	int cpu;
+
+	if (!ma->cache)
+		return;
+
+	for_each_possible_cpu(cpu) {
+		c = per_cpu_ptr(ma->cache, cpu);
+		c->dtor = dtor;
+		c->dtor_ctx = ctx;
 	}
 }
 

@@ -48,4 +48,7 @@ void bpf_mem_cache_free_rcu(struct bpf_mem_alloc *ma, void *ptr);
 void bpf_mem_cache_raw_free(void *ptr);
 void *bpf_mem_cache_alloc_flags(struct bpf_mem_alloc *ma, gfp_t flags);
 
+void bpf_mem_alloc_set_dtor(struct bpf_mem_alloc *ma,
+			    void (*dtor)(void *ptr, void *ctx), void *ctx);
+
 #endif /* _BPF_MEM_ALLOC_H */

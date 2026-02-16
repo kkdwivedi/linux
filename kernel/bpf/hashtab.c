@@ -399,6 +399,8 @@ static int alloc_extra_elems(struct bpf_htab *htab)
 	return 0;
 }
 
+static void htab_elem_dtor(void *ptr, void *ctx);
+
 /* Called from syscall */
 static int htab_map_alloc_check(union bpf_attr *attr)
 {
@@ -565,6 +567,8 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 		err = bpf_mem_alloc_init(&htab->ma, htab->elem_size, false);
 		if (err)
 			goto free_map_locked;
+		if (htab->map.record)
+			bpf_mem_alloc_set_dtor(&htab->ma, htab_elem_dtor, htab);
 		if (percpu) {
 			err = bpf_mem_alloc_init(&htab->pcpu_ma,
 						 round_up(htab->map.value_size, 8), true);
@@ -1535,6 +1539,15 @@ static void htab_map_free_internal_structs(struct bpf_map *map)
 		htab_free_prealloced_internal_structs(htab);
 	else
 		htab_free_malloced_internal_structs(htab);
+}
+
+static void htab_elem_dtor(void *ptr, void *ctx)
+{
+	struct bpf_htab *htab = ctx;
+	struct htab_elem *elem = ptr;
+
+	bpf_obj_free_fields(htab->map.record,
+			    htab_elem_value(elem, htab->map.key_size));
 }
 
 /* Called when map->refcnt goes to zero, either from workqueue or from syscall */
