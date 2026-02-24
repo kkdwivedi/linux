@@ -1103,6 +1103,7 @@ static void btf_dump_emit_struct_def(struct btf_dump *d,
 		const char *fname;
 		int m_off, m_sz, m_align;
 		bool in_bitfield;
+		bool needs_cpp_guard;
 
 		fname = btf_name_of(d, m->name_off);
 		/*
@@ -1111,16 +1112,13 @@ static void btf_dump_emit_struct_def(struct btf_dump *d,
 		 * the struct tag is injected into the declaration scope.
 		 * This also applies to members of nested anonymous
 		 * structs/unions which are injected into the enclosing
-		 * named scope.  Suffix such members with ___cpp.
+		 * named scope.  Emit both variants guarded by
+		 * __cplusplus.
 		 */
-		if (fname[0] && d->enclosing_name &&
-		    d->enclosing_name[0] &&
-		    strcmp(fname, d->enclosing_name) == 0) {
-			static char buf[256];
+		needs_cpp_guard = fname[0] && d->enclosing_name &&
+				  d->enclosing_name[0] &&
+				  strcmp(fname, d->enclosing_name) == 0;
 
-			snprintf(buf, sizeof(buf), "%s___cpp", fname);
-			fname = buf;
-		}
 		m_sz = btf_member_bitfield_size(t, i);
 		m_off = btf_member_bit_offset(t, i);
 		m_align = packed ? 1 : btf__align_of(d->btf, m->type);
@@ -1128,6 +1126,20 @@ static void btf_dump_emit_struct_def(struct btf_dump *d,
 		in_bitfield = prev_bitfield && m_sz != 0;
 
 		btf_dump_emit_bit_padding(d, off, m_off, m_align, in_bitfield, lvl + 1);
+
+		if (needs_cpp_guard) {
+			static char buf[256];
+
+			snprintf(buf, sizeof(buf), "%s___cpp", fname);
+			btf_dump_printf(d, "\n#ifdef __cplusplus");
+			btf_dump_printf(d, "\n%s", pfx(lvl + 1));
+			btf_dump_emit_type_decl(d, m->type, buf, lvl + 1);
+			if (m_sz)
+				btf_dump_printf(d, ": %d", m_sz);
+			btf_dump_printf(d, ";");
+			btf_dump_printf(d, "\n#else");
+		}
+
 		btf_dump_printf(d, "\n%s", pfx(lvl + 1));
 		btf_dump_emit_type_decl(d, m->type, fname, lvl + 1);
 
@@ -1142,6 +1154,9 @@ static void btf_dump_emit_struct_def(struct btf_dump *d,
 		}
 
 		btf_dump_printf(d, ";");
+
+		if (needs_cpp_guard)
+			btf_dump_printf(d, "\n#endif");
 	}
 
 	/* pad at the end, if necessary */
