@@ -941,11 +941,21 @@ static bool btf_name_valid_identifier(const struct btf *btf, u32 offset)
 	while (*src && src < src_limit) {
 		if (!__btf_name_char_ok(*src, false, cpp_ok)) {
 			if (!cpp_ok) {
-				/* Retry: allow C++ characters (templates,
-				 * namespaces, operator names).
+				/* Only C++ structural characters can establish
+				 * C++ context: '<' for templates, ':' for
+				 * namespaces, '(' ')' '~' for operator names.
+				 * Other C++ chars like '*', '&', ' ', ',' are
+				 * only valid after context is established.
 				 */
-				cpp_ok = true;
-				continue;
+				switch (*src) {
+				case '<':
+				case ':':
+				case '(':
+				case ')':
+				case '~':
+					cpp_ok = true;
+					continue;
+				}
 			}
 			return false;
 		}
