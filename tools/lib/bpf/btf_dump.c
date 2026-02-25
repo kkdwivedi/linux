@@ -1082,7 +1082,7 @@ static void btf_dump_emit_struct_def(struct btf_dump *d,
 
 	align = btf__align_of(d->btf, id);
 	packed = is_struct ? btf_is_struct_packed(d->btf, id, t) : 0;
-	struct_name = t->name_off ? btf_name_of(d, t->name_off) : "";
+	struct_name = btf_dump_type_name(d, id);
 
 	/*
 	 * Track the enclosing named struct/union so that members of
