@@ -2447,6 +2447,7 @@ static void bpf_map_owner_init(struct bpf_map_owner *owner, const struct bpf_pro
 	owner->xdp_has_frags = aux->xdp_has_frags;
 	owner->sleepable = fp->sleepable;
 	owner->kprobe_write_ctx = aux->kprobe_write_ctx;
+	owner->call_get_func_ip = fp->call_get_func_ip;
 	owner->expected_attach_type = fp->expected_attach_type;
 	owner->attach_func_proto = aux->attach_func_proto;
 	for_each_cgroup_storage_type(i)
@@ -2468,6 +2469,11 @@ static bool bpf_map_owner_matches(const struct bpf_map *map, const struct bpf_pr
 	    owner->sleepable != fp->sleepable ||
 	    owner->kprobe_write_ctx != aux->kprobe_write_ctx)
 		return false;
+
+	if (bpf_prog_has_trampoline(fp)) {
+		if (owner->call_get_func_ip != fp->call_get_func_ip)
+			return false;
+	}
 
 	if (map->map_type == BPF_MAP_TYPE_PROG_ARRAY &&
 	    owner->expected_attach_type != fp->expected_attach_type)
