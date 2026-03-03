@@ -2446,6 +2446,7 @@ static void bpf_map_owner_init(struct bpf_map_owner *owner, const struct bpf_pro
 	owner->jited = fp->jited;
 	owner->xdp_has_frags = aux->xdp_has_frags;
 	owner->sleepable = fp->sleepable;
+	owner->kprobe_write_ctx = aux->kprobe_write_ctx;
 	owner->expected_attach_type = fp->expected_attach_type;
 	owner->attach_func_proto = aux->attach_func_proto;
 	for_each_cgroup_storage_type(i)
@@ -2464,7 +2465,8 @@ static bool bpf_map_owner_matches(const struct bpf_map *map, const struct bpf_pr
 	if (owner->type  != prog_type ||
 	    owner->jited != fp->jited ||
 	    owner->xdp_has_frags != aux->xdp_has_frags ||
-	    owner->sleepable != fp->sleepable)
+	    owner->sleepable != fp->sleepable ||
+	    owner->kprobe_write_ctx != aux->kprobe_write_ctx)
 		return false;
 
 	if (map->map_type == BPF_MAP_TYPE_PROG_ARRAY &&
