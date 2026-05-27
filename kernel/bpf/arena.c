@@ -515,6 +515,15 @@ static void arena_vm_close(struct vm_area_struct *vma)
 	kfree(vml);
 }
 
+static vm_fault_t arena_vm_insert_page(struct vm_fault *vmf, struct page *page)
+{
+	unsigned long pfn = page_to_pfn(page);
+
+	if (vmf->flags & FAULT_FLAG_WRITE)
+		return vmf_insert_mixed_mkwrite(vmf->vma, vmf->address, pfn);
+	return vmf_insert_mixed(vmf->vma, vmf->address, pfn);
+}
+
 static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 {
 	struct bpf_map *map = vmf->vma->vm_file->private_data;
@@ -528,9 +537,13 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 	kbase = bpf_arena_get_kern_vm_start(arena);
 	kaddr = kbase + (u32)(vmf->address);
 
-	if (raw_res_spin_lock_irqsave(&arena->spinlock, flags))
+	mutex_lock(&arena->lock);
+
+	if (raw_res_spin_lock_irqsave(&arena->spinlock, flags)) {
+		mutex_unlock(&arena->lock);
 		/* Make a reasonable effort to address impossible case */
 		return VM_FAULT_RETRY;
+	}
 
 	page = vmalloc_to_page((void *)kaddr);
 	if (page) {
@@ -568,14 +581,15 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 	flush_vmap_cache(kaddr, PAGE_SIZE);
 	bpf_map_memcg_exit(old_memcg, new_memcg);
 out:
-	page_ref_add(page, 1);
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
-	vmf->page = page;
-	return 0;
+	ret = arena_vm_insert_page(vmf, page);
+	mutex_unlock(&arena->lock);
+	return ret;
 out_sigsegv_memcg:
 	bpf_map_memcg_exit(old_memcg, new_memcg);
 out_sigsegv:
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+	mutex_unlock(&arena->lock);
 	return VM_FAULT_SIGSEGV;
 }
 
@@ -654,9 +668,11 @@ static int arena_map_mmap(struct bpf_map *map, struct vm_area_struct *vma)
 	 * bpf_map_mmap() checks that it's being mmaped as VM_SHARED and
 	 * clears VM_MAYEXEC. Set VM_DONTEXPAND to avoid potential change
 	 * of user_vm_start. Set VM_DONTCOPY to prevent arena VMA from
-	 * being copied into the child process on fork.
+	 * being copied into the child process on fork. Set VM_MIXEDMAP
+	 * because arena pages are inserted by the fault handler and are
+	 * map-owned PFNs rather than file page-cache pages.
 	 */
-	vm_flags_set(vma, VM_DONTEXPAND | VM_DONTCOPY);
+	vm_flags_set(vma, VM_DONTEXPAND | VM_DONTCOPY | VM_MIXEDMAP);
 	vma->vm_ops = &arena_vm_ops;
 	return 0;
 }
@@ -899,12 +915,7 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 
 	llist_for_each_safe(pos, t, __llist_del_all(&free_pages)) {
 		page = llist_entry(pos, struct page, pcp_llist);
-		if (page_cnt == 1 && page_mapped(page)) /* mapped by some user process */
-			/* Optimization for the common case of page_cnt==1:
-			 * If page wasn't mapped into some user vma there
-			 * is no need to call zap_pages which is slow. When
-			 * page_cnt is big it's faster to do the batched zap.
-			 */
+		if (page_cnt == 1)
 			zap_pages(arena, full_uaddr, 1);
 		__free_page(page);
 	}
