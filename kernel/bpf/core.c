@@ -2502,6 +2502,48 @@ static bool bpf_map_owner_matches(const struct bpf_map *map, const struct bpf_pr
 	return true;
 }
 
+int bpf_prog_check_freplace_attach(const struct bpf_prog *prog,
+				   const struct bpf_prog *tgt_prog,
+				   int subprog, struct bpf_verifier_log *log)
+{
+	struct bpf_prog_aux *aux = tgt_prog->aux;
+	const struct bpf_prog_aux *tgt_aux;
+
+	tgt_aux = aux->func ? aux->func[subprog]->aux : aux;
+
+	if (prog->aux->changes_pkt_data && !tgt_aux->changes_pkt_data) {
+		bpf_log(log, "Extension program changes packet data, while original does not\n");
+		return -EINVAL;
+	}
+
+	if (prog->aux->might_sleep && !tgt_aux->might_sleep) {
+		bpf_log(log, "Extension program may sleep, while original does not\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+int bpf_prog_check_freplace_runtime(const struct bpf_prog *prog,
+				    const struct bpf_prog *tgt_prog)
+{
+	/* It is to prevent modifying struct pt_regs via kprobe_write_ctx=true
+	 * freplace prog. Without this check, kprobe_write_ctx=true freplace
+	 * prog is allowed to attach to kprobe_write_ctx=false kprobe prog, and
+	 * then modify the registers of the kprobe prog's target kernel
+	 * function.
+	 *
+	 * This also blocks the combination of uprobe+freplace, because it is
+	 * unable to recognize the use of the tgt_prog as an uprobe or a kprobe
+	 * by tgt_prog itself. At attach time, uprobe/kprobe is recognized by
+	 * the target perf event flags in __perf_event_set_bpf_prog().
+	 */
+	if (prog->aux->kprobe_write_ctx != tgt_prog->aux->kprobe_write_ctx)
+		return -EINVAL;
+
+	return 0;
+}
+
 static bool __bpf_prog_map_compatible(struct bpf_map *map,
 				      const struct bpf_prog *fp)
 {

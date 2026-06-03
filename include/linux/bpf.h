@@ -2424,6 +2424,11 @@ static inline bool map_type_contains_progs(struct bpf_map *map)
 }
 
 bool bpf_prog_map_compatible(struct bpf_map *map, const struct bpf_prog *fp);
+int bpf_prog_check_freplace_attach(const struct bpf_prog *prog,
+				   const struct bpf_prog *tgt_prog,
+				   int subprog, struct bpf_verifier_log *log);
+int bpf_prog_check_freplace_runtime(const struct bpf_prog *prog,
+				    const struct bpf_prog *tgt_prog);
 int bpf_prog_calc_tag(struct bpf_prog *fp);
 
 const struct bpf_func_proto *bpf_get_trace_printk_proto(void);

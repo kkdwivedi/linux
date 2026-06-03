@@ -18874,8 +18874,6 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 	}
 	if (tgt_prog) {
 		struct bpf_prog_aux *aux = tgt_prog->aux;
-		bool tgt_changes_pkt_data;
-		bool tgt_might_sleep;
 
 		if (bpf_prog_is_dev_bound(prog->aux) &&
 		    !bpf_prog_dev_bound_match(prog, tgt_prog)) {
@@ -18910,23 +18908,10 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 					"Extension programs should be JITed\n");
 				return -EINVAL;
 			}
-			tgt_changes_pkt_data = aux->func
-					       ? aux->func[subprog]->aux->changes_pkt_data
-					       : aux->changes_pkt_data;
-			if (prog->aux->changes_pkt_data && !tgt_changes_pkt_data) {
-				bpf_log(log,
-					"Extension program changes packet data, while original does not\n");
-				return -EINVAL;
-			}
-
-			tgt_might_sleep = aux->func
-					  ? aux->func[subprog]->aux->might_sleep
-					  : aux->might_sleep;
-			if (prog->aux->might_sleep && !tgt_might_sleep) {
-				bpf_log(log,
-					"Extension program may sleep, while original does not\n");
-				return -EINVAL;
-			}
+			ret = bpf_prog_check_freplace_attach(prog, tgt_prog,
+							     subprog, log);
+			if (ret)
+				return ret;
 		}
 		if (!tgt_prog->jited) {
 			bpf_log(log, "Can attach to only JITed progs\n");
