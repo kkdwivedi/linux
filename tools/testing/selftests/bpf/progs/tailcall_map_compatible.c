@@ -2,6 +2,7 @@
 #include <vmlinux.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_helpers.h>
+#include "../test_kmods/bpf_testmod.h"
 
 char _license[] SEC("license") = "GPL";
 
@@ -78,5 +79,51 @@ int BPF_PROG(fsession_cookie)
 
 	data = *cookie = 0;
 	bpf_tail_call_static(ctx, &prog_array_tracing, 0);
+	return 0;
+}
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PROG_ARRAY);
+	__uint(max_entries, 1);
+	__uint(key_size, sizeof(__u32));
+	__uint(value_size, sizeof(__u32));
+} prog_array_raw_tp_ctx SEC(".maps");
+
+SEC("?raw_tp/sys_enter")
+int raw_tp_ctx_caller(struct bpf_raw_tracepoint_args *ctx)
+{
+	dummy_run++;
+	bpf_tail_call_static(ctx, &prog_array_raw_tp_ctx, 0);
+	return 0;
+}
+
+SEC("?raw_tp/sys_enter")
+int raw_tp_ctx_callee(struct bpf_raw_tracepoint_args *ctx)
+{
+	data = ctx->args[1];
+	return 0;
+}
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PROG_ARRAY);
+	__uint(max_entries, 1);
+	__uint(key_size, sizeof(__u32));
+	__uint(value_size, sizeof(__u32));
+} prog_array_raw_tp_writable SEC(".maps");
+
+SEC("?raw_tp.w/bpf_testmod_test_writable_bare_tp")
+int BPF_PROG(raw_tp_writable_caller,
+	     struct bpf_testmod_test_writable_ctx *writable)
+{
+	dummy_run++;
+	bpf_tail_call_static(ctx, &prog_array_raw_tp_writable, 0);
+	return 0;
+}
+
+SEC("?raw_tp.w/bpf_testmod_test_writable_bare_tp")
+int BPF_PROG(raw_tp_writable_callee,
+	     struct bpf_testmod_test_writable_ctx *writable)
+{
+	writable->val = 0;
 	return 0;
 }

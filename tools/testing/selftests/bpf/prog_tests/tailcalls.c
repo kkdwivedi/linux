@@ -1976,6 +1976,71 @@ out:
 	tailcall_map_compatible__destroy(skel);
 }
 
+static void test_map_compatible_max_ctx_offset(void)
+{
+	struct tailcall_map_compatible *skel;
+	struct bpf_program *caller, *callee;
+	int err, prog_fd, key = 0;
+	struct bpf_map *map;
+
+	skel = tailcall_map_compatible__open();
+	if (!ASSERT_OK_PTR(skel, "tailcall_map_compatible__open"))
+		return;
+
+	caller = skel->progs.raw_tp_ctx_caller;
+	bpf_program__set_autoload(caller, true);
+
+	callee = skel->progs.raw_tp_ctx_callee;
+	bpf_program__set_autoload(callee, true);
+
+	err = tailcall_map_compatible__load(skel);
+	if (!ASSERT_OK(err, "tailcall_map_compatible__load"))
+		goto out;
+
+	prog_fd = bpf_program__fd(callee);
+	map = skel->maps.prog_array_raw_tp_ctx;
+	err = bpf_map_update_elem(bpf_map__fd(map), &key, &prog_fd, BPF_ANY);
+	ASSERT_ERR(err, "bpf_map_update_elem raw_tp_ctx_callee");
+
+out:
+	tailcall_map_compatible__destroy(skel);
+}
+
+static void test_map_compatible_max_tp_access(void)
+{
+	struct tailcall_map_compatible *skel;
+	struct bpf_program *caller, *callee;
+	int err, prog_fd, key = 0;
+	struct bpf_map *map;
+
+	if (!env.has_testmod) {
+		test__skip();
+		return;
+	}
+
+	skel = tailcall_map_compatible__open();
+	if (!ASSERT_OK_PTR(skel, "tailcall_map_compatible__open"))
+		return;
+
+	caller = skel->progs.raw_tp_writable_caller;
+	bpf_program__set_autoload(caller, true);
+
+	callee = skel->progs.raw_tp_writable_callee;
+	bpf_program__set_autoload(callee, true);
+
+	err = tailcall_map_compatible__load(skel);
+	if (!ASSERT_OK(err, "tailcall_map_compatible__load"))
+		goto out;
+
+	prog_fd = bpf_program__fd(callee);
+	map = skel->maps.prog_array_raw_tp_writable;
+	err = bpf_map_update_elem(bpf_map__fd(map), &key, &prog_fd, BPF_ANY);
+	ASSERT_ERR(err, "bpf_map_update_elem raw_tp_writable_callee");
+
+out:
+	tailcall_map_compatible__destroy(skel);
+}
+
 void test_tailcalls(void)
 {
 	if (test__start_subtest("tailcall_1"))
@@ -2038,4 +2103,8 @@ void test_tailcalls(void)
 		test_map_compatible_call_get_func_ip();
 	if (test__start_subtest("map_compatible/call_session_cookie"))
 		test_map_compatible_call_session_cookie();
+	if (test__start_subtest("map_compatible/max_ctx_offset"))
+		test_map_compatible_max_ctx_offset();
+	if (test__start_subtest("map_compatible/max_tp_access"))
+		test_map_compatible_max_tp_access();
 }
