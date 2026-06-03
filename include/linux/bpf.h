@@ -294,9 +294,12 @@ struct bpf_map_owner {
 	u32 kprobe_write_ctx:1;
 	u32 call_get_func_ip:1;
 	u32 call_session_cookie:1;
+	u32 tail_call_access_bounds:1;
 	u64 storage_cookie[MAX_BPF_CGROUP_STORAGE_TYPE];
 	const struct btf_type *attach_func_proto;
 	enum bpf_attach_type expected_attach_type;
+	u32 max_ctx_offset;
+	u32 max_tp_access;
 };
 
 struct bpf_map {

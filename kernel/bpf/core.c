@@ -2437,7 +2437,7 @@ static unsigned int __bpf_prog_ret0_warn(const void *ctx,
 }
 
 static void bpf_map_owner_init(struct bpf_map_owner *owner, const struct bpf_prog *fp,
-			       enum bpf_prog_type prog_type)
+			       enum bpf_prog_type prog_type, bool tail_call_bounds)
 {
 	struct bpf_prog_aux *aux = fp->aux;
 	enum bpf_cgroup_storage_type i;
@@ -2451,13 +2451,18 @@ static void bpf_map_owner_init(struct bpf_map_owner *owner, const struct bpf_pro
 	owner->call_session_cookie = fp->call_session_cookie;
 	owner->expected_attach_type = fp->expected_attach_type;
 	owner->attach_func_proto = aux->attach_func_proto;
+	if (tail_call_bounds) {
+		owner->tail_call_access_bounds = true;
+		owner->max_ctx_offset = aux->max_ctx_offset;
+		owner->max_tp_access = aux->max_tp_access;
+	}
 	for_each_cgroup_storage_type(i)
 		owner->storage_cookie[i] = aux->cgroup_storage[i] ?
 			aux->cgroup_storage[i]->cookie : 0;
 }
 
 static bool bpf_map_owner_matches(const struct bpf_map *map, const struct bpf_prog *fp,
-				  enum bpf_prog_type prog_type)
+				  enum bpf_prog_type prog_type, bool tail_call_caller)
 {
 	struct bpf_map_owner *owner = map->owner;
 	struct bpf_prog_aux *aux = fp->aux;
@@ -2481,6 +2486,19 @@ static bool bpf_map_owner_matches(const struct bpf_map *map, const struct bpf_pr
 	if (map->map_type == BPF_MAP_TYPE_PROG_ARRAY &&
 	    owner->expected_attach_type != fp->expected_attach_type)
 		return false;
+
+	if (map->map_type == BPF_MAP_TYPE_PROG_ARRAY &&
+	    owner->tail_call_access_bounds) {
+		if (tail_call_caller) {
+			if (aux->max_ctx_offset < owner->max_ctx_offset ||
+			    aux->max_tp_access < owner->max_tp_access)
+				return false;
+		} else {
+			if (aux->max_ctx_offset > owner->max_ctx_offset ||
+			    aux->max_tp_access > owner->max_tp_access)
+				return false;
+		}
+	}
 
 	for_each_cgroup_storage_type(i) {
 		cookie = aux->cgroup_storage[i] ? aux->cgroup_storage[i]->cookie : 0;
@@ -2545,13 +2563,18 @@ int bpf_prog_check_freplace_runtime(const struct bpf_prog *prog,
 }
 
 static bool __bpf_prog_map_compatible(struct bpf_map *map,
-				      const struct bpf_prog *fp)
+				      const struct bpf_prog *fp,
+				      bool tail_call_caller)
 {
 	enum bpf_prog_type prog_type = resolve_prog_type(fp);
+	bool tail_call_bounds;
 	bool ret = false;
 
 	if (fp->kprobe_override)
 		return ret;
+
+	tail_call_bounds = tail_call_caller &&
+			   map->map_type == BPF_MAP_TYPE_PROG_ARRAY;
 
 	spin_lock(&map->owner_lock);
 	/* There's no owner yet where we could check for compatibility. */
@@ -2559,10 +2582,10 @@ static bool __bpf_prog_map_compatible(struct bpf_map *map,
 		map->owner = bpf_map_owner_alloc(map);
 		if (!map->owner)
 			goto err;
-		bpf_map_owner_init(map->owner, fp, prog_type);
+		bpf_map_owner_init(map->owner, fp, prog_type, tail_call_bounds);
 		ret = true;
 	} else {
-		ret = bpf_map_owner_matches(map, fp, prog_type);
+		ret = bpf_map_owner_matches(map, fp, prog_type, tail_call_caller);
 	}
 err:
 	spin_unlock(&map->owner_lock);
@@ -2579,7 +2602,7 @@ bool bpf_prog_map_compatible(struct bpf_map *map, const struct bpf_prog *fp)
 	if (bpf_prog_is_dev_bound(fp->aux))
 		return false;
 
-	return __bpf_prog_map_compatible(map, fp);
+	return __bpf_prog_map_compatible(map, fp, false);
 }
 
 static int bpf_check_tail_call(const struct bpf_prog *fp)
@@ -2594,7 +2617,7 @@ static int bpf_check_tail_call(const struct bpf_prog *fp)
 		if (!map_type_contains_progs(map))
 			continue;
 
-		if (!__bpf_prog_map_compatible(map, fp)) {
+		if (!__bpf_prog_map_compatible(map, fp, true)) {
 			ret = -EINVAL;
 			goto out;
 		}
