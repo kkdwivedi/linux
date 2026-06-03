@@ -300,6 +300,8 @@ struct bpf_map_owner {
 	enum bpf_attach_type expected_attach_type;
 	u32 max_ctx_offset;
 	u32 max_tp_access;
+	u32 max_rdonly_access;
+	u32 max_rdwr_access;
 };
 
 struct bpf_map {

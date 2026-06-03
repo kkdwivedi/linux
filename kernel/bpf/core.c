@@ -2455,6 +2455,8 @@ static void bpf_map_owner_init(struct bpf_map_owner *owner, const struct bpf_pro
 		owner->tail_call_access_bounds = true;
 		owner->max_ctx_offset = aux->max_ctx_offset;
 		owner->max_tp_access = aux->max_tp_access;
+		owner->max_rdonly_access = aux->max_rdonly_access;
+		owner->max_rdwr_access = aux->max_rdwr_access;
 	}
 	for_each_cgroup_storage_type(i)
 		owner->storage_cookie[i] = aux->cgroup_storage[i] ?
@@ -2491,11 +2493,15 @@ static bool bpf_map_owner_matches(const struct bpf_map *map, const struct bpf_pr
 	    owner->tail_call_access_bounds) {
 		if (tail_call_caller) {
 			if (aux->max_ctx_offset < owner->max_ctx_offset ||
-			    aux->max_tp_access < owner->max_tp_access)
+			    aux->max_tp_access < owner->max_tp_access ||
+			    aux->max_rdonly_access < owner->max_rdonly_access ||
+			    aux->max_rdwr_access < owner->max_rdwr_access)
 				return false;
 		} else {
 			if (aux->max_ctx_offset > owner->max_ctx_offset ||
-			    aux->max_tp_access > owner->max_tp_access)
+			    aux->max_tp_access > owner->max_tp_access ||
+			    aux->max_rdonly_access > owner->max_rdonly_access ||
+			    aux->max_rdwr_access > owner->max_rdwr_access)
 				return false;
 		}
 	}
