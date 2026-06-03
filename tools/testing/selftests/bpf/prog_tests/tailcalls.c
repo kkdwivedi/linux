@@ -2041,6 +2041,66 @@ out:
 	tailcall_map_compatible__destroy(skel);
 }
 
+static void test_map_compatible_max_rdonly_access(void)
+{
+	struct tailcall_map_compatible *skel;
+	struct bpf_program *caller, *callee;
+	int err, prog_fd, key = 0;
+	struct bpf_map *map;
+
+	skel = tailcall_map_compatible__open();
+	if (!ASSERT_OK_PTR(skel, "tailcall_map_compatible__open"))
+		return;
+
+	caller = skel->progs.iter_rdonly_caller;
+	bpf_program__set_autoload(caller, true);
+
+	callee = skel->progs.iter_rdonly_callee;
+	bpf_program__set_autoload(callee, true);
+
+	err = tailcall_map_compatible__load(skel);
+	if (!ASSERT_OK(err, "tailcall_map_compatible__load"))
+		goto out;
+
+	prog_fd = bpf_program__fd(callee);
+	map = skel->maps.prog_array_iter_rdonly;
+	err = bpf_map_update_elem(bpf_map__fd(map), &key, &prog_fd, BPF_ANY);
+	ASSERT_ERR(err, "bpf_map_update_elem iter_rdonly_callee");
+
+out:
+	tailcall_map_compatible__destroy(skel);
+}
+
+static void test_map_compatible_max_rdwr_access(void)
+{
+	struct tailcall_map_compatible *skel;
+	struct bpf_program *caller, *callee;
+	int err, prog_fd, key = 0;
+	struct bpf_map *map;
+
+	skel = tailcall_map_compatible__open();
+	if (!ASSERT_OK_PTR(skel, "tailcall_map_compatible__open"))
+		return;
+
+	caller = skel->progs.iter_rdwr_caller;
+	bpf_program__set_autoload(caller, true);
+
+	callee = skel->progs.iter_rdwr_callee;
+	bpf_program__set_autoload(callee, true);
+
+	err = tailcall_map_compatible__load(skel);
+	if (!ASSERT_OK(err, "tailcall_map_compatible__load"))
+		goto out;
+
+	prog_fd = bpf_program__fd(callee);
+	map = skel->maps.prog_array_iter_rdwr;
+	err = bpf_map_update_elem(bpf_map__fd(map), &key, &prog_fd, BPF_ANY);
+	ASSERT_ERR(err, "bpf_map_update_elem iter_rdwr_callee");
+
+out:
+	tailcall_map_compatible__destroy(skel);
+}
+
 void test_tailcalls(void)
 {
 	if (test__start_subtest("tailcall_1"))
@@ -2107,4 +2167,8 @@ void test_tailcalls(void)
 		test_map_compatible_max_ctx_offset();
 	if (test__start_subtest("map_compatible/max_tp_access"))
 		test_map_compatible_max_tp_access();
+	if (test__start_subtest("map_compatible/max_rdonly_access"))
+		test_map_compatible_max_rdonly_access();
+	if (test__start_subtest("map_compatible/max_rdwr_access"))
+		test_map_compatible_max_rdwr_access();
 }

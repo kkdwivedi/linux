@@ -127,3 +127,57 @@ int BPF_PROG(raw_tp_writable_callee,
 	writable->val = 0;
 	return 0;
 }
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PROG_ARRAY);
+	__uint(max_entries, 1);
+	__uint(key_size, sizeof(__u32));
+	__uint(value_size, sizeof(__u32));
+} prog_array_iter_rdonly SEC(".maps");
+
+SEC("?iter/bpf_map_elem")
+int iter_rdonly_caller(struct bpf_iter__bpf_map_elem *ctx)
+{
+	dummy_run++;
+	bpf_tail_call_static(ctx, &prog_array_iter_rdonly, 0);
+	return 0;
+}
+
+SEC("?iter/bpf_map_elem")
+int iter_rdonly_callee(struct bpf_iter__bpf_map_elem *ctx)
+{
+	__u64 *key = ctx->key;
+
+	if (key == (void *)0)
+		return 0;
+
+	data = *key;
+	return 0;
+}
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PROG_ARRAY);
+	__uint(max_entries, 1);
+	__uint(key_size, sizeof(__u32));
+	__uint(value_size, sizeof(__u32));
+} prog_array_iter_rdwr SEC(".maps");
+
+SEC("?iter/bpf_map_elem")
+int iter_rdwr_caller(struct bpf_iter__bpf_map_elem *ctx)
+{
+	dummy_run++;
+	bpf_tail_call_static(ctx, &prog_array_iter_rdwr, 0);
+	return 0;
+}
+
+SEC("?iter/bpf_map_elem")
+int iter_rdwr_callee(struct bpf_iter__bpf_map_elem *ctx)
+{
+	__u64 *value = ctx->value;
+
+	if (value == (void *)0)
+		return 0;
+
+	*value = 0;
+	return 0;
+}
