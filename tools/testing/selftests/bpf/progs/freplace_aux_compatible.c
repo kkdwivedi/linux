@@ -50,3 +50,63 @@ int BPF_PROG(freplace_raw_tp_writable,
 	writable->val = 0;
 	return 0;
 }
+
+SEC("?iter/bpf_map_elem")
+int iter_rdonly_target(struct bpf_iter__bpf_map_elem *ctx)
+{
+	return 0;
+}
+
+SEC("?iter/bpf_map_elem")
+int iter_rdonly_compatible(struct bpf_iter__bpf_map_elem *ctx)
+{
+	__u64 *key = ctx->key;
+
+	if (key == (void *)0)
+		return 0;
+
+	data = *key;
+	return 0;
+}
+
+SEC("?freplace")
+int freplace_iter_rdonly(struct bpf_iter__bpf_map_elem *ctx)
+{
+	__u64 *key = ctx->key;
+
+	if (key == (void *)0)
+		return 0;
+
+	data = *key;
+	return 0;
+}
+
+SEC("?iter/bpf_map_elem")
+int iter_rdwr_target(struct bpf_iter__bpf_map_elem *ctx)
+{
+	return 0;
+}
+
+SEC("?iter/bpf_map_elem")
+int iter_rdwr_compatible(struct bpf_iter__bpf_map_elem *ctx)
+{
+	__u64 *value = ctx->value;
+
+	if (value == (void *)0)
+		return 0;
+
+	*value = 0;
+	return 0;
+}
+
+SEC("?freplace")
+int freplace_iter_rdwr(struct bpf_iter__bpf_map_elem *ctx)
+{
+	__u64 *value = ctx->value;
+
+	if (value == (void *)0)
+		return 0;
+
+	*value = 0;
+	return 0;
+}

@@ -82,10 +82,28 @@ static void test_max_tp_access(void)
 				      "freplace_raw_tp_writable");
 }
 
+static void test_max_rdonly_access(void)
+{
+	check_freplace_aux_compatible("iter_rdonly_target",
+				      "iter_rdonly_compatible",
+				      "freplace_iter_rdonly");
+}
+
+static void test_max_rdwr_access(void)
+{
+	check_freplace_aux_compatible("iter_rdwr_target",
+				      "iter_rdwr_compatible",
+				      "freplace_iter_rdwr");
+}
+
 void test_freplace_aux_compatible(void)
 {
 	if (test__start_subtest("max_ctx_offset"))
 		test_max_ctx_offset();
 	if (test__start_subtest("max_tp_access"))
 		test_max_tp_access();
+	if (test__start_subtest("max_rdonly_access"))
+		test_max_rdonly_access();
+	if (test__start_subtest("max_rdwr_access"))
+		test_max_rdwr_access();
 }
