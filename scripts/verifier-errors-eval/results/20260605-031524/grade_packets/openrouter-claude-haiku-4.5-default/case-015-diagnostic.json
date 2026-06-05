@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Move helper_a(sk, 0) before taking and checking p.",
+    "Recompute p from sk->data after helper_a and repeat the data_end check before *p = 42.",
+    "Avoid calling a packet-data-invalidating helper between pointer validation and pointer use."
+  ],
+  "canonical_fix": "After helper_a returns, reload sk->data and sk->data_end, redo the bounds check, and only then write through the packet pointer.",
+  "case_id": "case-015",
+  "category": "Register Type Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program validates a packet data pointer, then calls a subprogram that invokes bpf_skb_pull_data. That helper can move packet data and invalidates packet pointers proven before the call. The later store through the old pointer uses an invalidated value.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-015-diagnostic.txt",
+    "case_id": "case-015",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 3663,
+    "prompt_path": "public/case-015/prompt_diagnostic.md",
+    "prompt_sha256": "f4ee93633090707b3340ee048a1cd9c29849370062dafdfa25c31c23d9df8821",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-015-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "7ae4c7f0-986f-4ec7-83bb-11d2719ee64a",
+    "started_at": "2026-06-05T03:19:04+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation of the Verifier Failure\n\nThe verifier is rejecting this program because:\n\n1. **Initial state**: `R7` holds `sk->data` (a packet pointer with `pkt(r=0)`)\n2. **After the bounds check** (line 5): The verifier knows that `p + 1` is within bounds, so `R7` remains valid\n3. **After `helper_a()` call** (line 8): The verifier **invalidates R7** because:\n   - `helper_a()` calls `helper_b()` which calls `bpf_skb_pull_data()`\n   - `bpf_skb_pull_data()` can modify packet data pointers\n   - The verifier conservatively assumes packet pointers may be stale after helper calls that can adjust packet boundaries\n   - R7 is downgraded from `pkt(r=0)` to a scalar\n4. **At the dereference** (line 10): `*p = 42` attempts to dereference `R7`, but it's now a scalar, causing the \"invalid mem access\" error\n\n## Root Cause\n\nThe packet pointer `p` is invalidated by the helper call because `bpf_skb_pull_data()` can move packet data. The verifier requires re-validation of packet pointers after such operations.\n\n## Fix\n\nReload and re-validate the packet pointer after the helper call:\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p = (void *)(long)sk->data;\n\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\thelper_a(sk, 0);\n\t\n\t// Reload and re-validate after helper call\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\t\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nThis re-establishes that `p` is a valid packet pointer before dereferencing it, satisfying the verifier's requirement that packet pointers be re-validated after helper calls that can invalidate them.",
+  "must_mention": [
+    "bpf_skb_pull_data invalidates packet pointers",
+    "The previous packet bounds check no longer applies after the call",
+    "Reload and revalidate data/data_end before dereference"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check for p only",
+    "Uses the old p after the helper call",
+    "Changes the write value but not pointer provenance"
+  ]
+}

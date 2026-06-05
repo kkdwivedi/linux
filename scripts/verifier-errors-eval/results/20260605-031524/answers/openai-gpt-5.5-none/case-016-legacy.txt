@@ -1,0 +1,78 @@
+The failure is a reference-tracking failure.
+
+`bpf_sk_lookup_tcp()` returns a socket pointer with an acquired reference:
+
+```text
+19: call bpf_sk_lookup_tcp#84 ; R0=sock_or_null(id=2) refs=2
+```
+
+That reference must be released with `bpf_sk_release()` on every path where the helper may have returned a non-NULL socket.
+
+Immediately after the lookup, the program branches based on `r6`, which was loaded from packet data / `skb->mark`-like packet offset:
+
+```asm
+if r6 == 0 goto l1_%=;
+exit;
+```
+
+On the fall-through path, `r6 != 0`, the program exits directly:
+
+```text
+20: if r6 == 0x0 goto pc+1 ... refs=2
+21: exit
+Unreleased reference id=2 alloc_insn=19
+```
+
+At that point the verifier still tracks the reference acquired at instruction 19, so direct `exit` is rejected.
+
+The later code does release the socket, but only on the `r6 == 0` path:
+
+```asm
+l1_%=: if r0 == 0 goto l2_%=;
+       r1 = r0;
+       call %[bpf_sk_release];
+l2_%=: exit;
+```
+
+So the smallest fix is to avoid exiting before the possible socket reference is released. Change the `if r6 == 0 goto l1` / `exit` sequence so that the `r6 != 0` path also goes through the existing release logic.
+
+Because `l1` already checks `r0 == 0` before calling `bpf_sk_release`, it is safe to jump there unconditionally after the lookup. The `r6` check is unnecessary for verifier correctness here.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -27,8 +27,7 @@ __naked void entry(void)
+ 	r3 = 36;					\
+ 	r4 = 0;						\
+ 	r5 = 0;						\
+ 	call %[bpf_sk_lookup_tcp];			\
+-	if r6 == 0 goto l1_%=;				\
+-	exit;						\
++l1_%=:						\
+-l1_%=:	if r0 == 0 goto l2_%=;				\
++	if r0 == 0 goto l2_%=;				\
+ 	r1 = r0;					\
+ 	call %[bpf_sk_release];				\
+ l2_%=:	exit;						\
+```
+
+More cleanly, the asm block should become:
+
+```c
+	call %[bpf_sk_lookup_tcp];			\
+l1_%=:	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+```
+
+This ensures that after `bpf_sk_lookup_tcp()`, every path either:
+
+1. sees `r0 == 0` and exits with no reference held, or
+2. sees `r0 != 0`, calls `bpf_sk_release(r0)`, then exits.
+
+That satisfies the verifier’s reference-release requirement.

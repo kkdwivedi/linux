@@ -1,0 +1,46 @@
+The verifier is rejecting this at the `bpf_probe_read_kernel()` call because **R1 is a map-value pointer with an unbounded variable offset**.
+
+### What happens
+
+- `r0` after lookup: `PTR_TO_MAP_VALUE` (size 48).
+- `r3 = *(u32 *)(r0 + 0)` reads attacker-controlled/scalar `0..0xffffffff`.
+- `r1 = r0; r1 += r3` creates a pointer into map value with unknown huge offset.
+- Then `r1` is passed as helper arg1 (`dst`) to `bpf_probe_read_kernel(dst, size, unsafe_ptr)`.
+
+Verifier must prove `dst..dst+size-1` is within valid writable memory.  
+It cannot, because `r3` is unbounded, so it reports:
+
+> `R1 unbounded memory access, make sure to bounds check any such access`
+
+---
+
+### Smallest likely fix
+
+Add a bounds check on `r3` before `r1 += r3`, so offset is provably within map value.
+
+Since value size is 48 and size written is 1, valid offsets are `0..47`.
+
+#### Patch
+
+```diff
+@@ SEC("tracepoint")
+ 	asm volatile ("					\
+ 	r2 = r10;					\
+ 	r2 += -8;					\
+ 	r1 = 0;						\
+ 	*(u64*)(r2 + 0) = r1;				\
+ 	r1 = %[map_a] ll;				\
+ 	call %[bpf_map_lookup_elem];			\
+ 	if r0 == 0 goto l0_%=;				\
+ 	r1 = r0;					\
+ 	r3 = *(u32*)(r0 + 0);				\
++	if r3 >= 48 goto l0_%=;			\
+ 	r1 += r3;					\
+ 	r2 = 1;						\
+ 	r3 = 0;						\
+ 	call %[bpf_probe_read_kernel];			\
+ l0_%=:	exit;						\
+ "	:
+```
+
+This is the minimal source-level change that gives the verifier a concrete bound for helper arg `R1`.

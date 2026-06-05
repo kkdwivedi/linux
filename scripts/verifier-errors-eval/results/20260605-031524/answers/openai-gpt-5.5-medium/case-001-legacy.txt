@@ -1,0 +1,49 @@
+The verifier rejects the program at the `bpf_cpumask_populate()` call because the first argument is not a valid BPF memory pointer.
+
+In the generated instructions:
+
+```text
+2: r1 = 1193046
+...
+4: call bpf_cpumask_populate
+R1 type=scalar expected=fp
+```
+
+`invalid` is the constant address `0x123456`, so verifier type-tracks `R1` as a plain scalar. But `bpf_cpumask_populate()` expects its first argument to be a pointer to writable stack memory, i.e. an `fp`-relative pointer. The verifier will not allow an arbitrary integer to be treated as a kernel or stack pointer.
+
+Also, after fixing the first argument, the second argument `&bits` should be initialized, because the helper likely reads from that buffer.
+
+Smallest source-level fix: use a real stack `struct cpumask` object and initialize `bits`.
+
+Patch:
+
+```diff
+ #include <vmlinux.h>
+ #include <bpf/bpf_tracing.h>
+ #include <bpf/bpf_helpers.h>
+ 
+ char _license[] SEC("license") = "GPL";
+ 
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+-	u64 bits;
++	struct cpumask mask = {};
++	u64 bits = 0;
+ 	int ret;
+ 
+-	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
++	ret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));
+ 	if (!ret)
+ 		return 2;
+ 
+ 	return 0;
+ }
+```
+
+Why this should satisfy the verifier:
+
+- `&mask` is an `fp`-relative stack pointer, matching the verifier’s expected type for argument 1.
+- `bits` is initialized before passing `&bits` to the helper, avoiding a possible later “invalid indirect read from stack” failure.
+- The helper now receives verifier-known memory rather than a forged pointer constant.

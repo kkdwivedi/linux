@@ -1,0 +1,42 @@
+## Explanation
+
+The failure is a simple out-of-bounds stack read. The local `buffer` is declared with 8 bytes:
+
+```c
+char buffer[8] = {};
+```
+
+but the call requests a 9-byte slice:
+
+```c
+data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
+```
+
+`bpf_dynptr_slice()` treats the 3rd/4th arguments as a (memory pointer, length) pair. When the requested length exceeds what `bpf_dynptr_slice` can return directly from the dynptr, the verifier requires the fallback `buffer` to be large enough to hold the full `len` bytes — because the helper may copy `len` bytes into it. Here it asks for 9 bytes from an 8-byte stack object:
+
+```
+invalid read from stack R3 off -24+8 size 9
+R3 and R4 memory, len pair leads to invalid memory access
+```
+
+i.e. `buffer` at `fp-24` only spans 8 bytes (`fp-24..fp-16`), so a length of 9 reads one byte past the object.
+
+## Fix
+
+Make the requested length match the buffer size (use `sizeof(buffer)` instead of a hardcoded 9):
+
+```c
+	char buffer[8] = {};
+	__u64 *data;
+
+	if (bpf_dynptr_from_skb(skb, 0, &ptr))
+		return 1;
+
+	data = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+
+	return !!data;
+```
+
+Equivalently, change the literal `9` to `8`. Either keeps the paired length within the bounds of the stack object, satisfying the verifier's memory/length contract.
+
+(If the intent were to read 9 bytes, the alternative fix would be to enlarge the buffer to `char buffer[9]`; but the minimal change that matches the existing 8-byte buffer is to pass `sizeof(buffer)`.)

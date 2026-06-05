@@ -1,0 +1,117 @@
+{
+  "answer_text": "## Verifier Failure Explanation\n\nThe verifier reports an **unreleased reference leak** (`Unreleased reference id=2 alloc_insn=0`). Here's the trace:\n\n1. `bpf_cpumask_create()` allocates a cpumask with reference id=2.\n2. The NULL check passes (cpumask is non-NULL).\n3. `bpf_cpumask_empty()` is called \u2014 this does **not** release the reference.\n4. The empty check passes (cpumask is empty), so `make_object()` returns the cpumask **without releasing it**.\n5. Back in `entry`, `__sink(cpumask)` is a no-op that does **not** release the reference.\n6. The program exits with `return 0`, leaking the reference.\n\nThe core issue: `entry` obtains an owned `bpf_cpumask` reference from `make_object()` but never calls `bpf_cpumask_release()` before returning.\n\n## Fix\n\nReplace `__sink(cpumask)` with a proper NULL-check and release:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *cpumask;\n\n\tcpumask = make_object();\n\tif (cpumask)\n\t\tbpf_cpumask_release(cpumask);\n\n\treturn 0;\n}\n```\n\nThis ensures that if `make_object()` returns a non-NULL cpumask, the reference is released before the program exits. The `bpf_cpumask_release()` kfunc is the only way to drop a `bpf_cpumask` reference, and the verifier requires that every acquired reference is either released or transferred before the program returns.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-glm-5.1-high/case-002-legacy.txt",
+    "case_id": "case-002",
+    "model": "z-ai/glm-5.1",
+    "profile": "openrouter-glm-5.1-high",
+    "prompt_bytes": 2521,
+    "prompt_path": "public/case-002/prompt_legacy.md",
+    "prompt_sha256": "b1009b27b63c85152af26046b06f483efc378f604fa60de5cb0fdda6b91ed858",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-glm-5.1-high/case-002-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "394c49f6-af7f-413c-a492-2b714287d3c0",
+    "started_at": "2026-06-05T03:21:10+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00093786,
+    "output_cost_usd": 0.00267344,
+    "total_cost_usd": 0.0036113
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 957,
+    "output_tokens": 868,
+    "raw_usage": {
+      "completion_tokens": 868,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 441
+      },
+      "cost": 0.005159,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0038192,
+        "upstream_inference_cost": 0.005159,
+        "upstream_inference_prompt_cost": 0.0013398
+      },
+      "is_byok": false,
+      "prompt_tokens": 957,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1825
+    },
+    "reasoning_content_chars": 1766,
+    "reasoning_tokens": 441,
+    "total_tokens": 1825
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Verifier Failure Explanation\n\nThe verifier reports an **unreleased reference leak** (`Unreleased reference id=2 alloc_insn=0`). Here's the trace:\n\n1. `bpf_cpumask_create()` allocates a cpumask with reference id=2.\n2. The NULL check passes (cpumask is non-NULL).\n3. `bpf_cpumask_empty()` is called \u2014 this does **not** release the reference.\n4. The empty check passes (cpumask is empty), so `make_object()` returns the cpumask **without releasing it**.\n5. Back in `entry`, `__sink(cpumask)` is a no-op that does **not** release the reference.\n6. The program exits with `return 0`, leaking the reference.\n\nThe core issue: `entry` obtains an owned `bpf_cpumask` reference from `make_object()` but never calls `bpf_cpumask_release()` before returning.\n\n## Fix\n\nReplace `__sink(cpumask)` with a proper NULL-check and release:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *cpumask;\n\n\tcpumask = make_object();\n\tif (cpumask)\n\t\tbpf_cpumask_release(cpumask);\n\n\treturn 0;\n}\n```\n\nThis ensures that if `make_object()` returns a non-NULL cpumask, the reference is released before the program exits. The `bpf_cpumask_release()` kfunc is the only way to drop a `bpf_cpumask` reference, and the verifier requires that every acquired reference is either released or transferred before the program returns.",
+          "reasoning": "The verifier is complaining about an unreleased reference. Let me trace through the code:\n\n1. `bpf_cpumask_create()` creates a cpumask with reference id=2\n2. If `cpumask` is NULL, we return NULL from `make_object()` - but wait, the verifier log shows the NULL path goes to instruction 8 (the non-NULL path), so the NULL check passes.\n3. `bpf_cpumask_empty(cast(cpumask))` is called - this doesn't release the reference\n4. If `bpf_cpumask_empty` returns non-zero (cpumask is not empty), we release the cpumask and return NULL\n5. If `bpf_cpumask_empty` returns zero (cpumask is empty), we return the cpumask without releasing it\n\nThen in `entry`:\n- `cpumask = make_object()` - gets a cpumask (or NULL)\n- `__sink(cpumask)` - this is just a sink, doesn't release\n- `return 0` - exits without releasing the cpumask\n\nThe problem is that when `make_object()` returns a valid cpumask, the `entry` function never calls `bpf_cpumask_release()` on it before returning.\n\nLooking at the verifier log more carefully:\n- After the `bpf_cpumask_empty` check, if w0 == 0 (cpumask is empty), we go to instruction 19\n- Instruction 19 stores r6 to the stack\n- Then we set w0 = 0 and exit\n- But we never released the reference!\n\nThe fix is to release the cpumask before returning from `entry`. The simplest fix:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *cpumask;\n\n\tcpumask = make_object();\n\tif (cpumask)\n\t\tbpf_cpumask_release(cpumask);\n\n\treturn 0;\n}\n```\n\nThis adds a NULL check and releases the cpumask if it was successfully created. The `__sink(cpumask)` can be replaced with the release call.\n\nWait, let me re-read the verifier log. The path shown is:\n- Instruction 2: if r6 != 0 goto 8 (NULL check - if not NULL\n\n",
+          "reasoning_details": [
+            {
+              "format": "unknown",
+              "index": 0,
+              "text": "The verifier is complaining about an unreleased reference. Let me trace through the code:\n\n1. `bpf_cpumask_create()` creates a cpumask with reference id=2\n2. If `cpumask` is NULL, we return NULL from `make_object()` - but wait, the verifier log shows the NULL path goes to instruction 8 (the non-NULL path), so the NULL check passes.\n3. `bpf_cpumask_empty(cast(cpumask))` is called - this doesn't release the reference\n4. If `bpf_cpumask_empty` returns non-zero (cpumask is not empty), we release the cpumask and return NULL\n5. If `bpf_cpumask_empty` returns zero (cpumask is empty), we return the cpumask without releasing it\n\nThen in `entry`:\n- `cpumask = make_object()` - gets a cpumask (or NULL)\n- `__sink(cpumask)` - this is just a sink, doesn't release\n- `return 0` - exits without releasing the cpumask\n\nThe problem is that when `make_object()` returns a valid cpumask, the `entry` function never calls `bpf_cpumask_release()` on it before returning.\n\nLooking at the verifier log more carefully:\n- After the `bpf_cpumask_empty` check, if w0 == 0 (cpumask is empty), we go to instruction 19\n- Instruction 19 stores r6 to the stack\n- Then we set w0 = 0 and exit\n- But we never released the reference!\n\nThe fix is to release the cpumask before returning from `entry`. The simplest fix:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *cpumask;\n\n\tcpumask = make_object();\n\tif (cpumask)\n\t\tbpf_cpumask_release(cpumask);\n\n\treturn 0;\n}\n```\n\nThis adds a NULL check and releases the cpumask if it was successfully created. The `__sink(cpumask)` can be replaced with the release call.\n\nWait, let me re-read the verifier log. The path shown is:\n- Instruction 2: if r6 != 0 goto 8 (NULL check - if not NULL\n\n",
+              "type": "reasoning.text"
+            }
+          ],
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "stop"
+      }
+    ],
+    "created": 1780629670,
+    "id": "gen-1780629670-EO2nbe3sSHvPeWDHHTTS",
+    "model": "z-ai/glm-5.1-20260406",
+    "object": "chat.completion",
+    "provider": "Ambient",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 868,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 441
+      },
+      "cost": 0.005159,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0038192,
+        "upstream_inference_cost": 0.005159,
+        "upstream_inference_prompt_cost": 0.0013398
+      },
+      "is_byok": false,
+      "prompt_tokens": 957,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1825
+    }
+  },
+  "reasoning_content": "The verifier is complaining about an unreleased reference. Let me trace through the code:\n\n1. `bpf_cpumask_create()` creates a cpumask with reference id=2\n2. If `cpumask` is NULL, we return NULL from `make_object()` - but wait, the verifier log shows the NULL path goes to instruction 8 (the non-NULL path), so the NULL check passes.\n3. `bpf_cpumask_empty(cast(cpumask))` is called - this doesn't release the reference\n4. If `bpf_cpumask_empty` returns non-zero (cpumask is not empty), we release the cpumask and return NULL\n5. If `bpf_cpumask_empty` returns zero (cpumask is empty), we return the cpumask without releasing it\n\nThen in `entry`:\n- `cpumask = make_object()` - gets a cpumask (or NULL)\n- `__sink(cpumask)` - this is just a sink, doesn't release\n- `return 0` - exits without releasing the cpumask\n\nThe problem is that when `make_object()` returns a valid cpumask, the `entry` function never calls `bpf_cpumask_release()` on it before returning.\n\nLooking at the verifier log more carefully:\n- After the `bpf_cpumask_empty` check, if w0 == 0 (cpumask is empty), we go to instruction 19\n- Instruction 19 stores r6 to the stack\n- Then we set w0 = 0 and exit\n- But we never released the reference!\n\nThe fix is to release the cpumask before returning from `entry`. The simplest fix:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *cpumask;\n\n\tcpumask = make_object();\n\tif (cpumask)\n\t\tbpf_cpumask_release(cpumask);\n\n\treturn 0;\n}\n```\n\nThis adds a NULL check and releases the cpumask if it was successfully created. The `__sink(cpumask)` can be replaced with the release call.\n\nWait, let me re-read the verifier log. The path shown is:\n- Instruction 2: if r6 != 0 goto 8 (NULL check - if not NULL\n\n"
+}

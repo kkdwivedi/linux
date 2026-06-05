@@ -1,0 +1,68 @@
+{
+  "acceptable_fixes": [
+    "Move helper_a(sk, 0) before taking and checking p.",
+    "Recompute p from sk->data after helper_a and repeat the data_end check before *p = 42.",
+    "Avoid calling a packet-data-invalidating helper between pointer validation and pointer use."
+  ],
+  "canonical_fix": "After helper_a returns, reload sk->data and sk->data_end, redo the bounds check, and only then write through the packet pointer.",
+  "case_id": "case-015",
+  "category": "Register Type Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program validates a packet data pointer, then calls a subprogram that invokes bpf_skb_pull_data. That helper can move packet data and invalidates packet pointers proven before the call. The later store through the old pointer uses an invalidated value.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-015-diagnostic.txt",
+    "case_id": "case-015",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 3663,
+    "prompt_path": "public/case-015/prompt_diagnostic.md",
+    "prompt_sha256": "f4ee93633090707b3340ee048a1cd9c29849370062dafdfa25c31c23d9df8821",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-015-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "9cb9f99f-4206-47cf-ae12-129b6c242b80",
+    "started_at": "2026-06-05T03:17:23+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation\n\nThe verifier tracks packet pointers (`pkt`) derived from `sk->data`. Any helper that can change the packet layout\u2014like `bpf_skb_pull_data()`\u2014invalidates all previously-held packet pointers, turning them back into plain scalars.\n\nHere the flow is:\n\n1. `p` is loaded from `sk->data` \u2192 `R7 = pkt(r=0)`.\n2. The bounds check `p+1 > data_end` validates `R7` (range becomes 4 bytes).\n3. `helper_a(sk, 0)` is called. Because it is a **global** function (and ultimately calls `bpf_skb_pull_data`), the verifier conservatively assumes the packet data may have moved. It invalidates `R7`, converting it from a packet pointer to a scalar.\n4. `*p = 42` then dereferences `R7`, which is now a scalar \u2192 `R7 invalid mem access 'scalar'`.\n\nThe verifier even tells you exactly this in the causal path:\n> `R7: packet data may have moved; previous value was pkt at offset 0`\n\nThe validation of the pointer happened **before** a call that can move the packet, so the validated pointer is stale by the time it is used.\n\n## Fix\n\nReload `p` from `sk->data` and re-run the bounds check **after** the helper call, so the pointer used for the store is freshly validated against the (possibly new) packet bounds:\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p;\n\n\t/* call helper first; it may pull/move packet data */\n\thelper_a(sk, 0);\n\n\t/* reload and revalidate the packet pointer afterwards */\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nThis satisfies the verifier because the bounds check that establishes `R7` (or whatever register holds `p`) as a valid packet pointer now occurs *after* the last operation that could invalidate it, so the pointer is provably in-range at the point of the store.\n\nIf the original ordering must be kept (check, then call, then store), the equivalent fix is to simply move the reload+recheck to right before `*p = 42`:\n\n```c\n\thelper_a(sk, 0);\n\tp = (void *)(long)sk->data;            /* reload */\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;                   /* revalidate */\n\t*p = 42;\n```\n\nEither way, the key is: **do not rely on a packet pointer validated before a helper call that can move packet data\u2014reload and recheck it afterward.**",
+  "must_mention": [
+    "bpf_skb_pull_data invalidates packet pointers",
+    "The previous packet bounds check no longer applies after the call",
+    "Reload and revalidate data/data_end before dereference"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check for p only",
+    "Uses the old p after the helper call",
+    "Changes the write value but not pointer provenance"
+  ]
+}

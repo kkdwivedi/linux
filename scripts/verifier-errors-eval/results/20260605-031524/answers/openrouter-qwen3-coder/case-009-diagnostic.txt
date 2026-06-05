@@ -1,0 +1,44 @@
+### Problem Analysis
+
+The verifier failure occurs at line 42 in the `entry` function:
+
+```c
+acquired = bpf_task_acquire(value->task);
+```
+
+The error message indicates:
+```
+Possibly NULL pointer passed to trusted R1
+```
+
+This happens because `value->task` (loaded from the map) may be `NULL`, but `bpf_task_acquire` requires a non-NULL pointer.
+
+### Root Cause
+
+In `helper_a`, the `map_insert` function initializes `local.task = NULL` before inserting into the map. Later, `bpf_kptr_xchg` is used to store a valid task pointer, but there's a window where `value->task` is `NULL`. When `helper_a` returns this map value, `entry` tries to acquire the task without checking if it's `NULL`.
+
+### Fix
+
+Add a NULL check before calling `bpf_task_acquire` in the `entry` function.
+
+### Patch
+
+```diff
+diff --git a/case.c b/case.c
+--- a/case.c
++++ b/case.c
+@@ -39,6 +39,9 @@ SEC("tp_btf/task_newtask")
+ 	if (!value)
+ 		return 0;
+ 
++	if (!value->task)
++		return 0;
++
+ 	acquired = bpf_task_acquire(value->task);
+ 	if (!acquired)
+ 		return 0;
+```
+
+### Explanation
+
+This fix adds a check to ensure `value->task` is not `NULL` before passing it to `bpf_task_acquire`. This satisfies the verifier's requirement that `bpf_task_acquire` must receive a non-NULL pointer, resolving the "Possibly NULL pointer passed to trusted R1" error. The fix is minimal and directly addresses the root cause.

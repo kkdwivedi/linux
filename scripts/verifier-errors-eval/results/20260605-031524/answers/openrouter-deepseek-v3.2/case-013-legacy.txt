@@ -1,0 +1,9 @@
+The verifier rejects the program because the maximum call stack depth exceeds the BPF stack limit of 512 bytes. The deepest call chain (`entry` → `helper_c` → `helper_b`) results in a combined stack size of 544 bytes, which is too large. This is due to each helper function allocating a local stack array of 260 bytes (rounded up to 264 bytes per frame), plus overhead for the main function.
+
+To fix, reduce the size of the local arrays so the total stack usage stays within limits. Changing `MAX_STACK` from 260 to 240 ensures each helper uses exactly 240 bytes (aligned to 8 bytes), resulting in a combined stack size of approximately 496 bytes (assuming 16 bytes for `entry`), which is under the limit.
+
+Patch:
+```diff
+-#define MAX_STACK 260
++#define MAX_STACK 240
+```

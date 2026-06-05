@@ -1,0 +1,55 @@
+## Explanation
+
+The program does this:
+
+```
+*(u64*)(r10 - 8) = r1     // spill ctx pointer into stack slot fp-8 (bytes fp-8 .. fp-1)
+r0 = 0x23
+*(u8*)(r10 - 7) = r0      // write 1 byte at fp-7  -- INSIDE the spilled pointer!
+r0 = *(u64*)(r10 - 8)     // reload the slot
+r0 = *(u64*)(r0 + 8)      // dereference
+```
+
+The spilled 64-bit pointer occupies stack bytes **fp-8 through fp-1**. The byte
+store at **fp-7** lands *inside* that 8-byte slot. The verifier tracks spilled
+registers per 8-byte slot; any partial overwrite of a spilled pointer destroys
+the precise "pointer" tracking and the slot becomes `misc`/unknown scalar
+(`fp-8=mmmmmmmm`).
+
+So when the slot is reloaded into `r0`, the verifier only knows it is an
+unknown scalar, not the ctx pointer. The subsequent `r0 = *(u64*)(r0 + 8)` is
+then a dereference of a scalar, which is rejected:
+
+```
+R0 invalid mem access 'scalar'
+```
+
+## Fix
+
+Make the byte store land **outside** the 8-byte slot holding the spilled
+pointer, so the pointer in fp-8 stays intact. The spilled pointer covers
+offsets -8..-1, so use an offset like `-9` (or any byte not in -8..-1):
+
+```c
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	*(u64*)(r10 - 8) = r1;				\
+	r0 = 0x23;					\
+	*(u8*)(r10 - 9) = r0;				\
+	r0 = *(u64*)(r10 - 8);				\
+	r0 = *(u64*)(r0 + 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+With this change the reload `r0 = *(u64*)(r10 - 8)` recovers the original
+`ctx()` pointer, and the dereference becomes a legal context access rather than
+a dereference of an unknown scalar.
+
+(If the verifier additionally complains about the exact ctx offset/size on the
+final load, that load can be replaced with a known-valid `__sk_buff` field
+access, but the root cause of the reported failure is the overlapping byte
+store corrupting the spilled pointer slot.)

@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Swap the two unlock calls on the success path.",
+    "Avoid taking lock_b while lock_a is still held if nesting is unnecessary."
+  ],
+  "canonical_fix": "On the path where both locks are held, call bpf_res_spin_unlock(&lock_b) before bpf_res_spin_unlock(&lock_a).",
+  "case_id": "case-018",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program acquires lock_a and then lock_b, but releases lock_a before lock_b on the success path. Nested resource spin locks must be unlocked in last-in, first-out order.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-018-diagnostic.txt",
+    "case_id": "case-018",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 2550,
+    "prompt_path": "public/case-018/prompt_diagnostic.md",
+    "prompt_sha256": "b2c0e6d8199078791c9358d84b560ed1081e0fd58d1a492ad2d0272f131fa115",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-018-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "6881a318-db82-48e7-98e2-b509e0672347",
+    "started_at": "2026-06-05T03:19:06+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation of the Verifier Failure\n\nThe BPF verifier enforces **LIFO (Last-In-First-Out) lock ordering** for resource locks. The error occurs because:\n\n1. `lock_a` is acquired first (instruction 0-2)\n2. `lock_b` is acquired second (instruction 4-6)\n3. In the error path (when `bpf_res_spin_lock(&lock_b)` succeeds), the code attempts to unlock `lock_a` (instruction 10)\n4. However, `lock_b` is still held, violating LIFO ordering\n\nThe verifier requires that locks be released in reverse order of acquisition. Since `lock_b` was acquired after `lock_a`, it must be released before `lock_a`.\n\n## The Fix\n\nThe smallest fix is to swap the unlock order in the error path:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nstruct bpf_res_spin_lock lock_a __hidden SEC(\".data.A\");\nstruct bpf_res_spin_lock lock_b __hidden SEC(\".data.B\");\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tif (bpf_res_spin_lock(&lock_a))\n\t\treturn 0;\n\tif (bpf_res_spin_lock(&lock_b)) {\n\t\tbpf_res_spin_unlock(&lock_b);\n\t\tbpf_res_spin_unlock(&lock_a);\n\t\treturn 0;\n\t}\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n\treturn 0;\n}\n```\n\n**Changes:**\n- Line 184 (in error path): Change `bpf_res_spin_unlock(&lock_a)` to `bpf_res_spin_unlock(&lock_b)`\n- Line 185 (in error path): Add `bpf_res_spin_unlock(&lock_a)` after\n- Lines 188-189 (success path): Swap the unlock order to match LIFO (unlock `lock_b` first, then `lock_a`)\n\nThis ensures locks are always released in reverse order of acquisition, satisfying the verifier's resource lifetime safety requirements.",
+  "must_mention": [
+    "lock_b was acquired after lock_a",
+    "Unlock order must be LIFO",
+    "The success path unlocks the wrong lock first"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Changes only the error path where lock_b acquisition fails",
+    "Drops one unlock and leaks a held lock",
+    "Confuses spin lock order with IRQ flag variable order"
+  ]
+}

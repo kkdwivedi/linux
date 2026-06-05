@@ -1,0 +1,29 @@
+## Explanation
+
+`bpf_skb_pull_data` (called transitively through `helper_a → helper_b`) can reallocate/move the packet's linear data area. The BPF verifier therefore **invalidates every previously-held `pkt` pointer** after such a call. R7 (which held `p = sk->data`) is demoted to a plain scalar, so the subsequent `*(u32 *)(r7 +0) = r1` is rejected as an invalid pointer dereference.
+
+The fix is to **reload `sk->data` and re-validate the bounds** after the helper call, before the write.
+
+## Patch
+
+```c
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	int *p = (void *)(long)sk->data;
+
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	helper_a(sk, 0);
+
+	/* Packet data may have moved; reload and re-validate. */
+	p = (void *)(long)sk->data;
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+After `helper_a` returns, `p` is reloaded from `sk->data` (which the verifier tracks as a fresh `pkt` pointer) and the bounds check re-establishes that `p + 1 ≤ sk->data_end`, making the subsequent write to `*p` valid.

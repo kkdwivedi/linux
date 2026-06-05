@@ -1,0 +1,62 @@
+### Verifier Failure Explanation
+
+The failure occurs because the eBPF verifier enforces **type safety** for memory accesses. Specifically, it requires that any register used in a memory dereference (e.g., `*(u64*)(r0 + 8)`) must be a **valid pointer** to a known memory region.
+
+Here's the breakdown of the relevant instructions:
+
+1. `*(u64*)(r10 - 8) = r1;`  
+   - Stores the context pointer (`r1`) onto the stack at `fp-8`.  
+   - The verifier tracks that `fp-8` now holds a pointer to the context.
+
+2. `r0 = 0x23;`  
+   - Overwrites `r0` with the immediate value `35`.
+
+3. `*(u8*)(r10 - 7) = r0;`  
+   - Stores the value `35` (from `r0`) into `fp-7`.  
+   - This **clobbers part of the context pointer** stored at `fp-8`, because `fp-7` and `fp-8` overlap (writing to `fp-7` modifies the least significant byte of the 64-bit value at `fp-8`).
+
+4. `r0 = *(u64*)(r10 - 8);`  
+   - Reloads the value from `fp-8` into `r0`.  
+   - However, because the value at `fp-8` was partially overwritten in step 3, the verifier **no longer considers it a valid pointer**. Instead, it treats `r0` as a **scalar** (integer with unknown value).
+
+5. `r0 = *(u64*)(r0 + 8);`  
+   - Attempts to dereference `r0` as a pointer.  
+   - The verifier rejects this because `r0` is now a scalar, not a pointer.
+
+### Root Cause
+
+The issue arises from **partial corruption of the stored pointer** due to overlapping memory accesses:
+- Writing a byte to `fp-7` modifies the least significant byte of the 64-bit value at `fp-8`.
+- This causes the verifier to lose track of the pointer's validity.
+
+### Fix
+
+To avoid corrupting the stored pointer, we must ensure that:
+1. The context pointer is stored in a location that is **not overlapped** by subsequent writes.
+2. Or, if overlapping is unavoidable, the pointer is **reloaded and revalidated** before use.
+
+The simplest fix is to **change the offset** of the second write to avoid overlapping with the stored pointer.
+
+#### Patch
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -125,7 +125,7 @@ __naked void entry(void)
+ 	asm volatile ("					\
+ 	*(u64*)(r10 - 8) = r1;				\
+ 	r0 = 0x23;					\
+-	*(u8*)(r10 - 7) = r0;				\
++	*(u8*)(r10 - 16) = r0;				\
+ 	r0 = *(u64*)(r10 - 8);				\
+ 	r0 = *(u64*)(r0 + 8);				\
+ 	exit;						\
+```
+
+### Why This Works
+
+- The context pointer is stored at `fp-8`.
+- Writing `r0` to `fp-16` (instead of `fp-7`) ensures no overlap with `fp-8`.
+- The verifier can then safely reload the context pointer from `fp-8` and use it for the final dereference.
+
+This is the **smallest possible change** that avoids corrupting the stored pointer, satisfying the verifier's type safety requirements.

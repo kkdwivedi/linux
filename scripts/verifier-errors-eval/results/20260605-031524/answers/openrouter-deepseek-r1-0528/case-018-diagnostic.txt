@@ -1,0 +1,47 @@
+The verifier failure occurs because the spin locks are not released in the reverse order of acquisition. The program acquires `lock_a` first, then `lock_b`. However, in the normal execution path (both locks acquired), it attempts to release `lock_a` before `lock_b`, violating the last-in-first-out (LIFO) requirement for spin lock release.
+
+**Failure Explanation:**
+- Locks must be released in reverse acquisition order (`lock_b` before `lock_a`).
+- The normal path incorrectly releases `lock_a` (acquired first) before `lock_b` (acquired last).
+- The verifier detects this when processing `bpf_res_spin_unlock(&lock_a)` at the start of the normal path.
+
+**Fix:**
+Swap the unlock order in the normal path to release `lock_b` before `lock_a`. The error path (where `lock_b` acquisition fails) is correct since only `lock_a` is held.
+
+**Patch:**
+```diff
+--- original.c
++++ fixed.c
+@@ -10,8 +10,8 @@
+ 		bpf_res_spin_unlock(&lock_a);
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+ 	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+**Fixed Source:**
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+struct bpf_res_spin_lock lock_a __hidden SEC(".data.A");
+struct bpf_res_spin_lock lock_b __hidden SEC(".data.B");
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```

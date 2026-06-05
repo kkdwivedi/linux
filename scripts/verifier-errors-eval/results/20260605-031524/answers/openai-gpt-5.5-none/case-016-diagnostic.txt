@@ -1,0 +1,70 @@
+The program acquires a referenced socket with:
+
+```asm
+call %[bpf_sk_lookup_tcp]
+```
+
+`bpf_sk_lookup_tcp()` returns `PTR_TO_SOCKET_OR_NULL` with an owned reference. If the return value is non-NULL, the program must call `bpf_sk_release()` on that pointer before any `exit`.
+
+The verifier log shows:
+
+```text
+19: call bpf_sk_lookup_tcp#84 ; R0=sock_or_null(id=2) refs=2
+20: if r6 == 0x0 goto pc+1
+21: exit
+Unreleased reference id=2 alloc_insn=19
+```
+
+After the lookup, the program branches based on `r6`, which was loaded from `skb->mark`:
+
+```asm
+l0_%=: r6 = *(u32*)(r2 + %[mark]);
+...
+call %[bpf_sk_lookup_tcp];
+if r6 == 0 goto l1_%=;
+exit;
+```
+
+On the path where `r6 != 0`, the program exits immediately, without checking whether `r0` is non-NULL and without releasing the socket reference. Since `bpf_sk_lookup_tcp()` may have returned a valid socket, this is a possible reference leak, so verification fails.
+
+The smallest fix is to avoid exiting before releasing `r0` if it is non-NULL. One minimal source-level fix is to make the `r6 != 0` path go through the existing release logic instead of directly exiting.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -27,8 +27,7 @@ __naked void entry(void)
+ 	r4 = 0;						\
+ 	r5 = 0;						\
+ 	call %[bpf_sk_lookup_tcp];			\
+-	if r6 == 0 goto l1_%=;				\
+-	exit;						\
++	if r6 != 0 goto l1_%=;				\
+ l1_%=:	if r0 == 0 goto l2_%=;				\
+ 	r1 = r0;					\
+ 	call %[bpf_sk_release];				\
+```
+
+With this edit, both `r6 == 0` and `r6 != 0` fall through to:
+
+```asm
+if r0 == 0 goto l2_%=;
+r1 = r0;
+call %[bpf_sk_release];
+```
+
+So any non-NULL socket returned by `bpf_sk_lookup_tcp()` is released before exit.
+
+Even simpler, since the branch becomes redundant, the `if r6 ...` instruction can be removed entirely:
+
+```diff
+ 	call %[bpf_sk_lookup_tcp];			\
+-	if r6 == 0 goto l1_%=;				\
+-	exit;						\
+ l1_%=:	if r0 == 0 goto l2_%=;				\
+```
+
+That is likely the cleanest minimal fix: always perform the existing NULL check and release sequence after the lookup.

@@ -1,0 +1,118 @@
+{
+  "answer_text": "## Explanation\n\nThe verifier error is:\n\n```\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\n`bpf_ktime_get_coarse_ns` is **not** available to `kprobe`-type programs. The kernel's helper access control table does not grant kprobes access to this helper. `bpf_ktime_get_ns` (the \"precise\" variant) *is* allowed for kprobe programs.\n\n## Fix\n\nReplace `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns` in both the inline assembly call and the `__imm` constraint:\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"kprobe\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_ns];\t\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_ns)\n\t: __clobber_all);\n}\n```\n\n`bpf_ktime_get_ns` is permitted for `BPF_PROG_TYPE_KPROBE` programs and is the appropriate monotonic clock helper to use here. The coarse variant (`bpf_ktime_get_coarse_ns`) is restricted to a narrower set of program types (e.g., certain cgroup and socket programs).",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-sonnet-4.6-medium/case-006-legacy.txt",
+    "case_id": "case-006",
+    "model": "anthropic/claude-sonnet-4.6",
+    "profile": "openrouter-claude-sonnet-4.6-medium",
+    "prompt_bytes": 1056,
+    "prompt_path": "public/case-006/prompt_legacy.md",
+    "prompt_sha256": "120f6abe2c1570fcf1f340a5df8b99d8138acdc6e56cef9bda9d3f882cdbea64",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-sonnet-4.6-medium/case-006-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "95d2a5ed-6ea2-4607-94ef-c98ad7cabb94",
+    "started_at": "2026-06-05T03:18:40+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.001476,
+    "output_cost_usd": 0.012945,
+    "total_cost_usd": 0.014421
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 492,
+    "output_tokens": 863,
+    "raw_usage": {
+      "completion_tokens": 863,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 182
+      },
+      "cost": 0.014421,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.012945,
+        "upstream_inference_cost": 0.014421,
+        "upstream_inference_prompt_cost": 0.001476
+      },
+      "is_byok": false,
+      "prompt_tokens": 492,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1355
+    },
+    "reasoning_content_chars": 706,
+    "reasoning_tokens": 182,
+    "total_tokens": 1355
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation\n\nThe verifier error is:\n\n```\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\n`bpf_ktime_get_coarse_ns` is **not** available to `kprobe`-type programs. The kernel's helper access control table does not grant kprobes access to this helper. `bpf_ktime_get_ns` (the \"precise\" variant) *is* allowed for kprobe programs.\n\n## Fix\n\nReplace `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns` in both the inline assembly call and the `__imm` constraint:\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"kprobe\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_ns];\t\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_ns)\n\t: __clobber_all);\n}\n```\n\n`bpf_ktime_get_ns` is permitted for `BPF_PROG_TYPE_KPROBE` programs and is the appropriate monotonic clock helper to use here. The coarse variant (`bpf_ktime_get_coarse_ns`) is restricted to a narrower set of program types (e.g., certain cgroup and socket programs).",
+          "reasoning": "The verifier error says \"program of this type cannot use helper bpf_ktime_get_coarse_ns#160\". This means the `kprobe` program type doesn't have access to the `bpf_ktime_get_coarse_ns` helper.\n\nLooking at the Linux kernel source, `bpf_ktime_get_coarse_ns` is only available to certain program types. For kprobes, you'd typically use `bpf_ktime_get_ns` instead.\n\nThe fix is to change `bpf_ktime_get_coarse_ns` to `bpf_ktime_get_ns`, which is available to kprobe programs.\n\n\nI can confirm that `bpf_ktime_get_ns` works with kprobe programs while `bpf_ktime_get_coarse_ns` has more restricted access. The simplest solution is to replace both the function call and its `__imm` reference with `bpf_ktime_get_ns`.",
+          "reasoning_details": [
+            {
+              "format": "anthropic-claude-v1",
+              "index": 0,
+              "signature": "EoYMCmcIDhACGAIqQKlAHx+K1DEIbAjZMXYrbfm4gszP3BPWvlw4hg2Vj+F/deYWntD2uo+JCz9rcNvtETqIlkWALvJ6aCgMD5V+Tm4yEWNsYXVkZS1zb25uZXQtNC02OABCCHRoaW5raW5nEgxSyB8pdL8GTFdnms0aDN6dhIT4R1+SKnGfyyIwIaHtJggPB9ijKN6fbCkqzKl8WE0V2l5dYul7fUHb3P5TFk+g9AQM8WenxkCNJWg3KswKNiAq/nMXuUcvOgJrq5SfwbOh3+29AJiwCqh7qvUJBtLfUrST0Q/dbN48QwEqNRN+Pknen5zUG+zarhYRgg0OBf54WkZycaSqQykTs9vzlk6ayNB1X6OuwGRCunb+l0XacH3NIi+Plq0NzqEWGtE+G8I+gKP31LH7vJ6tj/IC6ixBRVEr6RdxqOFCKEjvcMBGbGq1osof/PPnfXuGZ+y9Db6Te8tHFeC2De8AH75FzyLiozuwoGMZytmMkvyMv97zapMzWEqT55bE1HyhKN0+GaFz5+U4oq/rwxzvnN+Udh7gAOf9wCpA+eNFx64bPLokyJ5hWCg5EDROW2QHGUatIkWfbi5W6n7VsfJ0ABGqINNhDtF1ruiD/iKhUMqFjARUbPnlgk2FvwuyaaiH7g89DmxiNd70JwHYRyI533jDyWKurcxjMu6rVJAbHZeg/DdisuW+f5WHmdFjxHcMWzqgFQl7lRoDfanBteY/gqg+xTQm2VBhLrmc+hFB/X5MH3uVyk9VAyOXfCZwluFiIkDSfOabIRV3MoFIMua4gtlnr4PZafa8jkgfonmZRuzWrkhkT7FzOlZwnk+0uEjRKRXM9agxCgDsbRUJ7RSQwKedmnXrQca6ndb/djAJhnCsNsrrMFno991XN1SHH8IGXezAzkWkvGRu98gzIpVDmqMOCnwvkteeQKTNLgKw8TVLhAIUrKLSwv7X1Cp9IbOwVowNvkkYtgnDX0DgrcEfDxwa8pbNnOGuapEVNmYa678a11tsDTOjMYkXBkRrFZc8BKKs5dGrF2vZNRQ5sjRfmMyywr23vYWcOda2JWTRCcXpBkPOpDx5LpO1PdrURxuSXICG/QGOHsFzPaeC6FBOl/DmJ8+/L/nIxiDFQBCQ0LBuPsv4AYa4D2HvTB5EKHFzFMlTZOQrWVhIMnAQzxS555IONBDOcQHRhE5cmhNNXhQ6KB1Y2LLnQjRoh6czGA2X0t3KF/OIVE+AC+lx996FZ8QpK7gPE/OIqdC/+khprVr33rtQ1oha/fJL5DKvmbR8mWnEZBT+4Gk7KyPXQR6AB2SvEYOGdABsQV4nzhnEOnEer3mHmyTmVv375QOeXNEqIAFx4QfHlEJLItyF+4FF+np2FsYanWBfJGyWux5vMsmvVLkE4fTcdr661Vc/IaN/hR+r49QWQ+WfzYxL8Wjx2yJWjimbJWQbDCYYfI+e8w+uVv2NQv/1fXoS6/fyS6KZBRGM+Bif8912AWRTQYtuEWESkd9swUWIHUSAD4zfjxxYF9QPmYYQa9S2/qVZzQmt5Yam5EEHwzDMQJ7e3AQ5aL8KQPKtYPlEEGDRus3m+Ll4lH53oA+Yt7ithIoFxIm3CjDytPrMzrgULUxUEeAm2fcU4QQ6EGSawK9AAiX8bBzcFalxKzbdFNyS+/KsyhAzP0eGzEaA3aJj0sZlmk1AAaFm5MQfZXtRGhwMUNBa+bgICJ66ozp4IIRCmCFeIt69v2tmGtKm98jsnwLSFac4nr/C4H6B3+4WxezfKGf1WvRZ3m6CdPyw6UI6wid76e63IQQ1QvTIyg7gJok7CbkHom6Ocvgk9YvDHy8M0oMkDTZhiGSUoOXda5ni2gReiJlx1lfcvdhbYq1BJBPqPzDYpIx9TKpIh8BFdgBUhDEb/ZvIMcyHjD5KWA/MydVYAqqSmJlcBP7K2I+MuQxZppRcWrdWi90GBqNDQnXC3GgBzLWjoL/ms0pRqDczieZsCZyJIW2+0mryJuWJIr1M0qC0AH7efPuKfBsVAtsogufqotzbMYSpfeE7Nv2aJqYN9lIhGAE=",
+              "text": "The verifier error says \"program of this type cannot use helper bpf_ktime_get_coarse_ns#160\". This means the `kprobe` program type doesn't have access to the `bpf_ktime_get_coarse_ns` helper.\n\nLooking at the Linux kernel source, `bpf_ktime_get_coarse_ns` is only available to certain program types. For kprobes, you'd typically use `bpf_ktime_get_ns` instead.\n\nThe fix is to change `bpf_ktime_get_coarse_ns` to `bpf_ktime_get_ns`, which is available to kprobe programs.\n\n\nI can confirm that `bpf_ktime_get_ns` works with kprobe programs while `bpf_ktime_get_coarse_ns` has more restricted access. The simplest solution is to replace both the function call and its `__imm` reference with `bpf_ktime_get_ns`.",
+              "type": "reasoning.text"
+            }
+          ],
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629520,
+    "id": "gen-1780629520-VAoevYwD2Q5LemCKCAyL",
+    "model": "anthropic/claude-4.6-sonnet-20260217",
+    "object": "chat.completion",
+    "provider": "Google",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 863,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 182
+      },
+      "cost": 0.014421,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.012945,
+        "upstream_inference_cost": 0.014421,
+        "upstream_inference_prompt_cost": 0.001476
+      },
+      "is_byok": false,
+      "prompt_tokens": 492,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1355
+    }
+  },
+  "reasoning_content": "The verifier error says \"program of this type cannot use helper bpf_ktime_get_coarse_ns#160\". This means the `kprobe` program type doesn't have access to the `bpf_ktime_get_coarse_ns` helper.\n\nLooking at the Linux kernel source, `bpf_ktime_get_coarse_ns` is only available to certain program types. For kprobes, you'd typically use `bpf_ktime_get_ns` instead.\n\nThe fix is to change `bpf_ktime_get_coarse_ns` to `bpf_ktime_get_ns`, which is available to kprobe programs.\n\n\nI can confirm that `bpf_ktime_get_ns` works with kprobe programs while `bpf_ktime_get_coarse_ns` has more restricted access. The simplest solution is to replace both the function call and its `__imm` reference with `bpf_ktime_get_ns`."
+}

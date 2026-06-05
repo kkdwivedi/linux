@@ -1,0 +1,118 @@
+{
+  "answer_text": "## Explanation\n\nThe verifier rejects the call because of this expression in `helper_b`:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\n`skb` is a context pointer (`struct __sk_buff *`). Writing `skb + 1` advances it by `sizeof(struct __sk_buff)` = 192 bytes. That is exactly what the log shows:\n\n```\n21: (07) r6 += 192        ; R6=ctx(imm=192)\n...\n23: (bf) r2 = r6          ; R2=ctx(imm=192)\n24: (85) call pc+2        ; -> helper_c\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\n`helper_c` then does `skb->ifindex`, i.e. it dereferences the context pointer. The BPF verifier only allows context accesses through the **original, unmodified** ctx pointer (the offset must stay 0, because ctx field accesses are rewritten by the verifier based on fixed offsets). A ctx pointer with `off=192` cannot be dereferenced, so verification fails with \"dereference of modified ctx ptr\".\n\n## Fix\n\nThe `+ 1` is the bug \u2014 `helper_c` expects a normal `struct __sk_buff *` it can dereference, so it must receive the original pointer. Pass `skb` instead of `skb + 1`:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n```\n\nWith this change `R2` stays as `ctx()` with offset 0 when passed to `helper_c`, and the `skb->ifindex` access inside `helper_c` is allowed.\n\n(Equivalently, if the intent really were to pass an offset pointer, you'd need to stop treating it as ctx \u2014 but here the smallest correct fix is simply dropping the `+ 1`.)",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-opus-4.8-high/case-010-diagnostic.txt",
+    "case_id": "case-010",
+    "model": "anthropic/claude-opus-4.8",
+    "profile": "openrouter-claude-opus-4.8-high",
+    "prompt_bytes": 3922,
+    "prompt_path": "public/case-010/prompt_diagnostic.md",
+    "prompt_sha256": "c9975b0bd7d86b4edddce6166024784483798109ab83deeb5185dbddd366cae7",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-opus-4.8-high/case-010-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "dac8ff7c-1b50-4703-b164-cd64cd67c393",
+    "started_at": "2026-06-05T03:18:27+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00867,
+    "output_cost_usd": 0.01865,
+    "total_cost_usd": 0.02732
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1734,
+    "output_tokens": 746,
+    "raw_usage": {
+      "completion_tokens": 746,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 78
+      },
+      "cost": 0.02732,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.01865,
+        "upstream_inference_cost": 0.02732,
+        "upstream_inference_prompt_cost": 0.00867
+      },
+      "is_byok": false,
+      "prompt_tokens": 1734,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 2480
+    },
+    "reasoning_content_chars": 311,
+    "reasoning_tokens": 78,
+    "total_tokens": 2480
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation\n\nThe verifier rejects the call because of this expression in `helper_b`:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\n`skb` is a context pointer (`struct __sk_buff *`). Writing `skb + 1` advances it by `sizeof(struct __sk_buff)` = 192 bytes. That is exactly what the log shows:\n\n```\n21: (07) r6 += 192        ; R6=ctx(imm=192)\n...\n23: (bf) r2 = r6          ; R2=ctx(imm=192)\n24: (85) call pc+2        ; -> helper_c\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\n`helper_c` then does `skb->ifindex`, i.e. it dereferences the context pointer. The BPF verifier only allows context accesses through the **original, unmodified** ctx pointer (the offset must stay 0, because ctx field accesses are rewritten by the verifier based on fixed offsets). A ctx pointer with `off=192` cannot be dereferenced, so verification fails with \"dereference of modified ctx ptr\".\n\n## Fix\n\nThe `+ 1` is the bug \u2014 `helper_c` expects a normal `struct __sk_buff *` it can dereference, so it must receive the original pointer. Pass `skb` instead of `skb + 1`:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n```\n\nWith this change `R2` stays as `ctx()` with offset 0 when passed to `helper_c`, and the `skb->ifindex` access inside `helper_c` is allowed.\n\n(Equivalently, if the intent really were to pass an offset pointer, you'd need to stop treating it as ctx \u2014 but here the smallest correct fix is simply dropping the `+ 1`.)",
+          "reasoning": " The problem is that `skb + 1` shifts the context pointer forward by 192 bytes (the size of `struct __sk_buff`), and then when `helper_c` tries to dereference `skb->ifindex` on this modified pointer, it violates the rules. The solution is straightforward: pass `skb` directly instead of the incremented pointer.",
+          "reasoning_details": [
+            {
+              "format": "anthropic-claude-v1",
+              "index": 0,
+              "signature": "EqcDCmMIDhgCKkC2grIwzuKIQYIBJr3S6kbjRtCXp96dziJD2Oa8n2lmUkarVkSEKBVw+5xSRJffzbSRiSdjjO3fowJczmrIIqTCMg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDEOFRilDgin3AT+EMhoMoymacIaI5/gY3xZJIjCu1mvNkBt0HJ8wDN0LxZDGVeORNGNCrhURcDOl4tAGJOLemacbkyGzk8zKR7J/7Swq8QHwSOuOe1VUeaQn15WOikSeC1zvRZCXr6dlzbPQ+eexak6f8MxXOitO6OEZsFFfOtP1zf7VU/1pgSnjKUGfOspuumE4Go0Ov/+oNXpW7zIGDwXYfLBukedJYsf+SqmtofMH6ULHOfnGPIE6fxYeZ9W5f6vuxPMSj8TPwmJMuoa6z+SXftojkHPJu76dONCElJKT2f7Mzfcalz+inOIF3OsXGSmZILqElbvK/7MI/ua2U+saI3YYVfmDoHQdL4ERX6wR3kEoHB0oc5RG6vMwZ/96SSV7UmfgXrit3OPdk/NP6ctzkkUSKkZdNQsJyhGp4Wz4GAE=",
+              "text": " The problem is that `skb + 1` shifts the context pointer forward by 192 bytes (the size of `struct __sk_buff`), and then when `helper_c` tries to dereference `skb->ifindex` on this modified pointer, it violates the rules. The solution is straightforward: pass `skb` directly instead of the incremented pointer.",
+              "type": "reasoning.text"
+            }
+          ],
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629507,
+    "id": "gen-1780629507-c8w33YY2RH8EMDdHt4aP",
+    "model": "anthropic/claude-4.8-opus-20260528",
+    "object": "chat.completion",
+    "provider": "Anthropic",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 746,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 78
+      },
+      "cost": 0.02732,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.01865,
+        "upstream_inference_cost": 0.02732,
+        "upstream_inference_prompt_cost": 0.00867
+      },
+      "is_byok": false,
+      "prompt_tokens": 1734,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 2480
+    }
+  },
+  "reasoning_content": " The problem is that `skb + 1` shifts the context pointer forward by 192 bytes (the size of `struct __sk_buff`), and then when `helper_c` tries to dereference `skb->ifindex` on this modified pointer, it violates the rules. The solution is straightforward: pass `skb` directly instead of the incremented pointer."
+}

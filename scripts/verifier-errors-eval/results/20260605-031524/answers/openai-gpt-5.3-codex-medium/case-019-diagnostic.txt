@@ -1,0 +1,33 @@
+The verifier is rejecting this because `helper_a()` does a **bpf2bpf call to itself**:
+
+```asm
+l0_%=: call helper_a;
+```
+
+That creates a recursive call graph (`helper_a -> helper_a`), which is always forbidden by the BPF verifier, even if the recursion is obviously finite to a human.
+
+### Smallest likely fix
+
+Keep the same logic but replace recursion with an in-function bounded loop (a backward jump), so there is no subprogram cycle.
+
+#### Patch
+
+```diff
+ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+ 	asm volatile ("					\
+-	r1 += 1;					\
+-	r0 = r1;					\
+-	if r1 < 4 goto l0_%=;				\
+-	exit;						\
+-l0_%=:	call helper_a;					\
++l0_%=:	r1 += 1;					\
++	r0 = r1;					\
++	if r1 < 4 goto l0_%=;				\
+ 	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+This preserves behavior for your call path (`r1` starts at 0 in `entry`) and removes recursion, satisfying the verifier’s acyclic call-graph requirement.

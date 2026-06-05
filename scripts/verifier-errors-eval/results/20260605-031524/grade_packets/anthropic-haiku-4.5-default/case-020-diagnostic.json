@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Reduce CALLS_50 fan-out or the number of helper layers.",
+    "Pass a stable non-FP-derived argument pattern when possible.",
+    "Replace the generated call tree with a simpler bounded loop or less duplicated call structure."
+  ],
+  "canonical_fix": "Reduce the number of distinct call paths or argument patterns reaching the subprograms, for example by reducing fan-out/depth, consolidating calls, or avoiding many distinct FP-offset arguments.",
+  "case_id": "case-020",
+  "category": "Verifier Limit",
+  "difficulty": "hard",
+  "expected_explanation": "The program creates an enormous number of distinct bpf2bpf call paths and frame-pointer-derived argument patterns. Liveness analysis exceeds its complexity limit while recomputing subprogram liveness across those paths.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-020-diagnostic.txt",
+    "case_id": "case-020",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 4110,
+    "prompt_path": "public/case-020/prompt_diagnostic.md",
+    "prompt_sha256": "cb7344658f86bd080c64c73a9c8ee3095a7de5b045356c00872dce60afb5bfb8",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-020-diagnostic.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "f49c5fad-54c5-4b55-8b8e-f68359769631",
+    "started_at": "2026-06-05T04:23:17+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Analysis\n\nThe verifier failure is a **liveness analysis complexity limit exceeded** error. This occurs when the verifier's liveness analysis phase encounters too many distinct call paths to the same subprogram.\n\n### Root Cause\n\nThe code creates a deeply nested call chain:\n- `entry` calls `helper_a` 50 times\n- `helper_a` calls `helper_b` 50 times\n- `helper_b` calls `helper_c` 50 times\n- ... and so on through `helper_g`\n\nThis results in 50^7 \u2248 78 billion potential call paths to `helper_g`. The verifier's liveness analysis must track which registers/stack locations are live at each point, and with so many distinct paths reaching the same subprogram with different call contexts, it exceeds the internal complexity limit (10001 recomputations).\n\nThe verifier's liveness analysis phase tracks variable liveness across all possible call paths. When it encounters the same function reachable through many different call chains with different argument patterns, it must re-analyze liveness multiple times, causing exponential complexity growth.\n\n## Fix\n\nThe smallest fix is to **reduce the call tree depth or breadth**. The simplest approach is to reduce `CALLS_50` to a smaller number that stays under the complexity limit.\n\n### Proposed Patch\n\n```c\n#define CALLS_10(fn) \\\n\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n\tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n```\n\nChange to:\n\n```c\n#define CALLS_10(fn) \\\n\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n\tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn)\n```\n\nThis reduces from 50 calls per function to 20 calls per function, which lowers the call path combinations from 50^7 to 20^7 (\u22481.28 million), staying well under the liveness analysis complexity budget.\n\nAlternatively, reduce the call chain depth by removing one or more helper levels (e.g., remove `helper_b` and have `helper_a` directly call `helper_c`).",
+  "must_mention": [
+    "The failure is verifier liveness complexity, not runtime recursion",
+    "Many call paths or distinct FP offsets drive the limit",
+    "The fix is to simplify the call/argument pattern"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only increases a runtime loop bound",
+    "Adds packet or memory bounds checks",
+    "Suggests releasing a resource"
+  ]
+}

@@ -1,0 +1,41 @@
+The verifier is rejecting the program because `bpf_cpumask_create()` returns an owned reference, and on the successful path that reference is returned from `make_object()` to `entry()` but never released.
+
+In the log:
+
+```text
+0: call bpf_cpumask_create ... R0=trusted_ptr_or_null_bpf_cpumask(id=2) refs=2
+...
+19: *(u64 *)(r10 -8) = r6 ... refs=2
+20: w0 = 0 refs=2
+21: exit
+Unreleased reference id=2 alloc_insn=0
+```
+
+`__sink(cpumask)` only forces the value to be used; it does not release or transfer ownership. Therefore the verifier still sees the `struct bpf_cpumask *` reference as live at program exit.
+
+The smallest fix is to release the returned cpumask in `entry()` if it is non-NULL.
+
+Patch:
+
+```diff
+@@
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+ 	struct bpf_cpumask *cpumask;
+ 
+ 	cpumask = make_object();
+ 	__sink(cpumask);
++	if (cpumask)
++		bpf_cpumask_release(cpumask);
+ 
+ 	return 0;
+ }
+```
+
+Why this should satisfy the verifier:
+
+- `make_object()` already releases the cpumask on its internal failure path.
+- If `make_object()` returns `NULL`, there is no owned reference to release.
+- If it returns a non-NULL `struct bpf_cpumask *`, ownership is still held by the caller.
+- Calling `bpf_cpumask_release(cpumask)` on the non-NULL path balances the reference acquired by `bpf_cpumask_create()`, so no reference remains live at `exit`.

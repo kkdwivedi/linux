@@ -1,0 +1,67 @@
+{
+  "acceptable_fixes": [
+    "Change char buffer[8] to char buffer[9] or larger.",
+    "Change the bpf_dynptr_slice length argument from 9 to sizeof(buffer) or 8."
+  ],
+  "canonical_fix": "Make the fallback buffer at least 9 bytes or reduce the requested slice length to 8 bytes.",
+  "case_id": "case-008",
+  "category": "Call Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The fallback stack buffer is 8 bytes, but bpf_dynptr_slice is asked to use 9 bytes. The memory/length pair therefore describes a read beyond the stack object.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-008-legacy.txt",
+    "case_id": "case-008",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 1995,
+    "prompt_path": "public/case-008/prompt_legacy.md",
+    "prompt_sha256": "bb69e9d81c52b441a9ca18ed1387cdaf4d358455af3a7eb36dc706949cff365c",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-008-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "df59fdcb-10bc-4109-9b01-812c5d2a9aa1",
+    "started_at": "2026-06-05T03:17:16+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## The failure\n\n`bpf_dynptr_slice(&ptr, 0, buffer, 9)` tells the verifier that `buffer` (the R3 pointer + R4 length pair) is a 9-byte memory region the helper may write into. But `buffer` is only 8 bytes (`char buffer[8]`, stored at `fp-24..fp-16`). So the helper's declared length (9) exceeds the actual stack object, and the verifier rejects it:\n\n```\ninvalid read from stack R3 off -24+8 size 9\nR3 and R4 memory, len pair leads to invalid memory access\n```\n\nThe `len` argument to `bpf_dynptr_slice` must not be larger than the backing `buffer`.\n\n## The fix\n\nMake the buffer length and the requested length consistent. Smallest change is to ask for 8 bytes (matching the 8-byte buffer):\n\n```c\n\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 8);\n```\n\nAlternatively, enlarge the buffer to at least 9 bytes:\n\n```c\n\tchar buffer[9] = {};\n\t...\n\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 9);\n```\n\nEither edit guarantees `len <= sizeof(buffer)`, satisfying the verifier's memory/len pair check.\n\n(If this is a \"should-pass\" positive test, prefer the first form `len = 8`; if you intended to keep `len = 9`, you must grow `buffer` to 9.)",
+  "must_mention": [
+    "Requested length is 9",
+    "Buffer size is 8",
+    "The memory/length pair must fit"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks data for NULL after the call",
+    "Changes the dynptr initialization but leaves 9 against an 8-byte buffer",
+    "Treats the problem as a ringbuf capacity issue"
+  ]
+}

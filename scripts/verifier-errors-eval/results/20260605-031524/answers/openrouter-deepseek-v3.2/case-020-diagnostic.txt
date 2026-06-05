@@ -1,0 +1,21 @@
+The verifier fails because the liveness analysis complexity limit (10001 calls) is exceeded. This occurs due to the enormous number of distinct call paths and argument patterns reaching `helper_g`. Each macro `CALLS_10` generates 10 calls with different stack offsets (8, 16, ..., 80), leading to unique argument patterns for each call. Combined with the deep call chain (50 calls per level across 6 levels), the verifier must analyze liveness for each distinct pattern, exceeding the limit.
+
+The fix reduces argument pattern diversity by making all calls use the same stack offset. This ensures each helper is invoked with a uniform argument pattern, allowing the verifier to reuse liveness analysis results across calls.
+
+**Patch:**
+```diff
+--- original.c
++++ fixed.c
+@@ -4,8 +4,8 @@
+ 
+ #define CALL_AT(fn, off) "r1 = r10;" "r1 += -" #off ";" "call " #fn ";"
+ #define CALLS_10(fn) \
+-	CALL_AT(fn, 8) CALL_AT(fn, ns, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \
+
+-	CALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)
++	CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) \
++	CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8)
+ #define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
+```
+
+This edit replaces the varying offsets in `CALLS_10` with a constant offset (8), ensuring all 50 calls per level use the same argument pattern. The change preserves the total number of calls and the call graph structure while eliminating pattern diversity, which should satisfy the verifier's liveness analysis limits.

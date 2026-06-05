@@ -1,0 +1,30 @@
+The verifier is rejecting this because of **IRQ-disabled region rules**:
+
+- `bpf_local_irq_save(&flags)` starts an IRQ-disabled critical section (`refs=1` in log).
+- While in that section, verifier forbids calling anything that may sleep.
+- `helper_a()` is classified as **sleepable** because it contains `bpf_copy_from_user(...)`.
+- So at instruction 5 (`call pc+4` to `helper_a`) verifier errors:  
+  **“sleepable global function helper_a() called in IRQ-disabled region”**.
+
+So the minimal fix is to **not call `helper_a()` between `bpf_local_irq_save()` and `bpf_local_irq_restore()`**.
+
+### Minimal patch
+
+```diff
+@@
+ SEC("?syscall")
+ int entry(void *ctx)
+ {
+ 	unsigned long flags;
+ 
+-	bpf_local_irq_save(&flags);
+ 	helper_a(0);
++	bpf_local_irq_save(&flags);
+ 	bpf_local_irq_restore(&flags);
+ 	return 0;
+ }
+```
+
+This keeps behavior close, and satisfies verifier constraints by moving the sleepable call outside the IRQ-disabled region.
+
+(Alternative would be making `helper_a` non-sleepable, e.g. removing/replacing `bpf_copy_from_user`, but that’s a larger semantic change.)

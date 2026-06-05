@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Lower MAX_STACK enough that the nested helper frames fit within 512 bytes.",
+    "Move large buffers out of nested helpers or reuse a smaller/shared buffer in a verifier-accepted way.",
+    "Restructure calls so helper_b and helper_c are not simultaneously on the stack with large local buffers."
+  ],
+  "canonical_fix": "Reduce stack use along the nested call chain or shorten the call chain so the combined stack depth is at or below the verifier limit.",
+  "case_id": "case-013",
+  "category": "Verifier Limit",
+  "difficulty": "medium",
+  "expected_explanation": "The call chain entry -> helper_c -> helper_b uses more than the verifier's combined call-stack depth limit. The large per-function stack buffers accumulate across nested bpf2bpf calls.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-sonnet-4.6-medium/case-013-legacy.txt",
+    "case_id": "case-013",
+    "model": "anthropic/claude-sonnet-4.6",
+    "profile": "openrouter-claude-sonnet-4.6-medium",
+    "prompt_bytes": 1649,
+    "prompt_path": "public/case-013/prompt_legacy.md",
+    "prompt_sha256": "4d1d466cfe05bcf610e895dd892a6a1aa50e76dc1045f63dfca8de2da264bd35",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-sonnet-4.6-medium/case-013-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "6dbb0e3c-1811-45b1-9d2e-f9d869f21148",
+    "started_at": "2026-06-05T03:18:48+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Analysis\n\n### Root Cause\n\nThe BPF verifier enforces a **combined stack limit of 512 bytes** across all nested call frames in a single call chain. The deepest call chain here is:\n\n```\nentry \u2192 helper_c \u2192 helper_b \u2192 helper_a\n```\n\nThe verifier measures the combined stack at the 3-frame deep point:\n\n| Frame | Stack usage |\n|-------|------------|\n| `entry` | ~24 bytes (compiler-spilled callee-saved registers) |\n| `helper_c` | 260 bytes (`buf[MAX_STACK]`) |\n| `helper_b` | 260 bytes (`buf[MAX_STACK]`) |\n| **Total** | **544 bytes > 512** |\n\n`helper_a` has zero stack (only `asm volatile(\"\")`) so it doesn't add to the count, but the 3-frame sum of 544 already exceeds the 512-byte BPF combined-stack limit.\n\n### Fix\n\nReduce `MAX_STACK` so that the combined stack fits within 512 bytes. We need:\n\n```\n24 + MAX_STACK + MAX_STACK \u2264 512\nMAX_STACK \u2264 244\n```\n\nUsing 240 gives comfortable headroom (504 bytes total):\n\n```diff\n-#define MAX_STACK 260\n+#define MAX_STACK 240\n```\n\nWith `MAX_STACK = 240`:\n- entry (~24) + helper_c (240) + helper_b (240) = **504 \u2264 512** \u2713\n- All other call chains are shallower and well within limits.\n\nThis is the minimal change needed \u2014 a single numeric constant adjustment that keeps the test's intent (exercising nested subprog calls with large stack frames) intact while satisfying the verifier's combined-stack constraint.",
+  "must_mention": [
+    "Combined call-chain stack depth exceeds the verifier limit",
+    "Large local buffers in nested helpers are the cause",
+    "Fix must reduce stack usage or call depth"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds bounds checks around skb fields",
+    "Changes helper return arithmetic only",
+    "Reduces stack in a helper not on the reported call chain while leaving the chain over limit"
+  ]
+}

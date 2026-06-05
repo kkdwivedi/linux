@@ -1,0 +1,33 @@
+## Verifier Failure Analysis
+
+The verifier is rejecting this program because of a buffer overflow check on the `bpf_dynptr_slice()` call.
+
+**The Problem:**
+
+1. `buffer` is declared as `char buffer[8] = {};` (8 bytes)
+2. This buffer is allocated at stack offset `fp-24` (8 bytes: `fp-24` to `fp-16`)
+3. The call to `bpf_dynptr_slice(&ptr, 0, buffer, 9)` passes:
+   - `r3` = pointer to `buffer` (at `fp-24`)
+   - `r4` = size `9`
+4. The verifier checks that the buffer size matches the length parameter: it sees a 9-byte request but only 8 bytes available at that stack location
+5. Error: `"invalid read from stack R3 off -24+8 size 9"` — trying to read 9 bytes starting at `fp-24` would go past `fp-16`, which is invalid
+
+**Root Cause:**
+
+The buffer is too small for the requested slice size. The fourth parameter to `bpf_dynptr_slice()` specifies the buffer size, which must be at least as large as the slice being requested.
+
+## Fix
+
+Change the buffer size from 8 to 9 bytes to match the slice size parameter:
+
+```c
+char buffer[9] = {};
+```
+
+**Why this works:**
+
+- `buffer[9]` allocates 9 bytes on the stack
+- The verifier will now see that `fp-24` to `fp-15` (9 bytes) is available
+- The call `bpf_dynptr_slice(&ptr, 0, buffer, 9)` will pass verification since the buffer size matches the requested slice size
+
+This is the minimal fix—only changing the buffer declaration size from 8 to 9.

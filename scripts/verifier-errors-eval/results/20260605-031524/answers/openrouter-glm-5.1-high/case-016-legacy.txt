@@ -1,0 +1,38 @@
+## Verifier Failure Explanation
+
+The program calls `bpf_sk_lookup_tcp`, which returns a socket reference (or NULL) tracked by the verifier as reference id=2. After the call, the code checks `r6` (the packet mark):
+
+```
+if r6 == 0 goto l1_%=;   // if mark == 0, go to socket release logic
+exit;                     // mark != 0 → EXIT WITHOUT RELEASING SOCKET ← BUG
+```
+
+On the path where `r6 != 0`, the program exits without calling `bpf_sk_release` on the non-null socket returned by `bpf_sk_lookup_tcp`. The verifier correctly detects this as a **reference leak**:
+
+```
+Unreleased reference id=2 alloc_insn=19
+BPF_EXIT instruction in main prog would lead to reference leak
+```
+
+## Fix
+
+The socket reference must be released on **all** exit paths where `r0` could be non-null. The smallest fix adds a socket release check on the `r6 != 0` path before the early exit:
+
+```c
+	if r6 == 0 goto l1_%=;				\
+	if r0 == 0 goto l3_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l3_%=:	exit;						\
+l1_%=:	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+```
+
+This replaces just the two lines:
+```
+	if r6 == 0 goto l1_%=;				\
+	exit;						\
+```
+with the five lines above. The new `l3_%=` label gets a unique name (different prefix from `l0/l1/l2` but same `%=` suffix), so there's no collision. Now on the `r6 != 0` path, if `r0` is non-null the socket is released before exiting, satisfying the verifier's reference tracking.

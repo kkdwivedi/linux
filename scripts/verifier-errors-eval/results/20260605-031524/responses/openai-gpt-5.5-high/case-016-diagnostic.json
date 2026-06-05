@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier failure is a reference leak.\n\n`bpf_sk_lookup_tcp()` returns a `sock_or_null` pointer with an owned reference:\n\n```text\n19: call bpf_sk_lookup_tcp#84 ; R0=sock_or_null(id=2) refs=2\n```\n\nAfter that, the program branches on `r6`, which is packet data loaded earlier:\n\n```asm\nif r6 == 0 goto l1_%=;\nexit;\n```\n\nOn the `r6 != 0` path, the program exits immediately while the socket reference from `bpf_sk_lookup_tcp()` may still be live. The verifier cannot prove that `r0` is NULL on that path, and the reference has not been released, so it reports:\n\n```text\nUnreleased reference id=2 alloc_insn=19\n```\n\nThe existing code below `l1_%=` is correct for the paths that reach it: it checks `r0 == 0`, and if non-NULL calls `bpf_sk_release()`. The problem is simply that one exit path bypasses that cleanup.\n\nSmallest likely source fix: make the `r6 != 0` path go through the existing release block instead of exiting directly.\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -24,7 +24,7 @@ __naked void entry(void)\n \tr5 = 0;\t\t\t\t\t\t\\\n \tcall %[bpf_sk_lookup_tcp];\t\t\t\\\n \tif r6 == 0 goto l1_%=;\t\t\t\t\\\n-\texit;\t\t\t\t\t\t\\\n+\tgoto l1_%=;\t\t\t\t\t\\\n l1_%=:\tif r0 == 0 goto l2_%=;\t\t\t\t\\\n \tr1 = r0;\t\t\t\t\t\\\n \tcall %[bpf_sk_release];\t\t\t\t\\\n```\n\nAfter this change, every path after `bpf_sk_lookup_tcp()` reaches:\n\n```asm\nif r0 == 0 goto l2_%=;\nr1 = r0;\ncall bpf_sk_release;\n```\n\nSo the verifier can see that the acquired socket reference is either absent because `r0 == NULL`, or released with `bpf_sk_release()` before program exit.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-high/case-016-diagnostic.txt",
+    "case_id": "case-016",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-high",
+    "prompt_bytes": 5484,
+    "prompt_path": "public/case-016/prompt_diagnostic.md",
+    "prompt_sha256": "26bd47d73322ec44031e7eab349344e578529fd97883aba22a22f0b6717c829d",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-high/case-016-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "6a304082-b4a0-46b2-a2f0-2bbe798800f7",
+    "started_at": "2026-06-05T03:16:02+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.009125,
+    "output_cost_usd": 0.16629,
+    "total_cost_usd": 0.175415
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1825,
+    "output_tokens": 5543,
+    "raw_usage": {
+      "input_tokens": 1825,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 5543,
+      "output_tokens_details": {
+        "reasoning_tokens": 5055
+      },
+      "total_tokens": 7368
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 5055,
+    "total_tokens": 7368
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629477,
+    "created_at": 1780629362,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_093473cf71a1244c006a223f72861081a3b941584b2ab29a00",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_093473cf71a1244c006a223f731a1081a3a1e255efc49b1d69",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier failure is a reference leak.\n\n`bpf_sk_lookup_tcp()` returns a `sock_or_null` pointer with an owned reference:\n\n```text\n19: call bpf_sk_lookup_tcp#84 ; R0=sock_or_null(id=2) refs=2\n```\n\nAfter that, the program branches on `r6`, which is packet data loaded earlier:\n\n```asm\nif r6 == 0 goto l1_%=;\nexit;\n```\n\nOn the `r6 != 0` path, the program exits immediately while the socket reference from `bpf_sk_lookup_tcp()` may still be live. The verifier cannot prove that `r0` is NULL on that path, and the reference has not been released, so it reports:\n\n```text\nUnreleased reference id=2 alloc_insn=19\n```\n\nThe existing code below `l1_%=` is correct for the paths that reach it: it checks `r0 == 0`, and if non-NULL calls `bpf_sk_release()`. The problem is simply that one exit path bypasses that cleanup.\n\nSmallest likely source fix: make the `r6 != 0` path go through the existing release block instead of exiting directly.\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -24,7 +24,7 @@ __naked void entry(void)\n \tr5 = 0;\t\t\t\t\t\t\\\n \tcall %[bpf_sk_lookup_tcp];\t\t\t\\\n \tif r6 == 0 goto l1_%=;\t\t\t\t\\\n-\texit;\t\t\t\t\t\t\\\n+\tgoto l1_%=;\t\t\t\t\t\\\n l1_%=:\tif r0 == 0 goto l2_%=;\t\t\t\t\\\n \tr1 = r0;\t\t\t\t\t\\\n \tcall %[bpf_sk_release];\t\t\t\t\\\n```\n\nAfter this change, every path after `bpf_sk_lookup_tcp()` reaches:\n\n```asm\nif r0 == 0 goto l2_%=;\nr1 = r0;\ncall bpf_sk_release;\n```\n\nSo the verifier can see that the acquired socket reference is either absent because `r0 == NULL`, or released with `bpf_sk_release()` before program exit.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_093473cf71a1244c006a223fdf6c2881a3817ee4e6584585e3",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1825,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 5543,
+      "output_tokens_details": {
+        "reasoning_tokens": 5055
+      },
+      "total_tokens": 7368
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

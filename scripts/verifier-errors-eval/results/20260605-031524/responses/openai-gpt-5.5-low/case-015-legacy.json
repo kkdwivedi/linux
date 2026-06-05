@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier failure is caused by using a packet data pointer that was validated **before** a call that may invalidate packet pointers.\n\n`p` is derived from `sk->data` and bounds-checked:\n\n```c\nint *p = (void *)(long)sk->data;\n\nif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\treturn TCX_DROP;\n```\n\nAt that point the verifier knows `p`/`r7` is a valid packet pointer with at least 4 bytes accessible.\n\nBut then the program calls:\n\n```c\nhelper_a(sk, 0);\n```\n\nwhich eventually calls:\n\n```c\nbpf_skb_pull_data(sk, len);\n```\n\n`bpf_skb_pull_data()` can reallocate or otherwise change the skb data area. Therefore, after that helper call, any previously saved packet pointer is no longer trusted. In the log, after the call, `r7` is no longer a valid packet pointer:\n\n```text\n10: (63) *(u32 *)(r7 +0) = r1\nR7 invalid mem access 'scalar'\n```\n\nSo the store:\n\n```c\n*p = 42;\n```\n\nuses a stale packet pointer.\n\nThe fix is to reload `sk->data` and `sk->data_end` after the helper call, then redo the bounds check before writing.\n\nA minimal source-level fix:\n\n```diff\n SEC(\"tc\")\n int entry(struct __sk_buff *sk)\n {\n \tint *p = (void *)(long)sk->data;\n \n \tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n \t\treturn TCX_DROP;\n \thelper_a(sk, 0);\n+\n+\tp = (void *)(long)sk->data;\n+\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n+\t\treturn TCX_DROP;\n+\n \t*p = 42;\n \treturn TCX_PASS;\n }\n```\n\nThe first bounds check becomes redundant for the final store, but leaving it in place is harmless. The important part is that the pointer used by `*p = 42` is loaded and bounds-checked **after** the `bpf_skb_pull_data()` call.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-low/case-015-legacy.txt",
+    "case_id": "case-015",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-low",
+    "prompt_bytes": 1984,
+    "prompt_path": "public/case-015/prompt_legacy.md",
+    "prompt_sha256": "dc0fc1e91b61bdf915966f9cbe5ae652d8b1776a8af859d12e6cd23d52604af2",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-low/case-015-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "low"
+    },
+    "run_id": "ed148307-c515-4715-9533-2420a5c30a8f",
+    "started_at": "2026-06-05T03:15:33+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.003995,
+    "output_cost_usd": 0.02937,
+    "total_cost_usd": 0.033365
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 799,
+    "output_tokens": 979,
+    "raw_usage": {
+      "input_tokens": 799,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 979,
+      "output_tokens_details": {
+        "reasoning_tokens": 501
+      },
+      "total_tokens": 1778
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 501,
+    "total_tokens": 1778
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629355,
+    "created_at": 1780629333,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_067c031bfa06afd1006a223f558d94819c8817c1a7bd733557",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_067c031bfa06afd1006a223f562760819c81101cfeb835688e",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier failure is caused by using a packet data pointer that was validated **before** a call that may invalidate packet pointers.\n\n`p` is derived from `sk->data` and bounds-checked:\n\n```c\nint *p = (void *)(long)sk->data;\n\nif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\treturn TCX_DROP;\n```\n\nAt that point the verifier knows `p`/`r7` is a valid packet pointer with at least 4 bytes accessible.\n\nBut then the program calls:\n\n```c\nhelper_a(sk, 0);\n```\n\nwhich eventually calls:\n\n```c\nbpf_skb_pull_data(sk, len);\n```\n\n`bpf_skb_pull_data()` can reallocate or otherwise change the skb data area. Therefore, after that helper call, any previously saved packet pointer is no longer trusted. In the log, after the call, `r7` is no longer a valid packet pointer:\n\n```text\n10: (63) *(u32 *)(r7 +0) = r1\nR7 invalid mem access 'scalar'\n```\n\nSo the store:\n\n```c\n*p = 42;\n```\n\nuses a stale packet pointer.\n\nThe fix is to reload `sk->data` and `sk->data_end` after the helper call, then redo the bounds check before writing.\n\nA minimal source-level fix:\n\n```diff\n SEC(\"tc\")\n int entry(struct __sk_buff *sk)\n {\n \tint *p = (void *)(long)sk->data;\n \n \tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n \t\treturn TCX_DROP;\n \thelper_a(sk, 0);\n+\n+\tp = (void *)(long)sk->data;\n+\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n+\t\treturn TCX_DROP;\n+\n \t*p = 42;\n \treturn TCX_PASS;\n }\n```\n\nThe first bounds check becomes redundant for the final store, but leaving it in place is harmless. The important part is that the pointer used by `*p = 42` is loaded and bounds-checked **after** the `bpf_skb_pull_data()` call.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_067c031bfa06afd1006a223f6337d8819cb5d7afd498d5d710",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "low",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 799,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 979,
+      "output_tokens_details": {
+        "reasoning_tokens": 501
+      },
+      "total_tokens": 1778
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

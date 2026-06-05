@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Release cpumask after __sink(cpumask) if cpumask is non-NULL.",
+    "Transfer the owned cpumask into a kptr/map in a verifier-accepted way so the program no longer owns it."
+  ],
+  "canonical_fix": "After make_object returns a non-NULL cpumask, call bpf_cpumask_release(cpumask) before returning on every path that still owns it.",
+  "case_id": "case-002",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "easy",
+  "expected_explanation": "make_object acquires an owned cpumask reference. The entry program stores/sinks it and returns without releasing or transferring ownership, so one exit path leaks the reference.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-thinking/case-002-diagnostic.txt",
+    "case_id": "case-002",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-thinking",
+    "prompt_bytes": 5048,
+    "prompt_path": "public/case-002/prompt_diagnostic.md",
+    "prompt_sha256": "63788e59d8129296d6b2d78c878578b65f355ef76b449bf180000c418be58a88",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-thinking/case-002-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "enabled"
+    },
+    "run_id": "0202765b-3f11-4b2e-9eae-ed59f57f89e3",
+    "started_at": "2026-06-05T03:36:46+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "**Explanation**\n\nThe program calls `bpf_cpumask_create()` inside `make_object()`, which acquires a reference-counted `bpf_cpumask` object. The verifier tracks this as an *owned resource* (reference id=2).\n\nThere are three possible paths:\n\n1. **Allocation fails** (`cpumask == NULL`) \u2013 no resource is owned, so nothing needs to be released.\n2. **Allocation succeeds and the mask is *not* empty** \u2013 the code calls `bpf_cpumask_release(cpumask)` inside `make_object()` and returns `NULL`. The resource is properly freed.\n3. **Allocation succeeds and the mask *is* empty** \u2013 `make_object()` returns the live pointer to the caller (`entry`). Ownership of reference id=2 is now held by the main program.\n\nOn path 3, `entry` stores the pointer in a local variable, calls `__sink(cpumask)` (which only prevents the compiler from optimizing it away), and then reaches the program exit without releasing the mask. The verifier therefore reports:\n\n> Unreleased reference id=2 \u2026 owned resource still needs release\n\neBPF requires that every acquired reference be explicitly released (or transferred) before the program exits.\n\n**Fix**\n\nAdd a `bpf_cpumask_release(cpumask)` call in `entry` before returning, guarded by a null check because the helper does not accept `NULL`.\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -38,6 +38,9 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)\n \n \tcpumask = make_object();\n \t__sink(cpumask);\n+\tif (cpumask)\n+\t\tbpf_cpumask_release(cpumask);\n \n \treturn 0;\n }\n```\n\nThis ensures that on the success path the owned reference is released, satisfying the verifier\u2019s resource-lifetime safety check.",
+  "must_mention": [
+    "An owned cpumask reference is acquired",
+    "Every exit path must release or transfer ownership",
+    "The NULL path does not need release"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Removes the acquisition without preserving the intended object use",
+    "Calls release without considering NULL when the API requires non-NULL",
+    "Releases only on an error path and still returns with ownership on success"
+  ]
+}

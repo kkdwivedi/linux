@@ -1,0 +1,56 @@
+The verifier failure is at:
+
+```c
+acquired = bpf_task_acquire(value->task);
+```
+
+The log shows:
+
+```text
+3: (79) r1 = *(u64 *)(r0 +0)          ; R1=rcu_ptr_or_null_task_struct(id=10)
+4: (85) call bpf_task_acquire#63762
+Possibly NULL pointer passed to trusted R1
+```
+
+`value` itself was checked for NULL, but `value->task` is a kptr field loaded from a map value. The verifier treats that field as `rcu_ptr_or_null_task_struct`: it may be NULL, regardless of the earlier `map_insert()` logic. The verifier does not prove that the previous insertion and `bpf_kptr_xchg()` made this later map lookup’s `task` field non-NULL.
+
+`bpf_task_acquire()` requires a non-NULL trusted/RCU task pointer argument, so passing `value->task` directly fails verification.
+
+Smallest source-level fix: load `value->task` into a temporary, explicitly check it for NULL, then pass the checked pointer to `bpf_task_acquire()`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -71,6 +71,7 @@ static struct map_value *helper_a(struct task_struct *task)
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
++	struct task_struct *stored;
+ 	struct task_struct *acquired;
+ 	struct map_value *value;
+ 
+@@ -78,7 +79,11 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ 	if (!value)
+ 		return 0;
+ 
+-	acquired = bpf_task_acquire(value->task);
++	stored = value->task;
++	if (!stored)
++		return 0;
++
++	acquired = bpf_task_acquire(stored);
+ 	if (!acquired)
+ 		return 0;
+ 
+```
+
+Why this should satisfy the verifier:
+
+- `value` is already checked non-NULL.
+- `stored = value->task;` produces a nullable task pointer.
+- `if (!stored) return 0;` refines `stored` to non-NULL on the fall-through path.
+- `bpf_task_acquire(stored);` then receives a non-NULL task pointer, avoiding the “Possibly NULL pointer passed to trusted R1” verifier error.

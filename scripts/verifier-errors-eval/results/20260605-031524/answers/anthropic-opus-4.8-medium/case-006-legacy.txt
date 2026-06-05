@@ -1,0 +1,35 @@
+## Explanation
+
+The verifier rejects the program here:
+
+```
+program of this type cannot use helper bpf_ktime_get_coarse_ns#160
+```
+
+This is **not** a typical "unsafe state" error — it's a helper-availability check. `bpf_ktime_get_coarse_ns()` is not on the allow-list of helpers for `kprobe` (perf-event/tracing) program types. The kernel restricts the coarse-time helper from these contexts (it can run in NMI/probe context where the coarse clock isn't safe to read), so `check_helper_call()` fails immediately at the `call` instruction.
+
+The fix must either:
+- use a helper that *is* allowed for `kprobe` programs, or
+- attach the program to a type where the coarse-time helper is permitted.
+
+## Smallest fix
+
+Swap the helper for the regular time helper, `bpf_ktime_get_ns()`, which is allowed in `kprobe` programs and is otherwise equivalent for this test:
+
+```c
+SEC("kprobe")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_ns];			\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+```
+
+This removes the disallowed-helper error while keeping the program structure identical.
+
+(Alternative if you specifically need `bpf_ktime_get_coarse_ns`: change the section to a program type that permits it, e.g. `SEC("tc")` / `SEC("cgroup/...")`/`SEC("syscall")` depending on the test's intent. But if the test only needs a valid call, switching to `bpf_ktime_get_ns` is the minimal change.)

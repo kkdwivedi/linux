@@ -1,0 +1,50 @@
+## Verifier Failure Analysis
+
+The verifier rejects the program at instruction 4 with the error: **"Possibly NULL pointer passed to trusted R1"**
+
+### Root Cause
+
+At line 42 in the main program:
+```c
+acquired = bpf_task_acquire(value->task);
+```
+
+The verifier traces this as follows:
+
+1. `value` is returned from `helper_a()` with type `map_value_or_null`
+2. After the NULL check at line 38 (`if (!value)`), `value` becomes `map_value`
+3. At instruction 3, `r1 = *(u64 *)(r0 +0)` loads `value->task`, which has type `rcu_ptr_or_null_task_struct`
+4. The verifier sees that `r1` is `rcu_ptr_or_null_task_struct` (nullable) but `bpf_task_acquire` expects a trusted pointer
+
+The problem is that **`value->task` is a kptr that can be NULL**, and the verifier requires an explicit NULL check before passing it to `bpf_task_acquire`.
+
+### The Fix
+
+Add a NULL check for `value->task` before calling `bpf_task_acquire`:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct task_struct *acquired;
+	struct map_value *value;
+
+	value = helper_a(task);
+	if (!value)
+		return 0;
+
+	if (!value->task)
+		return 0;
+
+	acquired = bpf_task_acquire(value->task);
+	if (!acquired)
+		return 0;
+
+	bpf_task_release(acquired);
+	return 0;
+}
+```
+
+### Why This Works
+
+The added NULL check at line 41 (`if (!value->task)`) narrows the type of `value->task` from `rcu_ptr_or_null_task_struct` to `rcu_ptr_task_struct` (non-null), which satisfies the verifier's requirement that `bpf_task_acquire` receive a trusted pointer.

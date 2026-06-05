@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier error is a classic **refcount leak**:\n\n- `bpf_sk_lookup_tcp()` returns `PTR_TO_SOCKET_OR_NULL` with a held reference when non-NULL.\n- In your program, right after the lookup you do:\n\n```asm\nif r6 == 0 goto l1;\nexit;              // <-- can exit with live socket ref in r0\nl1: if r0 == 0 goto l2;\n    r1 = r0;\n    call bpf_sk_release;\nl2: exit;\n```\n\nSo on the `r6 != 0` branch, you exit before attempting `bpf_sk_release()`.  \nVerifier reports exactly that: `Unreleased reference id=2 ... BPF_EXIT ... reference leak`.\n\n## Smallest likely fix\n\nEnsure `r0` is released (if non-NULL) **before any exit path**. Since both branches end in `exit` anyway, the simplest is to always do conditional release and then exit.\n\n### Patch\n\n```diff\n@@\n \tr4 = 0;\t\t\t\t\t\t\\\n \tr5 = 0;\t\t\t\t\t\t\\\n \tcall %[bpf_sk_lookup_tcp];\t\t\t\\\n-\tif r6 == 0 goto l1_%=;\t\t\t\t\\\n-\texit;\t\t\t\t\t\t\\\n-l1_%=:\tif r0 == 0 goto l2_%=;\t\t\t\t\\\n+\tif r0 == 0 goto l2_%=;\t\t\t\t\\\n \tr1 = r0;\t\t\t\t\t\\\n \tcall %[bpf_sk_release];\t\t\t\t\\\n l2_%=:\texit;\t\t\t\t\t\t\\\n```\n\nThis satisfies the verifier requirement that all live references from `bpf_sk_lookup_tcp` are released on all reachable exit paths.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-medium/case-016-legacy.txt",
+    "case_id": "case-016",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-medium",
+    "prompt_bytes": 3059,
+    "prompt_path": "public/case-016/prompt_legacy.md",
+    "prompt_sha256": "31d64bebee3b4c19aa2fe3161c2814daf2c593074fd789dc1ebc83723ed9f8a8",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-medium/case-016-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "51ab1dec-3a1d-4e20-a588-9aaea9029b75",
+    "started_at": "2026-06-05T03:16:35+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00235725,
+    "output_cost_usd": 0.019908,
+    "total_cost_usd": 0.02226525
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1347,
+    "output_tokens": 1422,
+    "raw_usage": {
+      "input_tokens": 1347,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1422,
+      "output_tokens_details": {
+        "reasoning_tokens": 1059
+      },
+      "total_tokens": 2769
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 1059,
+    "total_tokens": 2769
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629415,
+    "created_at": 1780629395,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_02fe88f0bab49f37006a223f9335e4819c9d00474446e19622",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_02fe88f0bab49f37006a223f939a30819c963936fdd5b047cf",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier error is a classic **refcount leak**:\n\n- `bpf_sk_lookup_tcp()` returns `PTR_TO_SOCKET_OR_NULL` with a held reference when non-NULL.\n- In your program, right after the lookup you do:\n\n```asm\nif r6 == 0 goto l1;\nexit;              // <-- can exit with live socket ref in r0\nl1: if r0 == 0 goto l2;\n    r1 = r0;\n    call bpf_sk_release;\nl2: exit;\n```\n\nSo on the `r6 != 0` branch, you exit before attempting `bpf_sk_release()`.  \nVerifier reports exactly that: `Unreleased reference id=2 ... BPF_EXIT ... reference leak`.\n\n## Smallest likely fix\n\nEnsure `r0` is released (if non-NULL) **before any exit path**. Since both branches end in `exit` anyway, the simplest is to always do conditional release and then exit.\n\n### Patch\n\n```diff\n@@\n \tr4 = 0;\t\t\t\t\t\t\\\n \tr5 = 0;\t\t\t\t\t\t\\\n \tcall %[bpf_sk_lookup_tcp];\t\t\t\\\n-\tif r6 == 0 goto l1_%=;\t\t\t\t\\\n-\texit;\t\t\t\t\t\t\\\n-l1_%=:\tif r0 == 0 goto l2_%=;\t\t\t\t\\\n+\tif r0 == 0 goto l2_%=;\t\t\t\t\\\n \tr1 = r0;\t\t\t\t\t\\\n \tcall %[bpf_sk_release];\t\t\t\t\\\n l2_%=:\texit;\t\t\t\t\t\t\\\n```\n\nThis satisfies the verifier requirement that all live references from `bpf_sk_lookup_tcp` are released on all reachable exit paths.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_02fe88f0bab49f37006a223fa38254819c8c906a152e509aee",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1347,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1422,
+      "output_tokens_details": {
+        "reasoning_tokens": 1059
+      },
+      "total_tokens": 2769
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

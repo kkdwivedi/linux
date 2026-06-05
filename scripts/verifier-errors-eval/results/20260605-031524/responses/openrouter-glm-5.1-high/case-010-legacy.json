@@ -1,0 +1,117 @@
+{
+  "answer_text": "##Verifier Failure Explanation\n\nThe problem is in `helper_b` at this line:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\nThe expression `skb + 1` performs pointer arithmetic on the context pointer (`struct __sk_buff *skb`). In pointer arithmetic, `+1` advances the pointer by `sizeof(struct __sk_buff)` = 192 bytes. The verifier tracks that `R2` is a ctx pointer with offset 192 (`R6=ctx(imm=192)` after `r6 += 192`), and when `helper_c` tries to dereference it (accessing `skb->ifindex`), the verifier rejects it with:\n\n```\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\nThe BPF verifier **prohibits passing a modified (offset-adjusted) context pointer** to a subprogram. The context pointer must be passed unmodified.\n\n## Fix\n\nChange `skb + 1` to `skb` in the call to `helper_c`:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n```\n\nThis is the minimal change \u2014 it removes the illegal pointer arithmetic on the ctx pointer, so `helper_c` receives a valid, unmodified context pointer and can safely dereference `skb->ifindex`.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-glm-5.1-high/case-010-legacy.txt",
+    "case_id": "case-010",
+    "model": "z-ai/glm-5.1",
+    "profile": "openrouter-glm-5.1-high",
+    "prompt_bytes": 2233,
+    "prompt_path": "public/case-010/prompt_legacy.md",
+    "prompt_sha256": "42cb94c19ecff9212d01b745ca76ad135db7dce4e6c15eefc8d6cb8a521dd385",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-glm-5.1-high/case-010-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "54d088cb-f387-42ea-ab77-2bef3d5f69e6",
+    "started_at": "2026-06-05T03:21:26+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00077714,
+    "output_cost_usd": 0.00187264,
+    "total_cost_usd": 0.00264978
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 793,
+    "output_tokens": 608,
+    "raw_usage": {
+      "completion_tokens": 608,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 320
+      },
+      "cost": 0.0037854,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0026752,
+        "upstream_inference_cost": 0.0037854,
+        "upstream_inference_prompt_cost": 0.0011102
+      },
+      "is_byok": false,
+      "prompt_tokens": 793,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1401
+    },
+    "reasoning_content_chars": 1177,
+    "reasoning_tokens": 320,
+    "total_tokens": 1401
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "##Verifier Failure Explanation\n\nThe problem is in `helper_b` at this line:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\nThe expression `skb + 1` performs pointer arithmetic on the context pointer (`struct __sk_buff *skb`). In pointer arithmetic, `+1` advances the pointer by `sizeof(struct __sk_buff)` = 192 bytes. The verifier tracks that `R2` is a ctx pointer with offset 192 (`R6=ctx(imm=192)` after `r6 += 192`), and when `helper_c` tries to dereference it (accessing `skb->ifindex`), the verifier rejects it with:\n\n```\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\nThe BPF verifier **prohibits passing a modified (offset-adjusted) context pointer** to a subprogram. The context pointer must be passed unmodified.\n\n## Fix\n\nChange `skb + 1` to `skb` in the call to `helper_c`:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n```\n\nThis is the minimal change \u2014 it removes the illegal pointer arithmetic on the ctx pointer, so `helper_c` receives a valid, unmodified context pointer and can safely dereference `skb->ifindex`.",
+          "reasoning": "Let me analyze the verifier failure.\n\nThe issue is in `helper_b` function:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb + 1);\n}\n```\n\nThe expression `skb + 1` is the problem. The verifier sees this as a modified context pointer. When `skb` (which is the ctx pointer) has an offset added to it (`skb + 1`), the resulting pointer is `ctx(imm=192)` - the `+1` in pointer arithmetic means adding `sizeof(struct __sk_buff)` = 192 bytes to the ctx pointer.\n\nThe verifier error message is:\n```\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\nThe BPF verifier does not allow passing a modified (offset) context pointer to a subprogram. The context pointer must be passed as-is, without any arithmetic on it.\n\nThe fix is to change `skb + 1` to just `skb` in the call to `helper_c`. The `skb + 1` was likely a mistake or intentional test of something invalid.\n\nThe smallest fix:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\nshould become:\n```c\nreturn helper_a(skb) + helper_c(val, skb);\n```\n\nThis removes the invalid pointer arithmetic on the context pointer, which the verifier disallows.",
+          "reasoning_details": [
+            {
+              "format": "unknown",
+              "index": 0,
+              "text": "Let me analyze the verifier failure.\n\nThe issue is in `helper_b` function:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb + 1);\n}\n```\n\nThe expression `skb + 1` is the problem. The verifier sees this as a modified context pointer. When `skb` (which is the ctx pointer) has an offset added to it (`skb + 1`), the resulting pointer is `ctx(imm=192)` - the `+1` in pointer arithmetic means adding `sizeof(struct __sk_buff)` = 192 bytes to the ctx pointer.\n\nThe verifier error message is:\n```\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\nThe BPF verifier does not allow passing a modified (offset) context pointer to a subprogram. The context pointer must be passed as-is, without any arithmetic on it.\n\nThe fix is to change `skb + 1` to just `skb` in the call to `helper_c`. The `skb + 1` was likely a mistake or intentional test of something invalid.\n\nThe smallest fix:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\nshould become:\n```c\nreturn helper_a(skb) + helper_c(val, skb);\n```\n\nThis removes the invalid pointer arithmetic on the context pointer, which the verifier disallows.",
+              "type": "reasoning.text"
+            }
+          ],
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "stop"
+      }
+    ],
+    "created": 1780629686,
+    "id": "gen-1780629686-CULhw0zFmxB7jAs3XbNh",
+    "model": "z-ai/glm-5.1-20260406",
+    "object": "chat.completion",
+    "provider": "Inceptron",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 608,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 320
+      },
+      "cost": 0.0037854,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0026752,
+        "upstream_inference_cost": 0.0037854,
+        "upstream_inference_prompt_cost": 0.0011102
+      },
+      "is_byok": false,
+      "prompt_tokens": 793,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1401
+    }
+  },
+  "reasoning_content": "Let me analyze the verifier failure.\n\nThe issue is in `helper_b` function:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb + 1);\n}\n```\n\nThe expression `skb + 1` is the problem. The verifier sees this as a modified context pointer. When `skb` (which is the ctx pointer) has an offset added to it (`skb + 1`), the resulting pointer is `ctx(imm=192)` - the `+1` in pointer arithmetic means adding `sizeof(struct __sk_buff)` = 192 bytes to the ctx pointer.\n\nThe verifier error message is:\n```\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\nThe BPF verifier does not allow passing a modified (offset) context pointer to a subprogram. The context pointer must be passed as-is, without any arithmetic on it.\n\nThe fix is to change `skb + 1` to just `skb` in the call to `helper_c`. The `skb + 1` was likely a mistake or intentional test of something invalid.\n\nThe smallest fix:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\nshould become:\n```c\nreturn helper_a(skb) + helper_c(val, skb);\n```\n\nThis removes the invalid pointer arithmetic on the context pointer, which the verifier disallows."
+}

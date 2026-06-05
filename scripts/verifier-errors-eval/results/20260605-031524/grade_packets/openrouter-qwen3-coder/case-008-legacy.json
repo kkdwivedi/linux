@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Change char buffer[8] to char buffer[9] or larger.",
+    "Change the bpf_dynptr_slice length argument from 9 to sizeof(buffer) or 8."
+  ],
+  "canonical_fix": "Make the fallback buffer at least 9 bytes or reduce the requested slice length to 8 bytes.",
+  "case_id": "case-008",
+  "category": "Call Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The fallback stack buffer is 8 bytes, but bpf_dynptr_slice is asked to use 9 bytes. The memory/length pair therefore describes a read beyond the stack object.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-008-legacy.txt",
+    "case_id": "case-008",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 1995,
+    "prompt_path": "public/case-008/prompt_legacy.md",
+    "prompt_sha256": "bb69e9d81c52b441a9ca18ed1387cdaf4d358455af3a7eb36dc706949cff365c",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-008-legacy.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "673e8017-3314-4730-b4aa-d91bb872e13c",
+    "started_at": "2026-06-05T03:20:58+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "Looking at the verifier log, the issue is with the `bpf_dynptr_slice` call. The error message indicates:\n\n```\ninvalid read from stack R3 off -24+8 size 9\nR3 and R4 memory, len pair leads to invalid memory access\n```\n\nLet me trace through the code:\n\n1. `buffer[8] = {}` creates an 8-byte buffer\n2. `bpf_dynptr_slice(&ptr, 0, buffer, 9)` tries to read 9 bytes into this 8-byte buffer\n\nThe problem is a buffer overflow - the code is trying to read 9 bytes into a buffer that's only 8 bytes large. The verifier is correctly rejecting this as it would lead to invalid memory access.\n\nThe fix is to change the length parameter from 9 to 8 to match the buffer size:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"?cgroup_skb/egress\")\nint entry(struct __sk_buff *skb)\n{\n\tstruct bpf_dynptr ptr;\n\tchar buffer[8] = {};\n\t__u64 *data;\n\n\tif (bpf_dynptr_from_skb(skb, 0, &ptr))\n\t\treturn 1;\n\n\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 8);\n\n\treturn !!data;\n}\n```\n\nThe only change needed is on line 14 (in the original code), changing the parameter from `9` to `8` to match the actual buffer size of 8 bytes.",
+  "must_mention": [
+    "Requested length is 9",
+    "Buffer size is 8",
+    "The memory/length pair must fit"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks data for NULL after the call",
+    "Changes the dynptr initialization but leaves 9 against an 8-byte buffer",
+    "Treats the problem as a ringbuf capacity issue"
+  ]
+}

@@ -1,0 +1,42 @@
+## Explanation of the Verifier Failure
+
+The verifier error is:
+```
+R1 type=scalar expected=fp
+```
+
+The first argument to `bpf_cpumask_populate` must be a **frame-pointer-derived pointer** (i.e., a pointer to stack memory). The code initialises `invalid` as a raw scalar integer literal `(struct bpf_cpumask *)0x123456`, which the compiler emits as `r1 = 1193046` — a plain scalar. The verifier cannot track this as a valid memory reference, so it rejects the call.
+
+## Root Cause
+
+```c
+struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+// ...
+ret = bpf_cpumask_populate((struct cpumask *)invalid, ...);
+```
+
+`invalid` is never a real stack pointer; it's just the integer `0x123456` cast to a pointer type. BPF does not allow arbitrary integer addresses to be dereferenced, and `bpf_cpumask_populate` requires argument 1 to be a pointer into the BPF stack (`fp`-class).
+
+## Fix
+
+Allocate the cpumask on the stack so that its address is a genuine frame-pointer:
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -9,9 +9,9 @@ char _license[] SEC("license") = "GPL";
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
++	struct cpumask invalid = {};
+ 	u64 bits;
+ 	int ret;
+ 
+-	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
++	ret = bpf_cpumask_populate(&invalid, &bits, sizeof(bits));
+ 	if (!ret)
+ 		return 2;
+```
+
+By declaring `invalid` as a real `struct cpumask` on the stack, `&invalid` is a valid `fp`-based pointer, satisfying the verifier's `expected=fp` constraint for argument 1 of `bpf_cpumask_populate`.

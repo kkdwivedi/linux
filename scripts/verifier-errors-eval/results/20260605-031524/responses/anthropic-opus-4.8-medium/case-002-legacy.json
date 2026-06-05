@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nThe verifier tracks `bpf_cpumask_create()` as an acquired reference (`refs=2`, id=2). On the success path, `make_object()` returns that pointer to `entry()`, where it is only `__sink()`'ed and then the program exits. Since the acquired cpumask reference is never released before `BPF_EXIT`, the verifier reports:\n\n```\nUnreleased reference id=2 ... reference leak\n```\n\n`__sink()` just prevents the \"unused variable\" issue; it does **not** release the kptr. The created `bpf_cpumask` must be passed to `bpf_cpumask_release()` (or stored into a kptr map field) before the program returns.\n\n## Fix\n\nRelease the returned cpumask in `entry()`:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *cpumask;\n\n\tcpumask = make_object();\n\tif (cpumask)\n\t\tbpf_cpumask_release(cpumask);\n\n\treturn 0;\n}\n```\n\nThis balances the `bpf_cpumask_create()` acquire on the success path with a release before exit, so no reference is leaked. (On the failure paths inside `make_object()`, the object is either never created or already released and `NULL` is returned, so the `if (cpumask)` guard keeps those paths correct.)",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-002-legacy.txt",
+    "case_id": "case-002",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 2521,
+    "prompt_path": "public/case-002/prompt_legacy.md",
+    "prompt_sha256": "b1009b27b63c85152af26046b06f483efc378f604fa60de5cb0fdda6b91ed858",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-002-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "c834930f-57f8-4602-9754-33a53512cce2",
+    "started_at": "2026-06-05T03:17:07+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.007185,
+    "output_cost_usd": 0.01565,
+    "total_cost_usd": 0.022835
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1437,
+    "output_tokens": 626,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1437,
+      "output_tokens": 626,
+      "output_tokens_details": {
+        "thinking_tokens": 162
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 2063
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EvIECmMIDhgCKkDSYc3rVNBb8eED6LTUsw+TDRmQIPMNK8USMqyHnfempAYTH9C/OhZCjNxYvpbO8eyM6sZKZXeBBY3zJGz0PDkoMg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDFScSd9I82X0QHso6xoM7a+qa0x2c10trvsSIjB9UOPuIx99t8mPkWVOHC+xVJnu1L/+hJiSaOLfzQWapLge5uksZPguNJBISR+QZv4qvAP7J+GN39UhHMTGt3KRoFazRXeBy/u1u1pqccU162feGvTV+VKlPjvxoGiKF9DRpCkG5oBhCaTkSoCXNsVOlGxayoTMvDXz8f5t7BtQ7lSpGT4aDRdSHioA/pjoUiDNTeEstreCLEWeVVu6hi/B7tT1vgHccGT9LZq/GA/6yZT7xp1F9tM3GE3pJOKH9JQR3eOjqa5fLmfo62KM9B1Phr4xXgIfyZUHPCAV6WlG2X+VYYKicbnDxYezQGh9cnVYN/VzR8kq5lQf5+Nm6Cy6HeheYZxannD3KeHo0s5GZf6kdyIDa3LLlNvjnk4c4cRe/7dc8Os2MKVbFUeqTo6k/tNG2kg7BNYe9zs3eN9oSmaRq+rjF9ExpjaNYjsFdOCqaVssbKmfUr8/BSHJilGqpUaOHO67f5yojkty0xELdVoG3w3O7T24YGPJbS6nMCJslW/iR4fpaTTkzzGCJwm5CslmlvDuAPbvjirqxlUesK3Ii8eIVd1W3p+xk74FTdC1EzX2Z8j9a4wRD50JtKyuud8UiueC4bSDJMiUSrWWSFM/9qSTHadPnTkgu+x5jriUr8gfxG2X4ZLmrPOrofEYAQ==",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nThe verifier tracks `bpf_cpumask_create()` as an acquired reference (`refs=2`, id=2). On the success path, `make_object()` returns that pointer to `entry()`, where it is only `__sink()`'ed and then the program exits. Since the acquired cpumask reference is never released before `BPF_EXIT`, the verifier reports:\n\n```\nUnreleased reference id=2 ... reference leak\n```\n\n`__sink()` just prevents the \"unused variable\" issue; it does **not** release the kptr. The created `bpf_cpumask` must be passed to `bpf_cpumask_release()` (or stored into a kptr map field) before the program returns.\n\n## Fix\n\nRelease the returned cpumask in `entry()`:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *cpumask;\n\n\tcpumask = make_object();\n\tif (cpumask)\n\t\tbpf_cpumask_release(cpumask);\n\n\treturn 0;\n}\n```\n\nThis balances the `bpf_cpumask_create()` acquire on the success path with a release before exit, so no reference is leaked. (On the failure paths inside `make_object()`, the object is either never created or already released and `NULL` is returned, so the `if (cpumask)` guard keeps those paths correct.)",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01Jj8xS57BR7vWQD4cZ6ZVok",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1437,
+      "output_tokens": 626,
+      "output_tokens_details": {
+        "thinking_tokens": 162
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

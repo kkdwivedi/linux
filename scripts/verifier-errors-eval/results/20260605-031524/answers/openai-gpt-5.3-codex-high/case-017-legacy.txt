@@ -1,0 +1,35 @@
+The verifier error is due to **IRQ state restore ordering**.
+
+`bpf_local_irq_save()`/`bpf_local_irq_restore()` are tracked like a stack of acquired states.  
+Your program does:
+
+1. save `flags1`  (id=1)
+2. save `flags2`  (id=2)
+3. restore `flags1` ❌ (tries to pop id=1 while id=2 is on top)
+
+From the log:
+
+- after insn 7, verifier expects to restore `id=2` first
+- at insn 9 it sees restore of `flags1` (id=1), so it rejects:
+  `cannot restore irq state out of order, expected id=2`
+
+### Smallest fix
+Restore in reverse (LIFO) order:
+
+```diff
+ SEC("?tc")
+ int entry(struct __sk_buff *ctx)
+ {
+ 	unsigned long flags1, flags2;
+
+ 	bpf_local_irq_save(&flags1);
+ 	bpf_local_irq_save(&flags2);
+-	bpf_local_irq_restore(&flags1);
+-	bpf_local_irq_restore(&flags2);
++	bpf_local_irq_restore(&flags2);
++	bpf_local_irq_restore(&flags1);
+ 	return 0;
+ }
+```
+
+That should satisfy verifier lock/irq-state pairing rules.

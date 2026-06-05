@@ -1,0 +1,53 @@
+### Explanation of the Verifier Failure
+
+The eBPF verifier enforces strict lock ordering to ensure resource safety. In this program:
+
+1. `lock_a` is acquired first.
+2. Then `lock_b` is acquired.
+3. However, in the error path of acquiring `lock_b`, the code attempts to unlock `lock_a` **before** unlocking `lock_b`.
+
+This violates the Last-In, First-Out (LIFO) rule for lock release — the inner lock (`lock_b`) must be released before the outer lock (`lock_a`). The verifier detects this and rejects the program with:
+
+```
+bpf_res_spin_unlock cannot be out of order
+```
+
+### Proposed Fix
+
+To satisfy the verifier, we must ensure that locks are always released in reverse order of acquisition. Specifically:
+
+- Acquire `lock_a`
+- Acquire `lock_b`
+- Release `lock_b`
+- Release `lock_a`
+
+The current code violates this by releasing `lock_a` before `lock_b` in one path.
+
+### Patch
+
+Here is the corrected version of the function:
+
+```c
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a); // Only unlock lock_a if lock_b failed
+		return 0;
+	}
+	// Normal path: unlock in reverse order
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```
+
+### Why This Works
+
+- If `lock_a` fails, we return early (no unlocks needed).
+- If `lock_b` fails, we unlock `lock_a` (only it was acquired), and return.
+- If both succeed, we unlock `lock_b` first, then `lock_a`.
+
+This ensures all lock/unlock operations respect LIFO order, satisfying the verifier.

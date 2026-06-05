@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Move helper_a(0) after bpf_local_irq_restore(&flags).",
+    "Split helper_a so the IRQ-disabled path calls only a non-sleepable helper.",
+    "Avoid disabling IRQs around the call if the critical section is not needed."
+  ],
+  "canonical_fix": "Restore IRQ state before calling the sleepable subprogram, or remove/replace the sleepable helper from the subprogram used in the IRQ-disabled region.",
+  "case_id": "case-012",
+  "category": "Execution Context Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The entry program disables IRQs and then calls a global subprogram that can call a sleepable helper. The verifier treats the sleepable call through the subprogram as occurring inside the IRQ-disabled region.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-sonnet-4.6-medium/case-012-diagnostic.txt",
+    "case_id": "case-012",
+    "model": "anthropic/claude-sonnet-4.6",
+    "profile": "openrouter-claude-sonnet-4.6-medium",
+    "prompt_bytes": 3392,
+    "prompt_path": "public/case-012/prompt_diagnostic.md",
+    "prompt_sha256": "cb0bb7bae71f637618353d539dc3320ce61e3ed2b36b833f42dc45015a35e430",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-sonnet-4.6-medium/case-012-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "071fcf50-3628-4e65-a263-d446b6e94f7d",
+    "started_at": "2026-06-05T03:18:48+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation of the Verifier Failure\n\nThe verifier rejects the program for two reasons visible in the log:\n\n1. **Primary failure**: `helper_a` is a `__noinline` (non-static) global BPF function. Because it contains a call to `bpf_copy_from_user` on one of its paths, the verifier marks it as **sleepable**. The BPF verifier prohibits calling sleepable global functions inside an IRQ-disabled region (the section between `bpf_local_irq_save` and `bpf_local_irq_restore`).\n\n2. **Secondary note**: The first log line `arg#0 reference type('UNKNOWN') size cannot be determined: -22` is a pre-check soft error about the `void *ctx` argument of the syscall entry point (void pointers have indeterminate size), but verification continues past it \u2014 the fatal failure is the IRQ context violation.\n\nThe verifier's own suggestion confirms: *\"Move the call outside the critical section, or use a non-sleepable function.\"*\n\n## Fix\n\nThe smallest change is to move `helper_a(0)` outside of the IRQ-disabled critical section (either before `bpf_local_irq_save` or after `bpf_local_irq_restore`):\n\n```c\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\tbpf_local_irq_save(&flags);\n\tbpf_local_irq_restore(&flags);\n\thelper_a(0);\n\treturn 0;\n}\n```\n\nWith this ordering, when `helper_a(0)` is reached, the IRQ-disabled region has already been exited (depth = 0), so calling a sleepable global function is permitted and verification passes.",
+  "must_mention": [
+    "A sleepable operation is reached through a global subprogram",
+    "IRQs are disabled at that point",
+    "The call must be outside the IRQ-disabled region"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes helper_a's argument value",
+    "Moves bpf_local_irq_restore after the return",
+    "Adds a NULL check for the local buffer"
+  ]
+}

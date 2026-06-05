@@ -1,0 +1,57 @@
+The verifier failure occurs because the `helper_a` function dereferences its pointer argument `s` without checking if it's NULL. The verifier identifies `s` (stored in register R6) as potentially NULL (`mem_or_null` type), leading to an "invalid mem access" error when accessing `s->x`.
+
+**Explanation:**
+- In `entry`, `s` is a stack-allocated struct, so `&s` is always non-NULL.
+- However, when `helper_a` is analyzed separately (due to `__noinline`), the verifier conservatively assumes the pointer could be NULL.
+- The dereference `s->x` at line 13 risks a NULL pointer access.
+
+**Fix:**
+Add a NULL check in `helper_a` before dereferencing `s`. Return a safe default value (0) if `s` is NULL.
+
+```diff
+--- original.c
++++ fixed.c
+@@ -8,7 +8,9 @@
+ 
+ __noinline int helper_a(const struct Item *s)
+ {
+-	return bpf_get_prandom_u32() < s->x;
++	if (!s)
++		return 0;
++	return bpf_get_prandom_u32() < s->x;
+ }
+ 
+ SEC("cgroup_skb/ingress")
+```
+
+**Fixed Source:**
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+struct Item {
+	int x;
+};
+
+__noinline int helper_a(const struct Item *s)
+{
+	if (!s)
+		return 0;
+	return bpf_get_prandom_u32() < s->x;
+}
+
+SEC("cgroup_skb/ingress")
+int entry(struct __sk_buff *skb)
+{
+	const struct Item s = {.x = skb->len};
+
+	helper_a(&s);
+
+	return 1;
+}
+```
+
+**Why this works:**
+- The NULL check (`if (!s)`) allows the verifier to prove that `s` is non-NULL in the dereference path.
+- The safe return value (0) handles the (impossible) NULL case, satisfying the verifier's safety requirements.
+- The struct access remains valid since `s` is always non-NULL in practice, but the check provides the necessary proof.

@@ -1,0 +1,38 @@
+## Explanation
+
+The verifier rejects the program with:
+
+```
+recursive call from helper_a() to helper_a()
+```
+
+The eBPF verifier does **not** allow recursion between BPF subprograms. It needs to statically bound the call chain (and stack usage) for every program, so any function that (directly or indirectly) calls itself is rejected outright — note that `processed 0 insns`, meaning verification was refused before any instruction was even analyzed.
+
+In `helper_a`, the line
+
+```asm
+l0_%=:	call helper_a;
+```
+
+is a direct self-call. That is the recursion the verifier complains about.
+
+## Fix
+
+The recursion is just being used as a loop: increment `r1`, copy it into `r0`, and repeat while `r1 < 4`. We can express the same logic with a backward branch instead of a recursive call, which the verifier accepts (bounded loops are allowed; recursion is not).
+
+```c
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l0_%=:	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l0_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+Here the label `l0_%=` is placed at the top of the loop body and the conditional branch jumps back to it instead of calling the function again. This produces equivalent behavior (loop while `r1 < 4`, leaving `r0 == r1`) without any recursion, so the verifier no longer rejects it.
+
+This is the minimal change: it only converts the single recursive `call helper_a` into a backward `goto` to a label at the loop head, removing the self-recursion that triggered the failure.

@@ -1,0 +1,41 @@
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("tc")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = *(u32*)(r1 + %[data]);			\
+	r3 = *(u32*)(r1 + %[data_end]);			\
+	r0 = r2;					\
+	r0 += 16;					\
+	if r0 <= r3 goto l0_%=;				\
+	exit;						\
+l0_%=:	r6 = *(u32*)(r2 + %[mark]);			\
+	r2 = 0;						\
+	*(u32*)(r10 -8) = r2;				\
+	*(u64*)(r10 -16) = r2;				\
+	*(u64*)(r10 -24) = r2;				\
+	*(u64*)(r10 -32) = r2;				\
+	*(u64*)(r10 -40) = r2;				\
+	*(u64*)(r10 -48) = r2;				\
+	r2 = r10;					\
+	r2 += -48;					\
+	r3 = 36;					\
+	r4 = 0;						\
+	r5 = 0;						\
+	call %[bpf_sk_lookup_tcp];			\
+	if r6 == 0 goto l1_%=;				\
+	exit;						\
+l1_%=:	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+"	:
+	: __imm(bpf_sk_lookup_tcp),
+	  __imm(bpf_sk_release),
+	  __imm_const(data, offsetof(struct __sk_buff, data)),
+	  __imm_const(data_end, offsetof(struct __sk_buff, data_end)),
+	  __imm_const(mark, offsetof(struct __sk_buff, mark))
+	: __clobber_all);
+}

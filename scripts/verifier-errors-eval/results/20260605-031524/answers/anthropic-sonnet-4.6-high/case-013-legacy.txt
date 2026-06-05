@@ -1,0 +1,44 @@
+## Explanation of the Failure
+
+The BPF verifier enforces a **512-byte limit on the combined stack depth** across a call chain. The error:
+
+```
+combined stack size of 3 calls is 544. Too large
+```
+
+means the deepest call chain (counting 3 call instructions = 4 stack frames) exceeds 512 bytes.
+
+The deepest chain is:
+
+```
+entry → helper_c → helper_b → helper_a
+```
+
+Frame breakdown:
+| Function   | Stack frame |
+|------------|-------------|
+| `entry`    | ~24 bytes (3 callee-saved registers: r6, r7, r8 for skb + accumulators) |
+| `helper_c` | 260 bytes (`MAX_STACK`) |
+| `helper_b` | 260 bytes (`MAX_STACK`) |
+| `helper_a` | 0 bytes (no locals) |
+| **Total**  | **544 bytes** |
+
+544 > 512 → rejected.
+
+To stay within the limit:
+```
+24 + X + X + 0 ≤ 512  →  X ≤ 244
+```
+
+## Fix
+
+Reduce `MAX_STACK` from `260` to `240`, giving a comfortable margin (504 bytes total):
+
+```diff
+-#define MAX_STACK 260
++#define MAX_STACK 240
+```
+
+With `MAX_STACK = 240`:
+- Deepest chain: 24 + 240 + 240 + 0 = **504 bytes** ≤ 512 ✓  
+- All other chains are shallower and also pass.

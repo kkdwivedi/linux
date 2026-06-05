@@ -1,0 +1,55 @@
+The program fails because it acquires two `bpf_res_spin_lock`s in this order:
+
+1. `lock_a`
+2. `lock_b`
+
+but on the successful path it releases them in this order:
+
+1. `lock_a`
+2. `lock_b`
+
+The verifier tracks held resource locks and requires them to be released in LIFO/reverse-acquisition order. After `lock_b` is acquired, the top currently-held lock is `lock_b`, so trying to unlock `lock_a` first is considered out-of-order:
+
+```text
+10: call bpf_res_spin_unlock
+bpf_res_spin_unlock cannot be out of order
+```
+
+The failure is at:
+
+```c
+bpf_res_spin_unlock(&lock_a);
+bpf_res_spin_unlock(&lock_b);
+```
+
+because `lock_b` is still held when `lock_a` is unlocked.
+
+The smallest fix is to swap the two unlocks on the successful path:
+
+```diff
+ SEC("?tc")
+ int entry(struct __sk_buff *ctx)
+ {
+ 	if (bpf_res_spin_lock(&lock_a))
+ 		return 0;
+ 	if (bpf_res_spin_lock(&lock_b)) {
+ 		bpf_res_spin_unlock(&lock_a);
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+ 	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+With that change, the successful path becomes:
+
+```c
+lock_a;
+lock_b;
+unlock_b;
+unlock_a;
+```
+
+which satisfies the verifier’s required lock-release ordering. The failure path for `lock_b` remains correct because only `lock_a` is held there.

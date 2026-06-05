@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nThe verifier tracks packet pointers (`pkt`) derived from `sk->data`. Any helper that can change the packet layout\u2014like `bpf_skb_pull_data()`\u2014invalidates all previously-held packet pointers, turning them back into plain scalars.\n\nHere the flow is:\n\n1. `p` is loaded from `sk->data` \u2192 `R7 = pkt(r=0)`.\n2. The bounds check `p+1 > data_end` validates `R7` (range becomes 4 bytes).\n3. `helper_a(sk, 0)` is called. Because it is a **global** function (and ultimately calls `bpf_skb_pull_data`), the verifier conservatively assumes the packet data may have moved. It invalidates `R7`, converting it from a packet pointer to a scalar.\n4. `*p = 42` then dereferences `R7`, which is now a scalar \u2192 `R7 invalid mem access 'scalar'`.\n\nThe verifier even tells you exactly this in the causal path:\n> `R7: packet data may have moved; previous value was pkt at offset 0`\n\nThe validation of the pointer happened **before** a call that can move the packet, so the validated pointer is stale by the time it is used.\n\n## Fix\n\nReload `p` from `sk->data` and re-run the bounds check **after** the helper call, so the pointer used for the store is freshly validated against the (possibly new) packet bounds:\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p;\n\n\t/* call helper first; it may pull/move packet data */\n\thelper_a(sk, 0);\n\n\t/* reload and revalidate the packet pointer afterwards */\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nThis satisfies the verifier because the bounds check that establishes `R7` (or whatever register holds `p`) as a valid packet pointer now occurs *after* the last operation that could invalidate it, so the pointer is provably in-range at the point of the store.\n\nIf the original ordering must be kept (check, then call, then store), the equivalent fix is to simply move the reload+recheck to right before `*p = 42`:\n\n```c\n\thelper_a(sk, 0);\n\tp = (void *)(long)sk->data;            /* reload */\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;                   /* revalidate */\n\t*p = 42;\n```\n\nEither way, the key is: **do not rely on a packet pointer validated before a helper call that can move packet data\u2014reload and recheck it afterward.**",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-015-diagnostic.txt",
+    "case_id": "case-015",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 3663,
+    "prompt_path": "public/case-015/prompt_diagnostic.md",
+    "prompt_sha256": "f4ee93633090707b3340ee048a1cd9c29849370062dafdfa25c31c23d9df8821",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-015-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "9cb9f99f-4206-47cf-ae12-129b6c242b80",
+    "started_at": "2026-06-05T03:17:23+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00851,
+    "output_cost_usd": 0.030025,
+    "total_cost_usd": 0.038535
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1702,
+    "output_tokens": 1201,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1702,
+      "output_tokens": 1201,
+      "output_tokens_details": {
+        "thinking_tokens": 294
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 2903
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EvAGCmMIDhgCKkDHfOrJfMOR91u2Quwxjk1eH5RBlRxJ3zQU2tE6j7LjDRHhdQG327lahcZdQ5lRhQD5XNBAc3v4VMLE1KzGjCMIMg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDC2X2T6KKRILnZAbBhoM53Lgdur0ebfrQg22IjB1UQag3/HGB4FAiBkLfw7JCtqd/Go2Tb8Qlrz1HvbRZD9rhSHtw0iEkH465HgVdh8qugUIyt0jRkzi11HTk/xKBgqbjPbthikGS2wc8W+LiIdihm4qO16TMKVS84bCQdRZxwfl4HqAwcU2AyHirSNqv25i1FwEIXWPgReUIBGBk825wXvyapRk2E8anZT6APo7yBHL8KRfzjQRX+9XXqytI0OQEeW5JtaarPSoxUeMftkfQmpThEAB84U5b785JBObgI3ZAD5AYk6VaJWy4QRRYh5NkjHUK1PVKmvvQK6fbci/1tZPZ84a/3oSCpducW/+lzK8ueBbE35ESAz2pCsFn95FmX2IIomZMZCMC1F7wiPWmwYnH5hIv3GQ7HrXdJJtzjAek0gZyz0SmuQkhyoaCDeMURPQJFfdTAMV4gNQQRicKoXn4d3VJti/QPc8ElwTjKwx6r7tAnhwqXdNCSHG8mc5tCoOivFBdKHJV+o1ysKtQD0Ls3NW3+KJ6MzqbQ5GmSHDwofyRCvEUfZfM8l11ERC42koSc7c0q1Vat4ojNBIyTw3IYNWTFhsNj0AmnJxD8EYo8s2B02kCK0n3HdhUXZi8UX60Yq0z6IpcSdXEU+NvZ4xl54Vc+ADxrKIEko5RLJ8LDTOPLy2F9YGcHSVUdetMqef60bK0CyEtdN+Xkg/mzEEQDReOboe+cUMZI+sTIc2Pw0QKHGRTStQoDe2VCyOFvWzq8oULrs/WrgsbWNkdmeyRka0NKjV7dGxVzKuFrEpRywqNQgAPo35rAUS9TM1EdfVsLpTpNxhZVUbzgUCJDcsUce45UQyCEd9efx3eKZZwix60KA8ljSpetoJT3abwEdnOUeaT0gBf6tCwbHz3nzZed72gHxEg1twE5x63vckmdy1K+FKV5i4Pwg7p2PYl5U5QlVSpct5a7IyN4yH92QXgOh3ahpFCHxdD4tVOmskxS9bp5xD0mR0mWzLJGzy2KyeQW7H8OP/bRgB",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nThe verifier tracks packet pointers (`pkt`) derived from `sk->data`. Any helper that can change the packet layout\u2014like `bpf_skb_pull_data()`\u2014invalidates all previously-held packet pointers, turning them back into plain scalars.\n\nHere the flow is:\n\n1. `p` is loaded from `sk->data` \u2192 `R7 = pkt(r=0)`.\n2. The bounds check `p+1 > data_end` validates `R7` (range becomes 4 bytes).\n3. `helper_a(sk, 0)` is called. Because it is a **global** function (and ultimately calls `bpf_skb_pull_data`), the verifier conservatively assumes the packet data may have moved. It invalidates `R7`, converting it from a packet pointer to a scalar.\n4. `*p = 42` then dereferences `R7`, which is now a scalar \u2192 `R7 invalid mem access 'scalar'`.\n\nThe verifier even tells you exactly this in the causal path:\n> `R7: packet data may have moved; previous value was pkt at offset 0`\n\nThe validation of the pointer happened **before** a call that can move the packet, so the validated pointer is stale by the time it is used.\n\n## Fix\n\nReload `p` from `sk->data` and re-run the bounds check **after** the helper call, so the pointer used for the store is freshly validated against the (possibly new) packet bounds:\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p;\n\n\t/* call helper first; it may pull/move packet data */\n\thelper_a(sk, 0);\n\n\t/* reload and revalidate the packet pointer afterwards */\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nThis satisfies the verifier because the bounds check that establishes `R7` (or whatever register holds `p`) as a valid packet pointer now occurs *after* the last operation that could invalidate it, so the pointer is provably in-range at the point of the store.\n\nIf the original ordering must be kept (check, then call, then store), the equivalent fix is to simply move the reload+recheck to right before `*p = 42`:\n\n```c\n\thelper_a(sk, 0);\n\tp = (void *)(long)sk->data;            /* reload */\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;                   /* revalidate */\n\t*p = 42;\n```\n\nEither way, the key is: **do not rely on a packet pointer validated before a helper call that can move packet data\u2014reload and recheck it afterward.**",
+        "type": "text"
+      }
+    ],
+    "id": "msg_012sSdQDJwy6zB2D9afGTf7i",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1702,
+      "output_tokens": 1201,
+      "output_tokens_details": {
+        "thinking_tokens": 294
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

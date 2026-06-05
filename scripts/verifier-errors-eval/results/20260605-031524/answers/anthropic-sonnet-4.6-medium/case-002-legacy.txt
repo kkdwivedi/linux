@@ -1,0 +1,23 @@
+## Explanation
+
+The verifier reports `Unreleased reference id=2 alloc_insn=0` — the `bpf_cpumask` returned by `make_object()` carries an owning reference (acquired via `bpf_cpumask_create()`), but the `entry` program never releases it. `__sink(cpumask)` merely stores the pointer to the stack; it does not consume the reference. The verifier requires every acquired reference to be explicitly released before program exit.
+
+## Fix
+
+Add a NULL check and call `bpf_cpumask_release()` on the returned cpumask in `entry`:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *cpumask;
+
+	cpumask = make_object();
+	if (cpumask)
+		bpf_cpumask_release(cpumask);
+
+	return 0;
+}
+```
+
+This ensures the reference is always released before the program exits, satisfying the verifier's reference-tracking requirement. The NULL check is necessary because `make_object()` can return NULL (in which case there is no reference to release).

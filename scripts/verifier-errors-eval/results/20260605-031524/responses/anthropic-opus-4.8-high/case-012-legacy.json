@@ -1,0 +1,92 @@
+{
+  "answer_text": "## What the verifier is complaining about\n\n```\nsleepable global function helper_a() called in IRQ-disabled region\n```\n\nTwo facts combine to produce this error:\n\n1. **`helper_a` is a *global* (non\u2011static, `__noinline`) function.** Global subprograms are verified independently of their caller, and the verifier records a summary of their properties \u2014 in particular whether the function *may sleep*. Because `helper_a` calls `bpf_copy_from_user()`, which is a sleepable (`may_sleep`) helper, the whole of `helper_a` is marked **sleepable**. (Note that the verifier verifies the global function with unknown arguments, so it cannot use the fact that you only pass `0`; the `bpf_copy_from_user` path is considered reachable.)\n\n2. **The call to `helper_a` sits inside an IRQ\u2011disabled region.** `bpf_local_irq_save(&flags)` disables interrupts and `bpf_local_irq_restore(&flags)` re\u2011enables them. Anything that can sleep is forbidden while IRQs are disabled, so the verifier rejects the call:\n\n```\n3: (85) call bpf_local_irq_save#62664   ; refs=1   <-- IRQ disabled here\n...\n5: (85) call pc+4                        <-- call to sleepable helper_a -> rejected\n```\n\nSo the program is rejected not because of a bad pointer or size, but because a *possibly\u2011sleeping* function is invoked between `irq_save` and `irq_restore`.\n\n(The first line, `arg#0 reference type('UNKNOWN ') size cannot be determined: -22`, is a separate informational/BTF message about the `NULL` argument to `bpf_copy_from_user`; it is not the cause of the rejection.)\n\n## Smallest fix\n\nMove the `helper_a()` call out of the IRQ\u2011disabled region \u2014 i.e. call it before `bpf_local_irq_save()` (or after `bpf_local_irq_restore()`), where sleeping is allowed:\n\n```c\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\thelper_a(0);                      /* sleepable call, now outside IRQ region */\n\tbpf_local_irq_save(&flags);\n\tbpf_local_irq_restore(&flags);\n\treturn 0;\n}\n```\n\nThis satisfies the verifier because the sleepable global function is no longer invoked while interrupts are disabled; inside the IRQ\u2011disabled region there is now nothing that may sleep.\n\n### Alternative fixes (same idea)\n\nIf the intent is specifically to keep `helper_a` *inside* the IRQ region, then `helper_a` must not be sleepable. You can achieve that by removing the sleepable helper from it (e.g. drop the `bpf_copy_from_user` call, or replace it with a non\u2011sleepable operation). Making `helper_a` `static` does **not** help \u2014 it would be inlined and the sleepable `bpf_copy_from_user` would still end up inside the IRQ\u2011disabled region, producing an equivalent rejection.\n\nThe minimal, behavior\u2011preserving change is the relocation of the `helper_a(0)` call shown above.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-012-legacy.txt",
+    "case_id": "case-012",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 1526,
+    "prompt_path": "public/case-012/prompt_legacy.md",
+    "prompt_sha256": "3c7396a0a94e22b4ffa05f47bf695c68faeca27ec07a26da548d621cb3473cdb",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-012-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "781c8cd5-0ae5-46de-a201-b4326ccccfec",
+    "started_at": "2026-06-05T03:17:39+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.004175,
+    "output_cost_usd": 0.058225,
+    "total_cost_usd": 0.0624
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 835,
+    "output_tokens": 2329,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 835,
+      "output_tokens": 2329,
+      "output_tokens_details": {
+        "thinking_tokens": 1277
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 3164
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "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",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## What the verifier is complaining about\n\n```\nsleepable global function helper_a() called in IRQ-disabled region\n```\n\nTwo facts combine to produce this error:\n\n1. **`helper_a` is a *global* (non\u2011static, `__noinline`) function.** Global subprograms are verified independently of their caller, and the verifier records a summary of their properties \u2014 in particular whether the function *may sleep*. Because `helper_a` calls `bpf_copy_from_user()`, which is a sleepable (`may_sleep`) helper, the whole of `helper_a` is marked **sleepable**. (Note that the verifier verifies the global function with unknown arguments, so it cannot use the fact that you only pass `0`; the `bpf_copy_from_user` path is considered reachable.)\n\n2. **The call to `helper_a` sits inside an IRQ\u2011disabled region.** `bpf_local_irq_save(&flags)` disables interrupts and `bpf_local_irq_restore(&flags)` re\u2011enables them. Anything that can sleep is forbidden while IRQs are disabled, so the verifier rejects the call:\n\n```\n3: (85) call bpf_local_irq_save#62664   ; refs=1   <-- IRQ disabled here\n...\n5: (85) call pc+4                        <-- call to sleepable helper_a -> rejected\n```\n\nSo the program is rejected not because of a bad pointer or size, but because a *possibly\u2011sleeping* function is invoked between `irq_save` and `irq_restore`.\n\n(The first line, `arg#0 reference type('UNKNOWN ') size cannot be determined: -22`, is a separate informational/BTF message about the `NULL` argument to `bpf_copy_from_user`; it is not the cause of the rejection.)\n\n## Smallest fix\n\nMove the `helper_a()` call out of the IRQ\u2011disabled region \u2014 i.e. call it before `bpf_local_irq_save()` (or after `bpf_local_irq_restore()`), where sleeping is allowed:\n\n```c\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\thelper_a(0);                      /* sleepable call, now outside IRQ region */\n\tbpf_local_irq_save(&flags);\n\tbpf_local_irq_restore(&flags);\n\treturn 0;\n}\n```\n\nThis satisfies the verifier because the sleepable global function is no longer invoked while interrupts are disabled; inside the IRQ\u2011disabled region there is now nothing that may sleep.\n\n### Alternative fixes (same idea)\n\nIf the intent is specifically to keep `helper_a` *inside* the IRQ region, then `helper_a` must not be sleepable. You can achieve that by removing the sleepable helper from it (e.g. drop the `bpf_copy_from_user` call, or replace it with a non\u2011sleepable operation). Making `helper_a` `static` does **not** help \u2014 it would be inlined and the sleepable `bpf_copy_from_user` would still end up inside the IRQ\u2011disabled region, producing an equivalent rejection.\n\nThe minimal, behavior\u2011preserving change is the relocation of the `helper_a(0)` call shown above.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_014rKQaLC4oJYrz9DFwiZgJp",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 835,
+      "output_tokens": 2329,
+      "output_tokens_details": {
+        "thinking_tokens": 1277
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

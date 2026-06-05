@@ -1,0 +1,87 @@
+{
+  "answer_text": "The verifier treats the pointer parameter to `__noinline` functions as `mem_or_null` \u2014 it doesn't know at validation time that the caller always passes a valid (stack) pointer. So inside `helper_a`, `s` (and `r6`) is typed `mem_or_null`, and dereferencing it without a NULL check is rejected.\n\nThe fix: add a NULL check inside `helper_a` before dereferencing `s`.\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nThis satisfies the verifier: after the `if (!s) return 0;` guard, `s` is known non-NULL on the dereference path.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-medium/case-004-diagnostic.txt",
+    "case_id": "case-004",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-medium",
+    "prompt_bytes": 3165,
+    "prompt_path": "public/case-004/prompt_diagnostic.md",
+    "prompt_sha256": "33497e233ec114611aeef413d62f647129d0e9e5486ab3c21781e79670499395",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-medium/case-004-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "587191ae-5853-454d-915a-b6b01dc69993",
+    "started_at": "2026-06-05T03:17:50+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00351,
+    "output_cost_usd": 0.00297,
+    "total_cost_usd": 0.00648
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1170,
+    "output_tokens": 198,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1170,
+      "output_tokens": 198,
+      "output_tokens_details": {
+        "thinking_tokens": 0
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1368
+  },
+  "raw_response": {
+    "content": [
+      {
+        "text": "The verifier treats the pointer parameter to `__noinline` functions as `mem_or_null` \u2014 it doesn't know at validation time that the caller always passes a valid (stack) pointer. So inside `helper_a`, `s` (and `r6`) is typed `mem_or_null`, and dereferencing it without a NULL check is rejected.\n\nThe fix: add a NULL check inside `helper_a` before dereferencing `s`.\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nThis satisfies the verifier: after the `if (!s) return 0;` guard, `s` is known non-NULL on the dereference path.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01Ff3vPBVjQN2DSUjjJ4egzF",
+    "model": "claude-sonnet-4-6",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1170,
+      "output_tokens": 198,
+      "output_tokens_details": {
+        "thinking_tokens": 0
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

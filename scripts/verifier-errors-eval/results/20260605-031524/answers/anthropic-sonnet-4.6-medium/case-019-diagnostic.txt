@@ -1,0 +1,30 @@
+The verifier does not allow recursive BPF-to-BPF subprogram calls. `helper_a` calls itself, which forms a cycle. The fix is to rewrite the recursion as a loop.
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r1 = 0;						\
+	call helper_a;					\
+	exit;						\
+"	::: __clobber_all);
+}
+
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+loop_%=:						\
+	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto loop_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+**Explanation:** The original `helper_a` recursively called itself when `r1 < 4`, which the verifier rejects because it cannot bound stack depth with cyclic call graphs. The fix replaces the tail-recursive call with a backward branch (a loop), achieving the same behavior — incrementing `r1` until it reaches 4 — without any subprogram call cycle.

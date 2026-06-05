@@ -1,0 +1,53 @@
+The verifier failure is caused by this call:
+
+```c
+data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
+```
+
+`buffer` is only 8 bytes:
+
+```c
+char buffer[8] = {};
+```
+
+but the helper is told that the buffer length is 9 bytes. For `bpf_dynptr_slice()`, the third and fourth arguments form a memory/length pair. The verifier therefore checks that `R3` points to at least `R4` bytes of valid stack memory. Here `R3` points to the stack slot for `buffer`, but `R4 == 9`, while only 8 bytes are available/initialized. Hence:
+
+```text
+invalid read from stack R3 off -24+8 size 9
+R3 and R4 memory, len pair leads to invalid memory access
+```
+
+The smallest likely fix is to make the passed length match the actual buffer size, or make the buffer large enough for the requested length.
+
+If the intended slice size is 9 bytes, enlarge the buffer:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -7,7 +7,7 @@ SEC("?cgroup_skb/egress")
+ int entry(struct __sk_buff *skb)
+ {
+ 	struct bpf_dynptr ptr;
+-	char buffer[8] = {};
++	char buffer[9] = {};
+ 	__u64 *data;
+ 
+ 	if (bpf_dynptr_from_skb(skb, 0, &ptr))
+```
+
+Alternatively, if an 8-byte slice is sufficient, change the helper argument:
+
+```diff
+-	data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
++	data = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+```
+
+Between the two, the minimal semantic-preserving fix for the current requested length is:
+
+```c
+char buffer[9] = {};
+```
+
+That should satisfy the verifier because the stack buffer passed in `R3` will then cover the full 9-byte length passed in `R4`.

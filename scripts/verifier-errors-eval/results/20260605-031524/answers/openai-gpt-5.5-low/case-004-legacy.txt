@@ -1,0 +1,41 @@
+The verifier is validating `helper_a()` as a separate BPF subprogram. At the start of that validation, its argument is not treated as a definitely non-null pointer:
+
+```text
+R1=mem_or_null(id=1,sz=4)
+```
+
+Then `helper_a()` copies it to `r6`:
+
+```text
+7: r6 = r1
+```
+
+and later dereferences it:
+
+```text
+10: r2 = *(u32 *)(r6 +0)
+R6 invalid mem access 'mem_or_null'
+```
+
+Because `r6` is still `mem_or_null`, the verifier rejects the load from `s->x`. Even though the only caller passes `&s`, which is non-null, the verifier requires the callee to prove the pointer is non-null before dereferencing it.
+
+The smallest source-level fix is to add an explicit null check in `helper_a()` before reading `s->x`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..1111111 100644
+--- a/case.c
++++ b/case.c
+@@ -9,6 +9,8 @@ struct Item {
+ 
+ __noinline int helper_a(const struct Item *s)
+ {
++	if (!s)
++		return 0;
+ 	return bpf_get_prandom_u32() < s->x;
+ }
+```
+
+With that check, the verifier can refine `s` from `mem_or_null` to non-null `mem` on the dereference path, so the load from `s->x` should be accepted.

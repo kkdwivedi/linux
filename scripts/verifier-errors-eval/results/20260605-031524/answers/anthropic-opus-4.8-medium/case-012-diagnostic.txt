@@ -1,0 +1,44 @@
+## What the verifier is complaining about
+
+`helper_a()` is a **global** subprogram (no `static`, just `__noinline`). Global functions are verified as independent units with unknown arguments, so the verifier cannot prune the `if (!i)` branch — it must assume `bpf_copy_from_user()` (a *sleepable* helper) can be reached. That makes `helper_a()` a "sleepable global function."
+
+`bpf_local_irq_save()` enters an **IRQ‑disabled region**. Inside such a region the program may not call anything that can sleep. So the call:
+
+```
+bpf_local_irq_save(&flags);
+helper_a(0);            // sleepable global func in IRQ-disabled region -> rejected
+bpf_local_irq_restore(&flags);
+```
+
+is rejected with *"sleepable global function helper_a() called in IRQ-disabled region"*.
+
+This is exactly what the verifier's own suggestion says:
+> Move the call outside the critical section, or use a non-sleepable function.
+
+## Smallest fix
+
+Move the `helper_a(0)` call out of the IRQ-disabled critical section (e.g. before `bpf_local_irq_save`). A global sleepable function is perfectly fine outside an IRQ-disabled region.
+
+```c
+SEC("?syscall")
+int entry(void *ctx)
+{
+	unsigned long flags;
+
+	helper_a(0);                       /* now outside the critical section */
+	bpf_local_irq_save(&flags);
+	bpf_local_irq_restore(&flags);
+	return 0;
+}
+```
+
+This keeps the empty critical section intact and removes the only sleepable call from the IRQ-disabled window, so verification succeeds.
+
+### Alternative fix
+If the call must stay where it is, make the helper non‑sleepable from the verifier's point of view. Marking it `static`:
+
+```c
+static int __noinline helper_a(int i)
+```
+
+lets the verifier propagate the constant argument `0` into the body. But note: with `i == 0` the `!i` branch is *taken*, so `bpf_copy_from_user()` (sleepable) would still be reached and still rejected. To use this approach you would additionally have to ensure the sleepable branch isn't reachable (e.g. call `helper_a(1)` so `if (!i)` is false). Because that changes the test's intent, the cleanest minimal change is simply **relocating the call outside the IRQ-disabled section** as shown above.

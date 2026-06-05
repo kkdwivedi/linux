@@ -1,0 +1,28 @@
+## Verifier Failure Explanation
+
+The error message is clear:
+
+```
+sleepable helper bpf_copy_from_user#148 in non-preemptible region
+```
+
+`bpf_copy_from_user` is a **sleepable** helper — it may block/sleep while copying data from user space. The verifier tracks preempt-disable/enable pairs and forbids calling sleepable helpers inside a non-preemptible region (between `bpf_preempt_disable()` and `bpf_preempt_enable()`), since sleeping in a preempt-disabled context would deadlock the kernel.
+
+## Fix
+
+Move `bpf_copy_from_user()` **outside** the preempt-disabled region. The smallest change is to call it before disabling preemption (or equivalently, after re-enabling it):
+
+```c
+SEC("?fentry.s/sys_getpgid")
+int entry(void *ctx)
+{
+	u32 data;
+
+	bpf_copy_from_user(&data, sizeof(data), NULL);
+	bpf_preempt_disable();
+	bpf_preempt_enable();
+	return 0;
+}
+```
+
+This ensures the sleepable helper runs in a preemptible context, satisfying the verifier's constraint. The `bpf_preempt_disable()`/`bpf_preempt_enable()` pair still exists (presumably for whatever non-sleepable critical section the test intends), but no sleepable call occurs within it.

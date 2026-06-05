@@ -1,0 +1,44 @@
+## Verifier Failure Explanation
+
+The error message is clear: **"bpf_res_spin_unlock cannot be out of order"**
+
+The `bpf_res_spin_lock` / `bpf_res_spin_unlock` helpers enforce strict **LIFO (stack) ordering** — locks must be released in the reverse order they were acquired.
+
+In the code, the acquisition order is:
+1. `lock_a` acquired
+2. `lock_b` acquired
+
+But the unlock order is:
+1. `lock_a` unlocked ← **wrong**: this is the *first* lock acquired, not the last
+2. `lock_b` unlocked
+
+The verifier rejects this because `lock_a` is being unlocked while `lock_b` (acquired later) is still held. This violates the required LIFO discipline.
+
+## Fix
+
+Swap the unlock order so that `lock_b` (the most recently acquired) is released first:
+
+```c
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+```
+
+The full corrected function:
+
+```c
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```
+
+This ensures the unlock order is the reverse of the lock order (`lock_b` then `lock_a`), satisfying the verifier's LIFO constraint.

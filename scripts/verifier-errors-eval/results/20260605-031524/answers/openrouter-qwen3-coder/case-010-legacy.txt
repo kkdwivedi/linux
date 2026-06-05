@@ -1,0 +1,45 @@
+Looking at the verifier log, I can see the issue:
+
+The problem occurs in `helper_b` where the code does `skb + 1` and passes that modified pointer to `helper_c`. The verifier explicitly states "dereference of modified ctx ptr R2 off=192 disallowed".
+
+Let me trace through what happens:
+1. `helper_b` receives `skb` (R2) as a valid context pointer
+2. It calls `helper_a(skb)` successfully 
+3. Then it does `skb + 1` (which becomes `r6 += 192` since `skb` is a struct __sk_buff pointer, and pointer arithmetic moves by struct size)
+4. It passes this modified pointer to `helper_c`, which tries to dereference it to access `skb->ifindex`
+5. The verifier rejects this because you can't dereference a modified context pointer
+
+The fix is simple: pass the original `skb` pointer to `helper_c` instead of the modified one.
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+__attribute__((noinline))
+int helper_a(struct __sk_buff *skb)
+{
+	return skb->len;
+}
+
+int helper_c(int val, struct __sk_buff *skb);
+
+__attribute__((noinline))
+int helper_b(int val, struct __sk_buff *skb)
+{
+	return helper_a(skb) + helper_c(val, skb);  // Changed from skb + 1 to skb
+}
+
+__attribute__((noinline))
+int helper_c(int val, struct __sk_buff *skb)
+{
+	return skb->ifindex * val;
+}
+
+SEC("tc")
+int entry(struct __sk_buff *skb)
+{
+	return helper_a(skb) + helper_b(2, skb) + helper_c(3, skb);
+}
+```
+
+The issue was that `helper_b` was passing `skb + 1` to `helper_c`, but context pointers cannot be arbitrarily modified and still used safely. The verifier correctly rejected this as it could lead to accessing memory outside the valid context structure.

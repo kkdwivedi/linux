@@ -1,0 +1,56 @@
+## What the verifier is complaining about
+
+The failing instruction is:
+
+```
+4: (79) r0 = *(u64 *)(r0 +8)
+R0 invalid mem access 'scalar'
+```
+
+At this point `r0` is a **scalar**, not a pointer, so dereferencing it is rejected.
+
+Trace why `r0` became a scalar:
+
+```
+0: *(u64*)(r10 - 8) = r1     // spill ctx() into the 8-byte slot fp-8..fp-1
+   ...                       // fp-8 = ctx()  (a tracked spilled pointer)
+
+2: *(u8*)(r10 - 7) = r0      // write 1 byte INSIDE that same 8-byte slot
+   ...                       // fp-8 = mmmmmmmm  (slot now "misc", pointer tracking destroyed)
+
+3: r0 = *(u64*)(r10 - 8)     // reload -> R0 = scalar()  (no longer a pointer)
+4: r0 = *(u64*)(r0 + 8)      // dereference a scalar -> rejected
+```
+
+The store at `r10 - 7` is a **partial overwrite of the 8-byte spill slot** that held the `ctx()` pointer. A spilled pointer is only tracked while the whole 8-byte slot is intact. Once any byte of it is overwritten, the verifier marks the slot as `mmmmmmmm` (misc bytes), so reloading it produces an unknown scalar, which cannot be dereferenced.
+
+## Smallest fix
+
+Don’t write the byte into the slot that holds the spilled pointer. Move the 1-byte store to a *different*, non-overlapping stack slot so the `ctx()` spill at `fp-8` stays intact and reloads as a pointer:
+
+```c
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	*(u64*)(r10 - 8) = r1;				\
+	r0 = 0x23;					\
+	*(u8*)(r10 - 16) = r0;	/* was r10 - 7: stay out of the spill slot */ \
+	r0 = *(u64*)(r10 - 8);				\
+	r0 = *(u64*)(r0 + 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+With this change, `fp-8` remains `ctx()`, instruction 3 reloads `r0` as a pointer, and instruction 4 is now a (pointer) context access instead of a scalar dereference, so the `R0 invalid mem access 'scalar'` error disappears.
+
+## Caveat
+
+After this fix the verifier will proceed to actually *check* `r0 = *(u64*)(r0 + 8)` as a `__sk_buff` context access. A naked `u64` read at offset 8 of `__sk_buff` is not a valid context field access and would be rejected next with an `invalid bpf_context access off=8 size=8` style error. If the goal is for the whole program to verify, the final load must target a legal `__sk_buff` field/size (e.g. read a 4-byte field at a valid offset), e.g.:
+
+```c
+	r0 = *(u32*)(r0 + 0);   /* read __sk_buff->len */
+```
+
+But the *specific* failure shown in the log (`R0 invalid mem access 'scalar'`) is caused solely by the partial overwrite of the spilled pointer at `fp-7`, and the minimal source change to eliminate it is to relocate that byte store out of the 8-byte spill slot.

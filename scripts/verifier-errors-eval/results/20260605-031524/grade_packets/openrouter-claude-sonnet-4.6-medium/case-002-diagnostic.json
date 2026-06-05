@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Release cpumask after __sink(cpumask) if cpumask is non-NULL.",
+    "Transfer the owned cpumask into a kptr/map in a verifier-accepted way so the program no longer owns it."
+  ],
+  "canonical_fix": "After make_object returns a non-NULL cpumask, call bpf_cpumask_release(cpumask) before returning on every path that still owns it.",
+  "case_id": "case-002",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "easy",
+  "expected_explanation": "make_object acquires an owned cpumask reference. The entry program stores/sinks it and returns without releasing or transferring ownership, so one exit path leaks the reference.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-sonnet-4.6-medium/case-002-diagnostic.txt",
+    "case_id": "case-002",
+    "model": "anthropic/claude-sonnet-4.6",
+    "profile": "openrouter-claude-sonnet-4.6-medium",
+    "prompt_bytes": 5048,
+    "prompt_path": "public/case-002/prompt_diagnostic.md",
+    "prompt_sha256": "63788e59d8129296d6b2d78c878578b65f355ef76b449bf180000c418be58a88",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-sonnet-4.6-medium/case-002-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "bfbbabb0-75a3-4186-93ab-d9faecf1b059",
+    "started_at": "2026-06-05T03:18:36+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation\n\nThe verifier reports an **unreleased reference** (id=2). The `make_object()` function calls `bpf_cpumask_create()`, which returns an *owned* reference. When `make_object()` returns successfully (non-NULL), that ownership is transferred to the caller (`entry`). However, `entry` only calls `__sink(cpumask)` (which prevents dead-code elimination but does **not** release the BPF reference) and then exits without ever calling `bpf_cpumask_release()`.\n\nThe verifier traces the path:\n1. `bpf_cpumask_create()` \u2192 cpumask is non-NULL (id=2 acquired)  \n2. `bpf_cpumask_empty()` \u2192 returns non-zero, so the early-release branch is skipped  \n3. `make_object()` returns the cpumask to `entry`  \n4. `entry` exits \u2192 **id=2 still live \u2192 leak**\n\n## Fix\n\nAdd a `bpf_cpumask_release()` call in `entry` after `make_object()` returns, guarded by a NULL check:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *cpumask;\n\n\tcpumask = make_object();\n\t__sink(cpumask);\n\tif (cpumask)\n\t\tbpf_cpumask_release(cpumask);\n\n\treturn 0;\n}\n```\n\nThis ensures the owned reference is released on every exit path: if `make_object()` returns NULL the `if` is skipped (nothing to release), and if it returns a valid pointer the reference is properly freed before the program exits.",
+  "must_mention": [
+    "An owned cpumask reference is acquired",
+    "Every exit path must release or transfer ownership",
+    "The NULL path does not need release"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Removes the acquisition without preserving the intended object use",
+    "Calls release without considering NULL when the API requires non-NULL",
+    "Releases only on an error path and still returns with ownership on success"
+  ]
+}

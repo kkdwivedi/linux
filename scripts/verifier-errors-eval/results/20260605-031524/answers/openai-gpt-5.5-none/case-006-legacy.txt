@@ -1,0 +1,66 @@
+The program is rejected because it is attached as a `kprobe` program:
+
+```c
+SEC("kprobe")
+```
+
+but it calls:
+
+```c
+bpf_ktime_get_coarse_ns()
+```
+
+The verifier log says:
+
+```text
+program of this type cannot use helper bpf_ktime_get_coarse_ns#160
+```
+
+So the failure is not due to register state, stack usage, or the naked assembly. The helper itself is not allowed for this program type.
+
+The smallest likely fix is to use a BPF program type that is allowed to call `bpf_ktime_get_coarse_ns`. Since this selftest is only checking helper availability and does not use the context at all, changing the section from `kprobe` to a tracing program section is likely sufficient.
+
+A minimal patch would be:
+
+```diff
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ 
+ char _license[] SEC("license") = "GPL";
+ 
+-SEC("kprobe")
++SEC("tp_btf/sched_switch")
+ __naked void entry(void)
+ {
+ 	asm volatile ("					\
+ 	call %[bpf_ktime_get_coarse_ns];		\
+ 	r0 = 0;						\
+ 	exit;						\
+ "	:
+ 	: __imm(bpf_ktime_get_coarse_ns)
+ 	: __clobber_all);
+ }
+```
+
+Reasoning:
+
+- The verifier rejects immediately at instruction 0 because helper `bpf_ktime_get_coarse_ns` is unavailable to `BPF_PROG_TYPE_KPROBE`.
+- The program does not inspect its context, so changing the attach section is enough at source level.
+- `tp_btf/sched_switch` makes this a tracing-style program where time helpers are generally permitted.
+- The rest of the program is verifier-safe: it calls the helper, overwrites `r0` with `0`, and exits.
+
+If the test specifically needs to remain a kprobe program, then the alternative smallest fix is to replace the helper with one allowed for kprobes, for example:
+
+```diff
+-	call %[bpf_ktime_get_coarse_ns];		\
++	call %[bpf_ktime_get_ns];			\
+```
+
+and update the immediate accordingly:
+
+```diff
+-	: __imm(bpf_ktime_get_coarse_ns)
++	: __imm(bpf_ktime_get_ns)
+```
+
+But if the purpose is to test `bpf_ktime_get_coarse_ns`, changing the program section/type is the right fix.

@@ -1,0 +1,19 @@
+The verifier fails because the byte store at `fp-7` partially overwrites the context pointer stored at `fp-8`. This corrupts the pointer's provenance, causing the subsequent load to yield a scalar value instead of a valid pointer. When this scalar is dereferenced at `r0 + 8`, the verifier rejects it as an invalid memory access.
+
+To fix this, move the byte store to a non-overlapping stack location (e.g., `fp-9`) so the context pointer remains intact and is still recognized as a valid pointer.
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -6,7 +6,7 @@
+ __naked void entry(void)
+ {
+ 	asm volatile ("					\
+ 	*(u64*)(r10 - 8) = r1;				\
+ 	r0 = 0x23;					\
+-	*(u8*)(r10 - 7) = r0;				\
++	*(u8*)(r10 - 9) = r0;				\
+ 	r0 = *(u64*)(r10 - 8);				\
+ 	r0 = *(u64*)(r0 + 8);				\
+ 	exit;						\
+```

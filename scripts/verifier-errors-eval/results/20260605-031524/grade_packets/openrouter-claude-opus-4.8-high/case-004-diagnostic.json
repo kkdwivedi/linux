@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Guard helper_a with if (!s) return 0; before s->x.",
+    "Make the function pattern local/static only if that changes verifier validation so the argument is proven non-NULL, without hiding an unsafe dereference."
+  ],
+  "canonical_fix": "Add a NULL check in helper_a before reading s->x, returning a safe value on the NULL path.",
+  "case_id": "case-004",
+  "category": "Register Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The global subprogram dereferences its pointer argument directly. The verifier validates global subprograms for any argument state matching the prototype, including NULL-like memory arguments, so the callee must prove the pointer is non-NULL before dereferencing.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-opus-4.8-high/case-004-diagnostic.txt",
+    "case_id": "case-004",
+    "model": "anthropic/claude-opus-4.8",
+    "profile": "openrouter-claude-opus-4.8-high",
+    "prompt_bytes": 3165,
+    "prompt_path": "public/case-004/prompt_diagnostic.md",
+    "prompt_sha256": "33497e233ec114611aeef413d62f647129d0e9e5486ab3c21781e79670499395",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-opus-4.8-high/case-004-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "ee5b5e9e-d95c-4f66-8ce1-dfb6f31b2422",
+    "started_at": "2026-06-05T03:18:18+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation\n\n`helper_a()` is a `__noinline` global function. The BPF verifier verifies global functions **independently** of their callers \u2014 it does not propagate the caller's knowledge that `&s` is a valid stack pointer. Instead, any pointer-to-memory argument of a global function is given the type `PTR_TO_MEM_OR_NULL` (shown as `mem_or_null` in the log).\n\nThat means inside `helper_a`, the verifier assumes `s` may be NULL. When the code does `s->x` (insn `10: r2 = *(u32 *)(r6 +0)`), it dereferences a possibly-NULL pointer, which the verifier rejects:\n\n```\nR6 invalid mem access 'mem_or_null'\n```\n\nThe fix the verifier itself suggests: **only dereference on the non-NULL path** (or tell the verifier the argument is never NULL).\n\n## Smallest fix\n\nAdd an explicit NULL check at the top of `helper_a`:\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nAfter the `if (!s)` branch, the verifier refines `s` to `PTR_TO_MEM` (non-NULL, size 4) on the fall-through path, so `s->x` becomes a provably safe read.\n\n## Alternative\n\nIf your libbpf/kernel supports argument tags, you can instead annotate the parameter as non-NULL so the verifier requires/assumes the caller passes a valid pointer:\n\n```c\n__noinline int helper_a(const struct Item *s __arg_nonnull)\n{\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nBoth approaches eliminate the `mem_or_null` dereference. The explicit `if (!s) return 0;` is the most portable, minimal source change.",
+  "must_mention": [
+    "The callee argument may be NULL",
+    "The dereference is inside helper_a",
+    "The fix belongs before s->x is read"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check after dereferencing s",
+    "Checks the address of the local object in entry but leaves helper_a unsafe for verifier validation",
+    "Changes the comparison but not the dereference"
+  ]
+}

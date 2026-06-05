@@ -1,0 +1,42 @@
+## Explanation
+
+`bpf_cpumask_create()` returns a *referenced* (owned) object. The verifier tracks this reference (here `id=2`) and requires that it be released on **every** path before the program exits.
+
+In your program:
+
+- `make_object()` creates the cpumask and, on the success path, **returns** it to the caller — i.e. it transfers ownership to `entry`.
+- In `entry`, the returned pointer is only passed to `__sink(cpumask)`. `__sink()` is just an inline-asm trick to keep the value "used" so the compiler doesn't drop it — **it does not release the reference**.
+
+So on the path where the cpumask was successfully created and validated, `entry` reaches `exit` while still holding the owned reference. The verifier reports:
+
+```
+Unreleased reference id=2 alloc_insn=0
+```
+
+(Note the success-path return from `make_object` lands at insn 19 storing `r6` to the stack, then exits at insn 21 with `refs=2` still live.)
+
+## Fix
+
+Release the returned cpumask in the caller. Replace the `__sink(cpumask)` with an actual release:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *cpumask;
+
+	cpumask = make_object();
+	if (cpumask)
+		bpf_cpumask_release(cpumask);
+
+	return 0;
+}
+```
+
+### Why this satisfies the verifier
+- On the `make_object()` failure path the function returns `NULL` (and already released/never acquired anything), so the `if (cpumask)` guard skips the release — correct.
+- On the success path `cpumask` holds the owned reference; `bpf_cpumask_release()` consumes it, so no live reference remains at `exit`.
+
+Every path now either never holds the reference or explicitly releases it, eliminating the "Unreleased resource" error.
+
+(The `bpf_cpumask_release()` already present inside `make_object()` only covers the path where `bpf_cpumask_empty()` fails; the path that returns the object still needs the caller to release it.)

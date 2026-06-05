@@ -1,0 +1,83 @@
+The verifier failure is a reference leak.
+
+`bpf_ringbuf_reserve_dynptr()` creates a ringbuf dynptr with an outstanding reference that must be released on every exit path by either:
+
+- `bpf_ringbuf_submit_dynptr(&ptr, flags)`, or
+- `bpf_ringbuf_discard_dynptr(&ptr, flags)`.
+
+In this program there are two reservations:
+
+```c
+bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);
+bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);
+```
+
+The verifier tracks them as two separate references:
+
+```text
+refs=1,3
+```
+
+On the `sample != NULL` path, the program submits only `ptr1`:
+
+```c
+bpf_ringbuf_submit_dynptr(&ptr1, 0);
+return 0;
+```
+
+After that call, reference `1` is released, but reference `3`, corresponding to `ptr2`, is still live:
+
+```text
+32: call bpf_ringbuf_submit_dynptr#199   ; refs=3
+34: exit
+Unreleased reference id=3 alloc_insn=14
+```
+
+So the verifier rejects the program because `ptr2` was reserved but never submitted or discarded on the successful `bpf_dynptr_data()` path.
+
+The smallest source-level fix is to release `ptr2` before returning on the success path. Since `ptr2` is not used, discard it.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -24,6 +24,7 @@ int entry(void *ctx)
+ 	}
+ 
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
++	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+ 
+ 	return 0;
+ }
+```
+
+Resulting function:
+
+```c
+SEC("?raw_tp")
+int entry(void *ctx)
+{
+	struct bpf_dynptr ptr1, ptr2;
+	struct sample *sample;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);
+
+	sample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));
+	if (!sample) {
+		bpf_ringbuf_discard_dynptr(&ptr1, 0);
+		bpf_ringbuf_discard_dynptr(&ptr2, 0);
+		return 0;
+	}
+
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+
+	return 0;
+}
+```
+
+This should satisfy the verifier because both ringbuf dynptr references are released on both control-flow paths.

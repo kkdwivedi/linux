@@ -1,0 +1,37 @@
+**Explanation**
+
+`bpf_cpumask_create()` returns a *reference-counted* object that the BPF program owns.  
+`make_object()` allocates such an object and, on the success path, returns the owned
+reference to the caller.  In `entry()` the pointer is stored in the local variable
+`cpumask`, but the program then reaches `BPF_EXIT` without ever releasing that
+reference.
+
+The verifier tracks the lifetime of every acquired reference.  Because the
+object allocated at instruction 0 is still live on the stack (`fp‑8`) when the
+program exits, the verifier reports:
+
+```
+Unreleased reference id=2 alloc_insn=0
+BPF_EXIT instruction in main prog would lead to reference leak
+```
+
+**Fix**
+
+Release the `cpumask` before returning from the program.  Since `make_object()`
+can return `NULL`, the release must be guarded by a null check (the release
+kfunc expects a non‑NULL pointer).
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -38,6 +38,9 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ 	struct bpf_cpumask *cpumask;
+ 
+ 	cpumask = make_object();
++	if (cpumask)
++		bpf_cpumask_release(cpumask);
++
+ 	__sink(cpumask);
+ 
+ 	return 0;
+```

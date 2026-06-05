@@ -1,0 +1,27 @@
+**Verifier Failure Explanation**
+
+The failure occurs because `slice_len` is a global variable. In eBPF, globals live in a `.data` map, so loading `slice_len` produces a scalar whose value the verifier cannot bound at compile time:
+
+```
+R4=scalar(smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+```
+
+`bpf_dynptr_slice` expects its 3rd argument (`buffer`) and 4th argument (`length`) to form a valid memory/length pair. Because `R4` is completely unbounded, the verifier cannot prove that the requested length fits inside the on-stack `buffer`, so it rejects the call.
+
+**Smallest Fix**
+
+Pass a compile-time constant for the length instead of the global variable. The buffer was already declared using `sizeof(*hdr)`, so using that same expression satisfies the verifier and matches the buffer size exactly.
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -1600,7 +1600,7 @@ int entry(struct __sk_buff *skb)
+ 	bpf_dynptr_from_skb(skb, 0, &ptr);
+ 
+-	hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
++	hdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(*hdr));
+ 	if (!hdr)
+ 		return SK_DROP;
+```
+
+With this change the length is an immediate constant (`14`), allowing the verifier to verify that the stack memory from `buffer` through `buffer + sizeof(*hdr) - 1` is within bounds and initialized.

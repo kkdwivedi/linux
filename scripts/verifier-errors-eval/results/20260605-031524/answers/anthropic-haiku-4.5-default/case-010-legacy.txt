@@ -1,0 +1,50 @@
+## Explanation of the Verifier Failure
+
+The verifier is rejecting the program because in `helper_b()`, there is an invalid pointer arithmetic operation on the `skb` parameter:
+
+```c
+return helper_a(skb) + helper_c(val, skb + 1);
+```
+
+At line 21 of the verifier log, we see:
+```
+21: (07) r6 += 192                    ; R6=ctx(imm=192)
+```
+
+This is adding 192 bytes (sizeof `struct __sk_buff`) to the `skb` pointer. The verifier then tracks `R2=ctx(imm=192)` and rejects the call to `helper_c` because:
+
+```
+dereference of modified ctx ptr R2 off=192 disallowed
+```
+
+**The core issue:** BPF context pointers (like `struct __sk_buff *`) are special kernel objects. The verifier does not allow arithmetic on context pointers beyond what is needed for valid field access. Passing `skb + 1` (a modified context pointer) to another function violates this constraint because:
+
+1. Context pointers should point to the actual kernel structure, not arbitrary offsets
+2. The verifier cannot verify that dereferencing `skb + 1` is safe in the callee
+3. This breaks the contract that context pointers represent valid kernel objects
+
+## Fix
+
+The problematic line is:
+```c
+return helper_a(skb) + helper_c(val, skb + 1);
+```
+
+The fix is to pass `skb` directly instead of `skb + 1`:
+
+```c
+return helper_a(skb) + helper_c(val, skb);
+```
+
+## Complete Patch
+
+```diff
+__attribute__((noinline))
+int helper_b(int val, struct __sk_buff *skb)
+{
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+}
+```
+
+This is the minimal fix: it removes the invalid pointer arithmetic on the context pointer, allowing the verifier to properly validate that `helper_c` receives a valid `struct __sk_buff *` argument.

@@ -1,0 +1,80 @@
+## What the verifier is telling you
+
+The verification never even starts processing instructions:
+
+```
+liveness analysis exceeded complexity limit (10001 calls)
+processed 0 insns (limit 1000000) ...
+```
+
+This is not a normal "bad instruction / unsafe access" failure. It is a hard
+*complexity* limit being hit during the verifier's liveness analysis, before the
+main instruction walk reports anything (`processed 0 insns`).
+
+## Why this program hits it
+
+Look at the call structure:
+
+```
+entry ─50→ helper_a ─50→ helper_b ─50→ ... ─50→ helper_g
+```
+
+* The chain `entry → a → b → c → d → e → f → g` is **8 frames deep**, i.e. right
+  at `MAX_CALL_FRAMES`. That's why the log keeps printing
+  `subprog#7: analyzing (depth 7)...` for `helper_g` — it is the deepest frame.
+* Every level fans out **50×** (`CALLS_50`).
+
+The liveness analysis is performed per distinct call‑chain instance. The number
+of call‑chains reaching the deeper helpers grows like
+
+```
+50¹ + 50² + 50³ + … + 50⁷  ≈  8·10¹¹
+```
+
+so it blows past the 10001 "calls" budget almost immediately (it never even
+gets to `helper_g` more than a few hundred times before bailing). There is no
+*correctness* bug to fix here — the program is simply too large/explosive for
+the liveness pass.
+
+## Smallest fix
+
+Keep the deep (8‑frame) call chain if that's the intent, but cut the per‑level
+fan‑out so the cumulative number of analyzed call‑chains stays well under the
+limit. A fan‑out of 3 gives
+
+```
+3¹ + 3² + … + 3⁷ = 3279  < 10001
+```
+
+which is safe, while still exercising multiple call sites at maximum depth.
+
+### Patch
+
+```c
+-#define CALLS_10(fn) \
+-	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \
+-	CALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)
+-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
++#define CALLS_3(fn)  CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)
+```
+
+then replace every `CALLS_50(...)` use with `CALLS_3(...)`:
+
+```c
+	asm volatile (
+		CALLS_3(helper_a)   /* in entry */
+		"r0 = 0;"
+		"exit;"
+		::: __clobber_all);
+```
+(and likewise for `helper_a … helper_f`).
+
+### Alternatives (same idea)
+
+* Reduce the **depth** instead of the width: drop a couple of helper levels
+  (e.g. stop at `helper_d`) so a larger fan-out still stays under the budget.
+* Or both: fewer levels *and* a smaller `CALLS_*` macro.
+
+The key point: the failure is a liveness/complexity ceiling driven by
+`fan-out ^ chain-depth`. Lowering either factor enough to keep the cumulative
+call-chain count below ~10000 is what makes the verifier accept the program.

@@ -1,0 +1,33 @@
+## Explanation
+
+The verifier is rejecting this program because:
+
+1. `bpf_local_irq_save()` disables IRQs, creating an IRQ-disabled region (depth 1)
+2. Within this IRQ-disabled region, the code calls `helper_a()`, which is a **sleepable** function (marked with `__noinline` and defined globally)
+3. Sleepable functions may call operations that can sleep, which is not allowed in IRQ-disabled regions
+4. The IRQ-disabled region isn't closed until `bpf_local_irq_restore()` is called
+
+## Root Cause
+
+The function `helper_a()` is inlined in some contexts but here it's a non-inline global function that the verifier treats as potentially sleepable. Calling it between `bpf_local_irq_save()` and `bpf_local_irq_restore()` violates execution context safety rules.
+
+## Solution
+
+The smallest fix is to move the `helper_a(0)` call **outside** the IRQ-disabled region. Reorganize the code so that the critical section only protects what actually needs IRQ protection:
+
+```c
+SEC("?syscall")
+int entry(void *ctx)
+{
+	unsigned long flags;
+
+	helper_a(0);
+	bpf_local_irq_save(&flags);
+	bpf_local_irq_restore(&flags);
+	return 0;
+}
+```
+
+This ensures that the sleepable function call happens outside the IRQ-disabled context, satisfying the verifier's execution context safety checks.
+
+Alternatively, if the `helper_a()` call must happen within the critical section, you would need to make `helper_a()` non-sleepable (e.g., by inlining it with `static inline` or ensuring it doesn't call any sleepable BPF helpers), but moving it outside is the simplest and most likely correct fix given the code structure.

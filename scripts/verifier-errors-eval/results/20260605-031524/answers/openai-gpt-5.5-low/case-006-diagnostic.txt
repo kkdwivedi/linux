@@ -1,0 +1,49 @@
+The verifier rejects the program immediately at instruction 0:
+
+```text
+0: (85) call bpf_ktime_get_coarse_ns#160
+program of this type cannot use helper bpf_ktime_get_coarse_ns#160
+```
+
+This is not a register-state or control-flow problem. The program is a `kprobe` program because of:
+
+```c
+SEC("kprobe")
+```
+
+For this program type, the verifier’s helper policy does not allow `bpf_ktime_get_coarse_ns()`. Since helper availability is checked before the rest of the program matters, verification fails after processing only that one instruction.
+
+The smallest likely source-level fix is to call a time helper that is allowed for kprobe programs. The usual allowed helper is `bpf_ktime_get_ns()`.
+
+The program does not use the helper result anyway, since it immediately does:
+
+```asm
+r0 = 0;
+exit;
+```
+
+So replacing the helper call preserves the intent of “call a ktime helper, then return 0” while satisfying the verifier policy.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..1111111 100644
+--- a/case.c
++++ b/case.c
+@@ -8,10 +8,10 @@ SEC("kprobe")
+ __naked void entry(void)
+ {
+ 	asm volatile ("					\
+-	call %[bpf_ktime_get_coarse_ns];		\
++	call %[bpf_ktime_get_ns];			\
+ 	r0 = 0;						\
+ 	exit;						\
+ "	:
+-	: __imm(bpf_ktime_get_coarse_ns)
++	: __imm(bpf_ktime_get_ns)
+ 	: __clobber_all);
+ }
+```
+
+Why this should pass: `bpf_ktime_get_ns()` is a standard helper permitted for kprobe/tracing-style programs, unlike `bpf_ktime_get_coarse_ns()` in this verifier configuration. The rest of the program is valid: it sets `r0` to `0` before `exit`, so the program has a valid return value.

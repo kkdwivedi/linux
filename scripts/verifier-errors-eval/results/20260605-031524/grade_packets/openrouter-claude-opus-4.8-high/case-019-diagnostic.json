@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Rewrite the recursion as a bounded loop in the same function.",
+    "Manually unroll the small fixed number of iterations.",
+    "Split helpers so calls form a directed acyclic graph."
+  ],
+  "canonical_fix": "Remove the recursive bpf2bpf call and express the repeated work as a verifier-bounded loop or as an acyclic/unrolled call sequence.",
+  "case_id": "case-019",
+  "category": "Program Structure",
+  "difficulty": "hard",
+  "expected_explanation": "helper_a contains a bpf2bpf call to itself, creating a recursive subprogram call graph. The verifier requires an acyclic finite call graph even if the source-level branch appears bounded.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-opus-4.8-high/case-019-diagnostic.txt",
+    "case_id": "case-019",
+    "model": "anthropic/claude-opus-4.8",
+    "profile": "openrouter-claude-opus-4.8-high",
+    "prompt_bytes": 2020,
+    "prompt_path": "public/case-019/prompt_diagnostic.md",
+    "prompt_sha256": "bc762d4843d61b1404dac4a4f4cffddeb5a6c6e29d1ad0933b5631140c8504bd",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-opus-4.8-high/case-019-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "84051cfd-ff98-4bed-9a20-b2468e2b485f",
+    "started_at": "2026-06-05T03:18:33+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation\n\nThe verifier rejects this program at the **structural** stage, before instruction-level analysis even begins (note `processed 0 insns`).\n\n`helper_a` calls itself:\n\n```\nl0_%=:\tcall helper_a;\n\texit;\n```\n\nBPF-to-BPF (subprogram) calls must form a **finite, acyclic call graph**. The verifier needs an acyclic graph to compute a bounded total stack depth and to bound its analysis. A self-call creates a cycle, so it is rejected outright:\n\n```\nrecursive call from helper_a() to helper_a()\nVerification failed: Program Structure: Recursive subprogram call\n```\n\nThis is not something you can fix with reachability tricks \u2014 *any* call cycle is forbidden. As the suggestion says, the recursion must become an explicit bounded loop (the verifier can verify bounded loops, but not recursive subprograms).\n\n## Fix\n\nTurn the tail-recursion into an in-function loop by jumping back to the top instead of calling `helper_a` again. The original recursion was just iterating `r1` up to 4, which is trivially a bounded loop.\n\n```c\nstatic __naked __noinline __attribute__((used))\nvoid helper_a(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\nl0_%=:\tr1 += 1;\t\t\t\t\t\\\n\tr0 = r1;\t\t\t\t\t\\\n\tif r1 < 4 goto l0_%=;\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\nHere `r1` starts at 0 (set by the caller), increments each iteration, and the backward branch `if r1 < 4 goto l0_%=` terminates once `r1` reaches 4. The loop has a clear, verifier-provable bound, `r0` ends up holding 4, and there is no longer any subprogram cycle \u2014 so the program passes the structural check and the loop is accepted as a bounded loop.\n\nThis is the minimal change: it removes the self-`call`/`exit` pair and redirects the loop label to the start of the body, preserving the original semantics (counting `r1` from its initial value up to 4).",
+  "must_mention": [
+    "The bpf2bpf call graph is recursive",
+    "Verifier requires no recursive subprogram calls",
+    "A bounded loop or acyclic rewrite is needed"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes the branch bound from 4 to another number",
+    "Adds a runtime recursion depth counter but keeps the self-call",
+    "Treats the failure as stack memory bounds"
+  ]
+}

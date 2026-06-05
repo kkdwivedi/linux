@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Check if (offset > 47) exit before using it for a 1-byte access to a 48-byte object.",
+    "Check if (offset + 1 > sizeof(struct value)) exit in a verifier-friendly way that avoids overflow.",
+    "Mask or clamp the offset so the verifier can prove the adjusted pointer remains within the map value."
+  ],
+  "canonical_fix": "Add an upper-bound check on the loaded offset before adding it to the map-value pointer, proving offset + access size <= object size.",
+  "case_id": "case-014",
+  "category": "Memory Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program loads a variable offset from the map value and adds it to the map-value pointer before a helper reads one byte. The verifier knows the offset is non-negative but has no safe upper bound, so it cannot prove offset + size stays within the 48-byte map value.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-high/case-014-diagnostic.txt",
+    "case_id": "case-014",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-high",
+    "prompt_bytes": 4492,
+    "prompt_path": "public/case-014/prompt_diagnostic.md",
+    "prompt_sha256": "ac5a2ab54da5cf45e897928788b3ed66a0aaeb6499aac9a13e24b90fac12b24c",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-high/case-014-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "6e565f71-cf16-46d8-b61d-3a249834b6f5",
+    "started_at": "2026-06-05T03:16:01+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The failure is caused by this sequence:\n\n```asm\nr3 = *(u32*)(r0 + 0);   /* r3 = value->offset, unconstrained u32 */\nr1 += r3;              /* r1 = map_value + unknown offset */\n...\ncall bpf_probe_read_kernel;\n```\n\n`map_a`\u2019s value size is 48 bytes:\n\n```c\nstruct value {\n\t__u32 offset;   /* 4 bytes */\n\t__u8 data[44]; /* 44 bytes */\n};\n```\n\nThe helper call uses:\n\n```asm\nr1 = destination pointer\nr2 = size = 1\nr3 = source pointer = 0\ncall bpf_probe_read_kernel\n```\n\nSo the verifier must prove that `r1` points to at least 1 writable byte inside the map value. But `r1` is `map_value + value->offset`, and `value->offset` is loaded from the map as an unconstrained `u32`, with possible range `0..0xffffffff`. Therefore the verifier cannot prove that `offset + 1 <= 48`.\n\nThe smallest fix is to bounds-check the loaded offset before adding it to the map value pointer. Since the access size is 1 and the object size is 48, the valid maximum offset is `47`.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -26,6 +26,7 @@ __naked void entry(void)\n \tr1 = r0;\t\t\t\t\t\\\n \tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n+\tif r3 > 47 goto l0_%=;\t\t\t\t\\\n \tr1 += r3;\t\t\t\t\t\\\n \tr2 = 1;\t\t\t\t\t\t\\\n \tr3 = 0;\t\t\t\t\t\t\\\n```\n\nWith that check, on the fallthrough path the verifier can infer:\n\n```text\n0 <= r3 <= 47\n```\n\nThen after:\n\n```asm\nr1 += r3\n```\n\n`r1` is known to be a pointer somewhere within the 48-byte map value, and the 1-byte write performed by `bpf_probe_read_kernel()` satisfies:\n\n```text\noffset + size <= 48\n```\n\ni.e.\n\n```text\n47 + 1 <= 48\n```\n\nSo the helper destination pointer should pass verification.",
+  "must_mention": [
+    "The offset is variable and lacks an upper bound",
+    "The object/map value size is finite",
+    "The proof needed is offset plus access size within bounds"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks that map_lookup_elem returned non-NULL",
+    "Adds a lower-bound check only",
+    "Checks after the helper access"
+  ]
+}

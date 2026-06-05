@@ -1,0 +1,62 @@
+# Analysis of the Verifier Failure
+
+## Root Cause
+
+The verifier is rejecting the call to `bpf_dynptr_slice()` because:
+
+1. **Unbounded length (R4)**: The fourth argument `slice_len` is loaded from a global variable (`__u32 slice_len`), making it a `scalar` with unbounded value from the verifier's perspective. The verifier cannot verify that this length is safe.
+
+2. **Stack memory access concern**: The third argument (R3) is a stack pointer (`fp-32`), and when paired with an unbounded length in R4, the verifier cannot guarantee the access is within the buffer's bounds.
+
+3. **Contract violation**: The `bpf_dynptr_slice()` function requires either:
+   - A bounded length constant, or
+   - A verifiable constraint on the length (e.g., `if (len < MAX_LEN)`)
+
+## The Problem
+
+```c
+__u32 slice_len = sizeof(struct ethhdr);  // Global variable
+...
+hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);  // slice_len is unbounded
+```
+
+The global variable `slice_len` is loaded at runtime, and the verifier cannot prove it won't be larger than the buffer size (`sizeof(struct ethhdr)` = 14 bytes).
+
+## Solution
+
+Replace the global variable with a compile-time constant so the length is bounded:
+
+```c
+#define SLICE_LEN sizeof(struct ethhdr)
+```
+
+Then use it directly:
+
+```c
+hdr = bpf_dynptr_slice(&ptr, 0, buffer, SLICE_LEN);
+```
+
+## Patch
+
+```diff
+@@ -9,8 +9,6 @@ char _license[] SEC("license") = "GPL";
+ } ringbuf SEC(".maps");
+ 
+-__u32 slice_len = sizeof(struct ethhdr);
++#define SLICE_LEN sizeof(struct ethhdr)
+ 
+ SEC("?tc")
+ int entry(struct __sk_buff *skb)
+@@ -19,7 +17,7 @@ int entry(struct __sk_buff *skb)
+ 	struct ethhdr *hdr;
+ 	char buffer[sizeof(*hdr)] = {};
+ 
+ 	bpf_dynptr_from_skb(skb, 0, &ptr);
+ 
+-	hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
++	hdr = bpf_dynptr_slice(&ptr, 0, buffer, SLICE_LEN);
+ 	if (!hdr)
+ 		return SK_DROP;
+```
+
+This ensures the length is a compile-time constant that the verifier can reason about, satisfying the memory safety constraints.

@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Explanation of the Verifier Failure\n\nThe verifier is rejecting the program because:\n\n1. **Program type mismatch**: The program is declared as `SEC(\"kprobe\")`, which makes it a `BPF_PROG_TYPE_KPROBE` program.\n\n2. **Helper not allowed**: The helper `bpf_ktime_get_coarse_ns` is not permitted for `kprobe` program types. The verifier explicitly states: \"program of this type cannot use helper bpf_ktime_get_coarse_ns#160\"\n\n3. **Root cause**: `bpf_ktime_get_coarse_ns` is typically only allowed for certain program types like `BPF_PROG_TYPE_TRACEPOINT`, `BPF_PROG_TYPE_PERF_EVENT`, `BPF_PROG_TYPE_RAW_TRACEPOINT`, etc., but not for `kprobe`.\n\n## Solution\n\nThe smallest fix is to change the program type from `kprobe` to a compatible type that allows `bpf_ktime_get_coarse_ns`. The `tracepoint` program type is a common choice that supports this helper.\n\n### Patch\n\n```c\nSEC(\"tracepoint/syscalls/sys_enter_openat\")\n__naked void entry(void)\n```\n\nOr alternatively, use `perf_event`:\n\n```c\nSEC(\"perf_event\")\n__naked void entry(void)\n```\n\n**Why this works**: By changing from `SEC(\"kprobe\")` to `SEC(\"tracepoint/...\")` or `SEC(\"perf_event\")`, the program type changes to one that has `bpf_ktime_get_coarse_ns` in its allowed helper list, allowing the verifier to accept the helper call.\n\nThe tracepoint variant requires specifying a valid tracepoint path (e.g., `syscalls/sys_enter_openat`), while `perf_event` is more generic and doesn't require a specific event specification.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-006-diagnostic.txt",
+    "case_id": "case-006",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 1849,
+    "prompt_path": "public/case-006/prompt_diagnostic.md",
+    "prompt_sha256": "0c351f7275500308d5dd7e77f65459b6d00560f51ba8d1d768a521650bb1de73",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-006-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "4bd498a4-7a70-4aba-9ec7-a85ccd16be66",
+    "started_at": "2026-06-05T03:18:59+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000705,
+    "output_cost_usd": 0.002375,
+    "total_cost_usd": 0.00308
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 705,
+    "output_tokens": 475,
+    "raw_usage": {
+      "completion_tokens": 475,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.00308,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002375,
+        "upstream_inference_cost": 0.00308,
+        "upstream_inference_prompt_cost": 0.000705
+      },
+      "is_byok": false,
+      "prompt_tokens": 705,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1180
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1180
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation of the Verifier Failure\n\nThe verifier is rejecting the program because:\n\n1. **Program type mismatch**: The program is declared as `SEC(\"kprobe\")`, which makes it a `BPF_PROG_TYPE_KPROBE` program.\n\n2. **Helper not allowed**: The helper `bpf_ktime_get_coarse_ns` is not permitted for `kprobe` program types. The verifier explicitly states: \"program of this type cannot use helper bpf_ktime_get_coarse_ns#160\"\n\n3. **Root cause**: `bpf_ktime_get_coarse_ns` is typically only allowed for certain program types like `BPF_PROG_TYPE_TRACEPOINT`, `BPF_PROG_TYPE_PERF_EVENT`, `BPF_PROG_TYPE_RAW_TRACEPOINT`, etc., but not for `kprobe`.\n\n## Solution\n\nThe smallest fix is to change the program type from `kprobe` to a compatible type that allows `bpf_ktime_get_coarse_ns`. The `tracepoint` program type is a common choice that supports this helper.\n\n### Patch\n\n```c\nSEC(\"tracepoint/syscalls/sys_enter_openat\")\n__naked void entry(void)\n```\n\nOr alternatively, use `perf_event`:\n\n```c\nSEC(\"perf_event\")\n__naked void entry(void)\n```\n\n**Why this works**: By changing from `SEC(\"kprobe\")` to `SEC(\"tracepoint/...\")` or `SEC(\"perf_event\")`, the program type changes to one that has `bpf_ktime_get_coarse_ns` in its allowed helper list, allowing the verifier to accept the helper call.\n\nThe tracepoint variant requires specifying a valid tracepoint path (e.g., `syscalls/sys_enter_openat`), while `perf_event` is more generic and doesn't require a specific event specification.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629540,
+    "id": "gen-1780629539-qNoVMbTaGceSfbqMTvBb",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 475,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.00308,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002375,
+        "upstream_inference_cost": 0.00308,
+        "upstream_inference_prompt_cost": 0.000705
+      },
+      "is_byok": false,
+      "prompt_tokens": 705,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1180
+    }
+  },
+  "reasoning_content": ""
+}

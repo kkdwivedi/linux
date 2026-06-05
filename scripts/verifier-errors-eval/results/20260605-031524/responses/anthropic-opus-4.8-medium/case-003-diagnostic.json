@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nA spilled pointer only stays a pointer in the verifier if the whole 8\u2011byte stack slot is left untouched. Here the code does:\n\n```\n*(u64*)(r10 - 8) = r1;   // spill ctx pointer into fp-8 .. fp-1\n*(u8*)(r10 - 7) = r0;    // write 1 byte INTO that same 8-byte slot\n```\n\nThe byte store at `r10 - 7` lands inside the slot that holds the spilled `ctx` pointer (the slot spans `fp-8 .. fp-1`). Any partial write into a spilled pointer slot makes the verifier mark the whole slot as `misc`/scalar (`fp-8=mmmmmmmm`). So when you reload it:\n\n```\nr0 = *(u64*)(r10 - 8);   // R0=scalar(), no longer ctx()\nr0 = *(u64*)(r0 + 8);    // dereference of a scalar -> rejected\n```\n\n`R0` is now an unknown scalar, not a pointer, hence \u201cR0 invalid mem access 'scalar'\u201d.\n\n## Fix\n\nDon\u2019t let the byte store overlap the spilled pointer. Put the scratch byte in a different stack slot (e.g. `r10 - 16`) so the pointer at `fp-8` survives and reloads as `ctx()`:\n\n```c\nSEC(\"socket\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n\tr0 = 0x23;\t\t\t\t\t\\\n\t*(u8*)(r10 - 16) = r0;\t\t\t\t\\\n\tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n\tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\nNow `fp-8` keeps the `ctx()` pointer, the reload yields a pointer, and `*(u64*)(r0 + 8)` is a valid (verifier\u2011converted) context access.\n\n(If the goal was specifically to *exercise* the pointer\u2011corruption path, then the test is actually an expected\u2011failure case and should be annotated with the appropriate `__failure __msg(\"invalid mem access\")` rather than expected to pass. But to satisfy verification, moving the byte store out of the pointer\u2019s slot is the minimal change.)",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-003-diagnostic.txt",
+    "case_id": "case-003",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 2939,
+    "prompt_path": "public/case-003/prompt_diagnostic.md",
+    "prompt_sha256": "f0ae7f2740c6566909dcad09724c1c4e67495167ac5f9dff858044543f91e0e9",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-003-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "e3f9be9e-5552-4ec4-8108-d4fa31c41d10",
+    "started_at": "2026-06-05T03:17:09+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00661,
+    "output_cost_usd": 0.036425,
+    "total_cost_usd": 0.043035
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1322,
+    "output_tokens": 1457,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1322,
+      "output_tokens": 1457,
+      "output_tokens_details": {
+        "thinking_tokens": 672
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 2779
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "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",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nA spilled pointer only stays a pointer in the verifier if the whole 8\u2011byte stack slot is left untouched. Here the code does:\n\n```\n*(u64*)(r10 - 8) = r1;   // spill ctx pointer into fp-8 .. fp-1\n*(u8*)(r10 - 7) = r0;    // write 1 byte INTO that same 8-byte slot\n```\n\nThe byte store at `r10 - 7` lands inside the slot that holds the spilled `ctx` pointer (the slot spans `fp-8 .. fp-1`). Any partial write into a spilled pointer slot makes the verifier mark the whole slot as `misc`/scalar (`fp-8=mmmmmmmm`). So when you reload it:\n\n```\nr0 = *(u64*)(r10 - 8);   // R0=scalar(), no longer ctx()\nr0 = *(u64*)(r0 + 8);    // dereference of a scalar -> rejected\n```\n\n`R0` is now an unknown scalar, not a pointer, hence \u201cR0 invalid mem access 'scalar'\u201d.\n\n## Fix\n\nDon\u2019t let the byte store overlap the spilled pointer. Put the scratch byte in a different stack slot (e.g. `r10 - 16`) so the pointer at `fp-8` survives and reloads as `ctx()`:\n\n```c\nSEC(\"socket\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n\tr0 = 0x23;\t\t\t\t\t\\\n\t*(u8*)(r10 - 16) = r0;\t\t\t\t\\\n\tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n\tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\nNow `fp-8` keeps the `ctx()` pointer, the reload yields a pointer, and `*(u64*)(r0 + 8)` is a valid (verifier\u2011converted) context access.\n\n(If the goal was specifically to *exercise* the pointer\u2011corruption path, then the test is actually an expected\u2011failure case and should be annotated with the appropriate `__failure __msg(\"invalid mem access\")` rather than expected to pass. But to satisfy verification, moving the byte store out of the pointer\u2019s slot is the minimal change.)",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01RT5nbip3fGsJMGh6auUTP3",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1322,
+      "output_tokens": 1457,
+      "output_tokens_details": {
+        "thinking_tokens": 672
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Call bpf_preempt_enable() before bpf_copy_from_user and avoid re-entering the critical section unnecessarily.",
+    "Use a non-sleepable helper if one is semantically appropriate."
+  ],
+  "canonical_fix": "Move bpf_copy_from_user outside the bpf_preempt_disable/bpf_preempt_enable region, or re-enable preemption before calling it.",
+  "case_id": "case-005",
+  "category": "Execution Context Safety",
+  "difficulty": "easy",
+  "expected_explanation": "bpf_copy_from_user is sleepable, but the program calls it while preemption is disabled. The verifier rejects sleepable operations inside a non-preemptible region.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-v3.2/case-005-diagnostic.txt",
+    "case_id": "case-005",
+    "model": "deepseek/deepseek-v3.2",
+    "profile": "openrouter-deepseek-v3.2",
+    "prompt_bytes": 3103,
+    "prompt_path": "public/case-005/prompt_diagnostic.md",
+    "prompt_sha256": "799957463f3832353b191717439b9959634b01ce147029e024cd92ae8b255a93",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-v3.2/case-005-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "d73cde3f-8369-4de2-b892-fb6395373f27",
+    "started_at": "2026-06-05T03:19:56+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier error occurs because `bpf_copy_from_user` is a sleepable helper, which cannot be called within a non-preemptible region created by `bpf_preempt_disable()` and `bpf_preempt_enable()`. The verifier explicitly rejects this combination to prevent potential deadlocks.\n\nThe simplest fix is to remove the preempt disable/enable calls, as they are unnecessary for the copy operation and directly cause the verification failure. This allows the sleepable helper to run in a preemptible context.\n\nHere is the minimal patch:\n\n```diff\n--- a.c\n+++ b.c\n@@ -8,9 +8,7 @@\n SEC(\"?fentry.s/sys_getpgid\")\n int entry(void *ctx)\n {\n \tu32 data;\n \n-\tbpf_preempt_disable();\n \tbpf_copy_from_user(&data, sizeof(data), NULL);\n-\tbpf_preempt_enable();\n \treturn 0;\n }\n```\n\nThis change eliminates the non-preemptible region, allowing the sleepable helper call to pass verification. Note that the NULL source pointer in `bpf_copy_from_user` may cause a runtime error, but that is a separate issue not flagged by the verifier in this log.",
+  "must_mention": [
+    "The helper may sleep",
+    "Preemption is disabled at the call site",
+    "The critical section must not contain sleepable operations"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks the NULL source pointer",
+    "Removes bpf_preempt_enable and leaves preemption disabled",
+    "Moves the helper deeper into the disabled region"
+  ]
+}

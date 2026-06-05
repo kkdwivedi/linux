@@ -1,0 +1,70 @@
+## Verifier Failure Analysis
+
+### Root Cause
+
+The verifier log ends with:
+```
+Unreleased reference id=3 alloc_insn=14
+BPF_EXIT instruction in main prog would lead to reference leak
+```
+
+`ptr2` is reserved via `bpf_ringbuf_reserve_dynptr` at instruction 14 (reference id=3). The program has two paths:
+
+1. **Null path** (`!sample`): Both `ptr1` and `ptr2` are properly discarded. ✓  
+2. **Non-null path**: `ptr1` is submitted via `bpf_ringbuf_submit_dynptr`, but **`ptr2` is never released** before the function returns. ✗
+
+The BPF verifier tracks ringbuf reservations as references that must be released (via submit or discard) on every code path. The missing release of `ptr2` in the success path causes the reference leak error.
+
+*(The first line, `arg#0 reference type('UNKNOWN ') size cannot be determined: -22`, is a non-fatal diagnostic — the verifier continues processing past it, as shown by instructions 0–34 being logged.)*
+
+## Fix
+
+Add `bpf_ringbuf_discard_dynptr(&ptr2, 0)` after submitting `ptr1`, so `ptr2` is always released before the function exits:
+
+```diff
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
++	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+ 
+ 	return 0;
+ }
+```
+
+### Fixed Source
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+struct sample {
+	__u64 value;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 4096);
+} ringbuf SEC(".maps");
+
+SEC("?raw_tp")
+int entry(void *ctx)
+{
+	struct bpf_dynptr ptr1, ptr2;
+	struct sample *sample;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);
+
+	sample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));
+	if (!sample) {
+		bpf_ringbuf_discard_dynptr(&ptr1, 0);
+		bpf_ringbuf_discard_dynptr(&ptr2, 0);
+		return 0;
+	}
+
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_discard_dynptr(&ptr2, 0);  /* release ptr2 before exit */
+
+	return 0;
+}
+```
+
+Every exit path now releases both `ptr1` and `ptr2`, satisfying the verifier's reference-tracking requirement.

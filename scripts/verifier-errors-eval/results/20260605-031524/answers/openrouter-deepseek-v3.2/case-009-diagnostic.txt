@@ -1,0 +1,21 @@
+The verifier fails because `value->task` may be NULL when passed to `bpf_task_acquire()`, which requires a non-NULL pointer. The verifier cannot guarantee that the kptr stored in the map is non-NULL, even though the program logic sets it via `bpf_kptr_xchg()`.
+
+The fix is to add a NULL check for `value->task` before calling `bpf_task_acquire()`.
+
+Here's the minimal patch:
+
+```c
+--- original.c
++++ fixed.c
+@@ -39,6 +39,8 @@
+ 	value = helper_a(task);
+ 	if (!value)
+ 		return 0;
++	if (!value->task)
++		return 0;
+ 
+ 	acquired = bpf_task_acquire(value->task);
+ 	if (!acquired)
+```
+
+This ensures the verifier sees a non-NULL pointer on the path to `bpf_task_acquire()`, satisfying its type safety requirements.

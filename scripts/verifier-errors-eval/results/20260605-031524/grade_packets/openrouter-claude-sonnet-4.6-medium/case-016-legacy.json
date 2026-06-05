@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Before the r6 != 0 exit path, if r0 is non-NULL, release it with bpf_sk_release(r0).",
+    "Move the mark branch before acquiring the socket when possible so no reference exists on that exit path.",
+    "Restructure cleanup with a common release path for all exits after lookup."
+  ],
+  "canonical_fix": "On every path after bpf_sk_lookup_tcp returns a non-NULL reference, call bpf_sk_release before exiting unless ownership is transferred.",
+  "case_id": "case-016",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "hard",
+  "expected_explanation": "bpf_sk_lookup_tcp can return an owned socket reference. One branch exits based on packet mark/r6 after the lookup without releasing the reference if it was acquired.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-sonnet-4.6-medium/case-016-legacy.txt",
+    "case_id": "case-016",
+    "model": "anthropic/claude-sonnet-4.6",
+    "profile": "openrouter-claude-sonnet-4.6-medium",
+    "prompt_bytes": 3059,
+    "prompt_path": "public/case-016/prompt_legacy.md",
+    "prompt_sha256": "31d64bebee3b4c19aa2fe3161c2814daf2c593074fd789dc1ebc83723ed9f8a8",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-sonnet-4.6-medium/case-016-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "a81e3822-5e12-4069-a623-0a126915324b",
+    "started_at": "2026-06-05T03:18:50+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Explanation of the Failure\n\nAfter `bpf_sk_lookup_tcp` returns a socket reference (tracked as `id=2`), the program branches based on `r6` (the packet mark):\n\n```\nif r6 == 0 goto l1_%=;   // if mark == 0, go to release path\nexit;                     // if mark != 0, EXIT \u2014 but socket ref is NOT released!\n```\n\nWhen `r6 != 0`, the program exits at instruction 21 without calling `bpf_sk_release`, leaking the reference. The verifier enforces that every path through the program must release any reference acquired via a helper like `bpf_sk_lookup_tcp`, and flags this as:\n\n```\nUnreleased reference id=2 alloc_insn=19\nBPF_EXIT instruction in main prog would lead to reference leak\n```\n\n## Fix\n\nThe minimal change is to **remove the `exit;`** after `if r6 == 0 goto l1_%=;` so that the `r6 != 0` path falls through to `l1_%=`, which already handles socket release correctly. Both paths then converge on the release-and-exit logic.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"tc\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tr2 = *(u32*)(r1 + %[data]);\t\t\t\\\n\tr3 = *(u32*)(r1 + %[data_end]);\t\t\t\\\n\tr0 = r2;\t\t\t\t\t\\\n\tr0 += 16;\t\t\t\t\t\\\n\tif r0 <= r3 goto l0_%=;\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\nl0_%=:\tr6 = *(u32*)(r2 + %[mark]);\t\t\t\\\n\tr2 = 0;\t\t\t\t\t\t\\\n\t*(u32*)(r10 -8) = r2;\t\t\t\t\\\n\t*(u64*)(r10 -16) = r2;\t\t\t\t\\\n\t*(u64*)(r10 -24) = r2;\t\t\t\t\\\n\t*(u64*)(r10 -32) = r2;\t\t\t\t\\\n\t*(u64*)(r10 -40) = r2;\t\t\t\t\\\n\t*(u64*)(r10 -48) = r2;\t\t\t\t\\\n\tr2 = r10;\t\t\t\t\t\\\n\tr2 += -48;\t\t\t\t\t\\\n\tr3 = 36;\t\t\t\t\t\\\n\tr4 = 0;\t\t\t\t\t\t\\\n\tr5 = 0;\t\t\t\t\t\t\\\n\tcall %[bpf_sk_lookup_tcp];\t\t\t\\\n\tif r6 == 0 goto l1_%=;\t\t\t\t\\\nl1_%=:\tif r0 == 0 goto l2_%=;\t\t\t\t\\\n\tr1 = r0;\t\t\t\t\t\\\n\tcall %[bpf_sk_release];\t\t\t\t\\\nl2_%=:\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_sk_lookup_tcp),\n\t  __imm(bpf_sk_release),\n\t  __imm_const(data, offsetof(struct __sk_buff, data)),\n\t  __imm_const(data_end, offsetof(struct __sk_buff, data_end)),\n\t  __imm_const(mark, offsetof(struct __sk_buff, mark))\n\t: __clobber_all);\n}\n```\n\n**The only change** is deleting the `exit;` line that appeared between `if r6 == 0 goto l1_%=;` and `l1_%=:`. Now when `r6 != 0`, execution falls through into `l1_%=`, which checks `r0` and calls `bpf_sk_release` if the socket is non-null \u2014 satisfying the verifier's reference-tracking requirement on all exit paths.",
+  "must_mention": [
+    "An owned socket reference is acquired",
+    "The mark/r6 branch exits with the reference live",
+    "Release is needed on that branch"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only releases in the r6 == 0 branch",
+    "Releases before checking that lookup returned non-NULL in a way rejected by the verifier",
+    "Adds packet bounds checks but no reference cleanup"
+  ]
+}

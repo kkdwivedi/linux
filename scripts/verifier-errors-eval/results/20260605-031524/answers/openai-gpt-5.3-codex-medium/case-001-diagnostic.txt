@@ -1,0 +1,37 @@
+The failure is exactly what the log says: you pass a **constant integer** as arg1 to a kfunc that expects a **verifier-known pointer to memory** (`struct cpumask`).
+
+### Why verifier rejects it
+
+At the call site:
+
+- `r1 = 0x123456` → verifier type: `scalar`
+- `bpf_cpumask_populate()` expects arg1 to be a pointer (stack/map/ctx/etc.) to valid memory of the expected size/type
+- So it errors with: `R1 type=scalar expected=fp`
+
+The cast in C (`(struct cpumask *)invalid`) does not make it a real pointer in verifier terms.
+
+---
+
+### Smallest likely fix
+
+Use real memory (e.g., stack object) for the cpumask argument instead of a fake constant pointer.
+
+```diff
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
++	struct cpumask mask = {};
+ 	u64 bits;
+ 	int ret;
+ 
+-	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
++	ret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));
+ 	if (!ret)
+ 		return 2;
+ 
+ 	return 0;
+ }
+```
+
+This makes arg1 a frame-pointer-based stack address, which matches the verifier contract much better and should clear this specific type-safety failure.

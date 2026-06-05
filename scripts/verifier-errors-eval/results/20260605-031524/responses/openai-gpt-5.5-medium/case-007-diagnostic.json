@@ -1,0 +1,130 @@
+{
+  "answer_text": "The failure is caused by the 4th argument to `bpf_dynptr_slice()`:\n\n```c\nhdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);\n```\n\n`buffer` is a stack object of size `sizeof(struct ethhdr)`, i.e. 14 bytes. But `slice_len` is a non-const global:\n\n```c\n__u32 slice_len = sizeof(struct ethhdr);\n```\n\nEven though it is initialized to 14, the verifier treats non-const globals as mutable map data. Therefore, at verification time, the load of `slice_len` is considered an arbitrary `u32`:\n\n```text\nR4=scalar(smin=0,smax=umax=0xffffffff)\n```\n\n`bpf_dynptr_slice()` takes a memory/length pair for the fallback buffer: arg3 is the buffer pointer and arg4 is the buffer length. The verifier must prove that `buffer` is valid for `slice_len` bytes. Since `slice_len` may be as large as `0xffffffff`, it cannot prove that the 14-byte stack buffer is large enough:\n\n```text\nR4 unbounded memory access, use 'var &= const' or 'if (var < const)'\nR3 and R4 memory, len pair leads to invalid memory access\n```\n\nThe smallest fix is to pass a verifier-known bounded length, e.g. `sizeof(buffer)`, instead of the mutable global.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -19,7 +19,7 @@ int entry(struct __sk_buff *skb)\n \n \tbpf_dynptr_from_skb(skb, 0, &ptr);\n \n-\thdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);\n+\thdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));\n \tif (!hdr)\n \t\treturn SK_DROP;\n \n```\n\nWith this change, the verifier sees the length as the constant size of the stack buffer, so the memory/length pair is valid.\n\nIf `slice_len` must remain runtime-configurable, then bound it before the helper call instead:\n\n```c\n__u32 len = slice_len;\n\nif (len > sizeof(buffer))\n\treturn SK_DROP;\n\nhdr = bpf_dynptr_slice(&ptr, 0, buffer, len);\n```\n\nBut for the given program, replacing `slice_len` with `sizeof(buffer)` is the minimal source-level repair.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-medium/case-007-diagnostic.txt",
+    "case_id": "case-007",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-medium",
+    "prompt_bytes": 4340,
+    "prompt_path": "public/case-007/prompt_diagnostic.md",
+    "prompt_sha256": "d1d8d7dccaad3f83ecae6c603310091500168180bae26b21eb757e9dd3d1640d",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-medium/case-007-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "f29b665d-c207-4974-b1dc-badcd1d54479",
+    "started_at": "2026-06-05T03:15:37+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.007,
+    "output_cost_usd": 0.04758,
+    "total_cost_usd": 0.05458
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1400,
+    "output_tokens": 1586,
+    "raw_usage": {
+      "input_tokens": 1400,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1586,
+      "output_tokens_details": {
+        "reasoning_tokens": 1034
+      },
+      "total_tokens": 2986
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 1034,
+    "total_tokens": 2986
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629373,
+    "created_at": 1780629337,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_05b38611c38f163a006a223f592858819185b6c61a04ab6cb1",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_05b38611c38f163a006a223f59c4f48191bd1c05b017ecc0c6",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is caused by the 4th argument to `bpf_dynptr_slice()`:\n\n```c\nhdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);\n```\n\n`buffer` is a stack object of size `sizeof(struct ethhdr)`, i.e. 14 bytes. But `slice_len` is a non-const global:\n\n```c\n__u32 slice_len = sizeof(struct ethhdr);\n```\n\nEven though it is initialized to 14, the verifier treats non-const globals as mutable map data. Therefore, at verification time, the load of `slice_len` is considered an arbitrary `u32`:\n\n```text\nR4=scalar(smin=0,smax=umax=0xffffffff)\n```\n\n`bpf_dynptr_slice()` takes a memory/length pair for the fallback buffer: arg3 is the buffer pointer and arg4 is the buffer length. The verifier must prove that `buffer` is valid for `slice_len` bytes. Since `slice_len` may be as large as `0xffffffff`, it cannot prove that the 14-byte stack buffer is large enough:\n\n```text\nR4 unbounded memory access, use 'var &= const' or 'if (var < const)'\nR3 and R4 memory, len pair leads to invalid memory access\n```\n\nThe smallest fix is to pass a verifier-known bounded length, e.g. `sizeof(buffer)`, instead of the mutable global.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -19,7 +19,7 @@ int entry(struct __sk_buff *skb)\n \n \tbpf_dynptr_from_skb(skb, 0, &ptr);\n \n-\thdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);\n+\thdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));\n \tif (!hdr)\n \t\treturn SK_DROP;\n \n```\n\nWith this change, the verifier sees the length as the constant size of the stack buffer, so the memory/length pair is valid.\n\nIf `slice_len` must remain runtime-configurable, then bound it before the helper call instead:\n\n```c\n__u32 len = slice_len;\n\nif (len > sizeof(buffer))\n\treturn SK_DROP;\n\nhdr = bpf_dynptr_slice(&ptr, 0, buffer, len);\n```\n\nBut for the given program, replacing `slice_len` with `sizeof(buffer)` is the minimal source-level repair.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_05b38611c38f163a006a223f75258c819185297691abe1df07",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1400,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1586,
+      "output_tokens_details": {
+        "reasoning_tokens": 1034
+      },
+      "total_tokens": 2986
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

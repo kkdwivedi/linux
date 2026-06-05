@@ -1,0 +1,30 @@
+## Explanation
+
+The verifier reports an **unreleased reference** (id=2). The `make_object()` function calls `bpf_cpumask_create()`, which returns an *owned* reference. When `make_object()` returns successfully (non-NULL), that ownership is transferred to the caller (`entry`). However, `entry` only calls `__sink(cpumask)` (which prevents dead-code elimination but does **not** release the BPF reference) and then exits without ever calling `bpf_cpumask_release()`.
+
+The verifier traces the path:
+1. `bpf_cpumask_create()` → cpumask is non-NULL (id=2 acquired)  
+2. `bpf_cpumask_empty()` → returns non-zero, so the early-release branch is skipped  
+3. `make_object()` returns the cpumask to `entry`  
+4. `entry` exits → **id=2 still live → leak**
+
+## Fix
+
+Add a `bpf_cpumask_release()` call in `entry` after `make_object()` returns, guarded by a NULL check:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *cpumask;
+
+	cpumask = make_object();
+	__sink(cpumask);
+	if (cpumask)
+		bpf_cpumask_release(cpumask);
+
+	return 0;
+}
+```
+
+This ensures the owned reference is released on every exit path: if `make_object()` returns NULL the `if` is skipped (nothing to release), and if it returns a valid pointer the reference is properly freed before the program exits.

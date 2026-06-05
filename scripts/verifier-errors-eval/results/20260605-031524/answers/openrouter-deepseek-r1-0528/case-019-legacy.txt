@@ -1,0 +1,34 @@
+The verifier log indicates a recursive call from `helper_a` to itself, which is not allowed in eBPF. The verifier rejects recursion because it cannot bound the number of execution paths, leading to an infinite state exploration. The program attempts recursion when `r1 < 4`, but the verifier does not support this.
+
+The fix replaces the recursion with a bounded loop in `helper_a`. This maintains the original behavior (incrementing `r1` until it reaches 4) while avoiding recursion. The loop is bounded (4 iterations), which the verifier can analyze.
+
+Patch:
+```diff
+--- a/source.c
++++ b/source.c
+@@ -15,12 +15,10 @@
+ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+-	asm volatile ("					\
+-	r1 += 1;					\
+-	r0 = r1;					\
+-	if r1 < 4 goto l0_%=;				\
+-	exit;						\
+-l0_%=:	call helper_a;					\
++	asm volatile ("					\
++top_%=:						\
++	r1 += 1;					\
++	r0 = r1;					\
++	if r1 < 4 goto top_%=;				\
+ 	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+Explanation:
+- Removed recursive call to `helper_a`
+- Added a label `top_%=` for looping
+- The loop increments `r1` and checks if `r1 < 4`
+- Uses `%=` for unique labels to prevent collisions
+- Maintains original increment behavior in a verifier-friendly loop

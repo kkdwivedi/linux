@@ -1,0 +1,47 @@
+## Analysis
+
+The verifier failure is clear from the log:
+
+```
+R1 type=scalar expected=fp
+```
+
+The program passes a hardcoded invalid pointer `(struct bpf_cpumask *)0x123456` as the first argument to `bpf_cpumask_populate()`. The verifier sees this as a scalar value (immediate constant 0x123456) rather than a valid pointer type. The kfunc requires its first argument to be a proper pointer (the verifier reports "expected=fp" meaning a valid pointer type, not a raw scalar).
+
+The instruction sequence confirms this:
+- R1 is loaded with the immediate value 1193046 (0x123456) — a scalar, not a pointer
+- R2 correctly points to the stack (`fp-8`) for `&bits`
+- R3 holds the size constant 8
+
+## Fix
+
+Replace the invalid hardcoded pointer with a properly allocated `bpf_cpumask` obtained from `bpf_cpumask_create()`, and release it after use:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *cpumask;
+	u64 bits;
+	int ret;
+
+	cpumask = bpf_cpumask_create();
+	if (!cpumask)
+		return 1;
+
+	ret = bpf_cpumask_populate((struct cpumask *)cpumask, &bits, sizeof(bits));
+	bpf_cpumask_release(cpumask);
+	if (!ret)
+		return 2;
+
+	return 0;
+}
+```
+
+**Why this works:** `bpf_cpumask_create()` returns a properly-typed `struct bpf_cpumask *` with `PTR_TO_BTF_ID` type in the verifier's tracking, satisfying the kfunc's argument type requirement. The `bpf_cpumask_release()` call properly frees the allocated cpumask. The cast `(struct cpumask *)cpumask` is valid because `struct bpf_cpumask` embeds `struct cpumask` as its first member, and the verifier will recognize the pointer as a valid BTF-tracked object.

@@ -1,0 +1,52 @@
+## Explanation of the Verifier Failure
+
+The verifier rejects this program because of invalid pointer arithmetic on a context (`ctx`) pointer. Here's what happens:
+
+1. In `helper_b`, the parameter `skb` (a `struct __sk_buff *`, which is a context pointer) is stored in `r6`.
+
+2. The code attempts to call `helper_c(val, skb + 1)`, which translates to pointer arithmetic: `r6 += 192` (adding `sizeof(struct __sk_buff)` bytes).
+
+3. The modified pointer `r6` (now at offset +192) is then passed to `helper_c` as the second argument.
+
+4. **The verifier rejects this** because context pointers (`ctx` type) have special restrictions: they must be passed to functions in their original, unmodified form. The verifier explicitly prevents dereferencing a context pointer that has been arithmetically modified, as it could access out-of-bounds memory.
+
+The error message is clear: *"dereference of modified ctx ptr R2 off=192 disallowed"* and *"this pointer type must be dereferenced in its original form."*
+
+## The Fix
+
+The issue is in the function call `helper_c(val, skb + 1)`. You cannot pass a modified context pointer to another function. The simplest fix is to **pass the original pointer** without arithmetic:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+__attribute__((noinline))
+int helper_a(struct __sk_buff *skb)
+{
+	return skb->len;
+}
+
+int helper_c(int val, struct __sk_buff *skb);
+
+__attribute__((noinline))
+int helper_b(int val, struct __sk_buff *skb)
+{
+	return helper_a(skb) + helper_c(val, skb);
+}
+
+__attribute__((noinline))
+int helper_c(int val, struct __sk_buff *skb)
+{
+	return skb->ifindex * val;
+}
+
+SEC("tc")
+int entry(struct __sk_buff *skb)
+{
+	return helper_a(skb) + helper_b(2, skb) + helper_c(3, skb);
+}
+```
+
+**Change:** Line 13: `helper_c(val, skb + 1)` → `helper_c(val, skb)`
+
+**Why this works:** By passing the unmodified context pointer `skb` instead of `skb + 1`, the pointer remains in its original form when passed to `helper_c`, satisfying the verifier's requirement that context pointers must not be arithmetically modified before being used as function arguments.

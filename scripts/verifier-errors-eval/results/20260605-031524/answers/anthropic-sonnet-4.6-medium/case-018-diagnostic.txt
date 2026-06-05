@@ -1,0 +1,47 @@
+The verifier enforces LIFO (last-in, first-out) ordering for `bpf_res_spin_lock`. When `lock_b` fails to acquire, you must unlock in reverse order: unlock `lock_b` first (or rather, since it failed, just unlock `lock_a` — but the verifier still requires LIFO). Actually, the issue is that when `lock_b` acquisition fails (returns non-zero), the code unlocks `lock_a` first, but the verifier sees `lock_b` was the last lock attempted and requires it to be unlocked first.
+
+Wait — looking more carefully: the verifier inlines the unlock check regardless of lock_b's return value. The problem is that at instruction 10, `bpf_res_spin_unlock(&lock_a)` is called while `lock_b` is still "active" (the last acquired lock). The verifier requires LIFO even in the error path.
+
+The fix is to unlock in reverse order: unlock `lock_b` before `lock_a` in the error path (even though lock_b failed to acquire, it seems the verifier tracks it). 
+
+Actually, re-reading: if `bpf_res_spin_lock(&lock_b)` returns non-zero (failure), it likely still registers as "held" from the verifier's perspective for LIFO tracking, OR the verifier unconditionally requires unlock order.
+
+The fix: in the error branch where `lock_b` failed, unlock `lock_b` then `lock_a`:
+
+```c
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_b);
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+```
+
+But also, the final unlock order at the end is wrong (`lock_a` before `lock_b`). Fix that too:
+
+```c
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+```
+
+Here's the complete patch:
+
+```c
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_b);
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```
+
+The key changes are:
+1. In the error path for `lock_b`, unlock `lock_b` first (LIFO), then `lock_a`.
+2. In the success path, unlock `lock_b` first (last acquired), then `lock_a`.

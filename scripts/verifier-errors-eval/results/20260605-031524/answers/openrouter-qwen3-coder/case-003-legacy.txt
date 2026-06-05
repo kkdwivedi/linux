@@ -1,0 +1,33 @@
+Looking at the verifier log and the BPF program, I can see the issue:
+
+**Problem Analysis:**
+1. The program stores the context pointer (R1) to the stack at `fp-8`
+2. It then overwrites part of that memory with a byte value (35) at `fp-7`
+3. When it loads the value back from `fp-8`, the verifier sees that the memory has been partially overwritten and marks R0 as "scalar" rather than "ptr"
+4. The final instruction tries to dereference R0 + 8, but since R0 is now a scalar (not a pointer), this causes an invalid memory access error
+
+**Root Cause:**
+The issue is that writing a byte to `fp-7` corrupts the pointer that was stored at `fp-8` because they overlap in memory. On a little-endian system, `fp-7` is the second byte of the 8-byte value stored at `fp-8`, so writing to it changes the pointer value.
+
+**Solution:**
+The smallest fix is to avoid the memory overlap by storing the byte at a non-overlapping location, such as `fp-16` instead of `fp-7`.
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	*(u64*)(r10 - 8) = r1;				\
+	r0 = 0x23;					\
+	*(u8*)(r10 - 16) = r0;				\
+	r0 = *(u64*)(r10 - 8);				\
+	r0 = *(u64*)(r0 + 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+This change moves the byte store from `fp-7` to `fp-16`, ensuring that the context pointer stored at `fp-8` remains intact and can be properly dereferenced later.

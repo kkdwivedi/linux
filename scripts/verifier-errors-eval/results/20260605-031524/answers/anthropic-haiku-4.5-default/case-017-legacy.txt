@@ -1,0 +1,33 @@
+## Explanation of the Verifier Failure
+
+The BPF verifier is enforcing a stack discipline for IRQ state management. When you call `bpf_local_irq_save()`, it tracks the acquisition of an IRQ state with an ID. The verifier requires that `bpf_local_irq_restore()` calls must restore states in **LIFO (Last-In-First-Out) order** — the reverse order in which they were acquired.
+
+In this code:
+1. Line 246: `bpf_local_irq_save(&flags1)` acquires state with ID=1
+2. Line 247: `bpf_local_irq_save(&flags2)` acquires state with ID=2
+3. Line 248: `bpf_local_irq_restore(&flags1)` tries to restore ID=1
+
+The problem: You're trying to restore ID=1 (the older one) while ID=2 (the newer one) is still active. This violates the LIFO requirement. The verifier expects you to restore ID=2 first (the most recently acquired state).
+
+## Fix
+
+Swap the order of the two `bpf_local_irq_restore()` calls to restore in reverse acquisition order:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	unsigned long flags1, flags2;
+
+	bpf_local_irq_save(&flags1);
+	bpf_local_irq_save(&flags2);
+	bpf_local_irq_restore(&flags2);  // Restore in reverse order
+	bpf_local_irq_restore(&flags1);
+	return 0;
+}
+```
+
+This ensures that `flags2` (acquired last at insn_idx=7, ID=2) is restored first, and then `flags1` (acquired first at insn_idx=3, ID=1) is restored second, satisfying the LIFO discipline that the verifier enforces.

@@ -1,0 +1,28 @@
+## Explanation of the Verifier Failure
+
+The verifier rejects the program for two reasons visible in the log:
+
+1. **Primary failure**: `helper_a` is a `__noinline` (non-static) global BPF function. Because it contains a call to `bpf_copy_from_user` on one of its paths, the verifier marks it as **sleepable**. The BPF verifier prohibits calling sleepable global functions inside an IRQ-disabled region (the section between `bpf_local_irq_save` and `bpf_local_irq_restore`).
+
+2. **Secondary note**: The first log line `arg#0 reference type('UNKNOWN') size cannot be determined: -22` is a pre-check soft error about the `void *ctx` argument of the syscall entry point (void pointers have indeterminate size), but verification continues past it — the fatal failure is the IRQ context violation.
+
+The verifier's own suggestion confirms: *"Move the call outside the critical section, or use a non-sleepable function."*
+
+## Fix
+
+The smallest change is to move `helper_a(0)` outside of the IRQ-disabled critical section (either before `bpf_local_irq_save` or after `bpf_local_irq_restore`):
+
+```c
+SEC("?syscall")
+int entry(void *ctx)
+{
+	unsigned long flags;
+
+	bpf_local_irq_save(&flags);
+	bpf_local_irq_restore(&flags);
+	helper_a(0);
+	return 0;
+}
+```
+
+With this ordering, when `helper_a(0)` is reached, the IRQ-disabled region has already been exited (depth = 0), so calling a sleepable global function is permitted and verification passes.

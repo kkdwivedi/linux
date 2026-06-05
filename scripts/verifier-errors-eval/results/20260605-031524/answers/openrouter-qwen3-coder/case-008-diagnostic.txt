@@ -1,0 +1,39 @@
+Looking at the verifier log and source code, I can see the issue:
+
+The problem is with the `bpf_dynptr_slice` call:
+```c
+data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
+```
+
+The verifier is complaining that:
+- R3 (the buffer pointer) points to stack memory at offset -24
+- R4 (the length) is 9 bytes
+- But the buffer `buffer[8]` is only 8 bytes, so reading 9 bytes would go out of bounds
+
+The issue is that we're asking for 9 bytes from an 8-byte buffer. The verifier correctly rejects this as it would result in reading beyond the allocated stack space.
+
+The fix is simple: change the length from 9 to 8 to match the buffer size.
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("?cgroup_skb/egress")
+int entry(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+	char buffer[8] = {};
+	__u64 *data;
+
+	if (bpf_dynptr_from_skb(skb, 0, &ptr))
+		return 1;
+
+	data = bpf_dynptr_slice(&ptr, 0, buffer, 8);  // Changed from 9 to 8
+
+	return !!data;
+}
+```
+
+This fix ensures that the requested read length (8 bytes) matches the available buffer size (8 bytes), making the memory access valid from the verifier's perspective.

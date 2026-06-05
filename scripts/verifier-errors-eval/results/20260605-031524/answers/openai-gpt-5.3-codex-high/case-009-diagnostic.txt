@@ -1,0 +1,44 @@
+The verifier failure is exactly about the pointer type passed into `bpf_task_acquire()` in `entry()`:
+
+- `value` is checked for NULL (`if (!value) return 0;`) ✅
+- but `value->task` is then loaded and can still be NULL (`rcu_ptr_or_null_task_struct`) ❌
+- `bpf_task_acquire()` requires a non-NULL task pointer on that path.
+
+From log:
+
+- insn 3: `r1 = *(u64 *)(r0 +0)` gives `R1=rcu_ptr_or_null_task_struct`
+- insn 4: `call bpf_task_acquire`
+- reject: “Possibly NULL pointer passed to trusted R1”
+
+### Smallest likely fix
+
+Load `value->task` into a local variable, NULL-check it, and call `bpf_task_acquire()` only on non-NULL path.
+
+```diff
+@@
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct task_struct *acquired;
++	struct task_struct *acquired, *map_task;
+ 	struct map_value *value;
+ 
+ 	value = helper_a(task);
+ 	if (!value)
+ 		return 0;
+ 
+-	acquired = bpf_task_acquire(value->task);
++	map_task = value->task;
++	if (!map_task)
++		return 0;
++
++	acquired = bpf_task_acquire(map_task);
+ 	if (!acquired)
+ 		return 0;
+ 
+ 	bpf_task_release(acquired);
+ 	return 0;
+ }
+```
+
+This is minimal and matches the verifier’s own suggestion (“Add a NULL check and call the kfunc only on the non-NULL path.”).

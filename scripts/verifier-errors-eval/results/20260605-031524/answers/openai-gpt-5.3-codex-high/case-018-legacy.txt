@@ -1,0 +1,39 @@
+`bpf_res_spin_lock`/`bpf_res_spin_unlock` are verifier-tracked resources with **strict LIFO order**.
+
+Your program acquires:
+
+1. `lock_a`
+2. `lock_b`
+
+But on the success path it releases:
+
+1. `lock_a`
+2. `lock_b`
+
+That is out of order, which matches the verifier error at the unlock of `lock_a`:
+
+> `bpf_res_spin_unlock cannot be out of order`
+
+### Smallest likely fix
+
+Release in reverse acquisition order on the success path.
+
+```diff
+ SEC("?tc")
+ int entry(struct __sk_buff *ctx)
+ {
+ 	if (bpf_res_spin_lock(&lock_a))
+ 		return 0;
+ 	if (bpf_res_spin_lock(&lock_b)) {
+ 		bpf_res_spin_unlock(&lock_a);
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+-	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+This keeps the failure path valid (only `lock_a` held, so unlock `lock_a`) and makes the success path verifier-compliant (`lock_b` then `lock_a`).

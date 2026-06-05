@@ -1,0 +1,46 @@
+The verifier fails because the first argument to `bpf_cpumask_populate` is an invalid scalar value (`0x123456`) cast to a pointer. The verifier requires this argument to be a pointer to valid memory (e.g., stack, map, or context) of type `struct cpumask` (16 bytes), not an arbitrary integer.
+
+### Fix Explanation:
+Replace the invalid scalar pointer with a stack-allocated `struct cpumask`. This provides verifier-known memory of the correct type/size.
+
+### Patch:
+```diff
+--- original.c
++++ fixed.c
+@@ -7,10 +7,10 @@
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
++	struct cpumask mask;
+ 	u64 bits;
+ 	int ret;
+ 
+-	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
++	ret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));
+ 	if (!ret)
+ 		return 2;
+```
+
+### Fixed Source:
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct cpumask mask;
+	u64 bits;
+	int ret;
+
+	ret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));
+	if (!ret)
+		return 2;
+
+	return 0;
+}
+```

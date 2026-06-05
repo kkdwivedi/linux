@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nThe verifier sees `value->task` as `rcu_ptr_or_null_task_struct` \u2014 a kptr that may be NULL \u2014 because it was stored via `bpf_kptr_xchg` and retrieved from a map. `bpf_task_acquire` requires a **non-NULL** trusted pointer, so the call is rejected.\n\nThe fix is simply to NULL-check `value->task` before passing it to `bpf_task_acquire`.\n\n## Patch\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n+\tif (!value->task)\n+\t\treturn 0;\n+\n\tacquired = bpf_task_acquire(value->task);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\nAdding `if (!value->task) return 0;` before the `bpf_task_acquire` call narrows the type of `value->task` from `rcu_ptr_or_null_task_struct` to `rcu_ptr_task_struct` (non-NULL), satisfying the verifier's requirement for a trusted non-NULL pointer.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-medium/case-009-diagnostic.txt",
+    "case_id": "case-009",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-medium",
+    "prompt_bytes": 9539,
+    "prompt_path": "public/case-009/prompt_diagnostic.md",
+    "prompt_sha256": "b18a80e715b0997c1feba2b4b098abd71869a9fb867ace1b91abe52c1a1cab07",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-medium/case-009-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "55bea980-b52e-43a4-b59f-333c5ccb58eb",
+    "started_at": "2026-06-05T04:04:02+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.012144,
+    "output_cost_usd": 0.00765,
+    "total_cost_usd": 0.019794
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 4048,
+    "output_tokens": 510,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 4048,
+      "output_tokens": 510,
+      "output_tokens_details": {
+        "thinking_tokens": 157
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 344,
+    "reasoning_tokens": 0,
+    "total_tokens": 4558
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EvgECmUIDhgCKkD4bA386W5qsRV+4ZM74N0rawvl8A0ckg7pgKiCsjXAnIpjlCikVNudDa+m64uCJ5RAAkxbd/vn0KZAInb1V602MhFjbGF1ZGUtc29ubmV0LTQtNjgAQgh0aGlua2luZxIMM6PNWB+6J02HBfXOGgxoUFobRgKcDzeGrpYiMDR9ElUnfQlkdH9uYyEuAbmKLFjOFzddEW09tR7KvdQxARYaRqGTkZZwszA+rltyKSrAAwtRpnKiIEz28KltNzODqhrbK+oDx0Pg9ptT5lkjW05w2B+kSqMMcbvwNeBMUFA3EoGFzsLSGsJRdPcRtkqN7F4Tq6BjObQEcUTzhDCp0av2LRYOIJb3Lkif2tspvED7TMCnSarUxMguNqa0V5ERcwPPwbx5asrE3IEpSzKdqTtncg37zIixUq99OiFHLt+Q0j3ex+dJOINDFhTeF4C27HCe2d67uzhYgae9DC8t74wsuAq2qaAN/9eBPuOehOQORFw1YmPgBDpv2r8JDDAjNh5yL2BLymBAz9zEZ2SWGhAECuaC4KnQGESklsld3doRhIQCgRu2VH1j0mfgt2FuCW3FVaR9Y3ZUxib68PhwsObfQVzi1v7trU8gFzfjqmQLOXwIxLb8PU7XxQmzOPcNticYAMDFmMHn8DVQYKHMk+cjmbqH2XoC1+NkDa4HB8xtC9Lo8u8MfYTJKiz9SuTI+SazvOxYnqNAMZemNd51xzePjCsOz3IB7YyOkF6a1WSskXw2FiUlRIDSvvSWfga4jXvL3Rg2cO4vCnfb6mPAetv2jqYBwVKbHw5ofKwxVO844YZ567XP8vvPJVNah96F6QQYAQ==",
+        "thinking": "The verifier error is clear: `value->task` is a `rcu_ptr_or_null_task_struct`, meaning it could be NULL, but `bpf_task_acquire` requires a non-NULL trusted pointer.\n\nThe fix is to check `value->task` for NULL before calling `bpf_task_acquire`.\n\nIn the `entry` function:\n\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\n\nAdding NULL check...",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nThe verifier sees `value->task` as `rcu_ptr_or_null_task_struct` \u2014 a kptr that may be NULL \u2014 because it was stored via `bpf_kptr_xchg` and retrieved from a map. `bpf_task_acquire` requires a **non-NULL** trusted pointer, so the call is rejected.\n\nThe fix is simply to NULL-check `value->task` before passing it to `bpf_task_acquire`.\n\n## Patch\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n+\tif (!value->task)\n+\t\treturn 0;\n+\n\tacquired = bpf_task_acquire(value->task);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\nAdding `if (!value->task) return 0;` before the `bpf_task_acquire` call narrows the type of `value->task` from `rcu_ptr_or_null_task_struct` to `rcu_ptr_task_struct` (non-NULL), satisfying the verifier's requirement for a trusted non-NULL pointer.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01UDj1x6JA7BgYwBcVDrQRfZ",
+    "model": "claude-sonnet-4-6",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 4048,
+      "output_tokens": 510,
+      "output_tokens_details": {
+        "thinking_tokens": 157
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": "The verifier error is clear: `value->task` is a `rcu_ptr_or_null_task_struct`, meaning it could be NULL, but `bpf_task_acquire` requires a non-NULL trusted pointer.\n\nThe fix is to check `value->task` for NULL before calling `bpf_task_acquire`.\n\nIn the `entry` function:\n\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\n\nAdding NULL check..."
+}

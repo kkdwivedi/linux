@@ -1,0 +1,50 @@
+The verifier failure is a reference leak.
+
+`bpf_sk_lookup_tcp()` returns a `sock_or_null` pointer with an owned reference:
+
+```text
+19: call bpf_sk_lookup_tcp#84 ; R0=sock_or_null(id=2) refs=2
+```
+
+After that, the program branches on `r6`, which is packet data loaded earlier:
+
+```asm
+if r6 == 0 goto l1_%=;
+exit;
+```
+
+On the `r6 != 0` path, the program exits immediately while the socket reference from `bpf_sk_lookup_tcp()` may still be live. The verifier cannot prove that `r0` is NULL on that path, and the reference has not been released, so it reports:
+
+```text
+Unreleased reference id=2 alloc_insn=19
+```
+
+The existing code below `l1_%=` is correct for the paths that reach it: it checks `r0 == 0`, and if non-NULL calls `bpf_sk_release()`. The problem is simply that one exit path bypasses that cleanup.
+
+Smallest likely source fix: make the `r6 != 0` path go through the existing release block instead of exiting directly.
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -24,7 +24,7 @@ __naked void entry(void)
+ 	r5 = 0;						\
+ 	call %[bpf_sk_lookup_tcp];			\
+ 	if r6 == 0 goto l1_%=;				\
+-	exit;						\
++	goto l1_%=;					\
+ l1_%=:	if r0 == 0 goto l2_%=;				\
+ 	r1 = r0;					\
+ 	call %[bpf_sk_release];				\
+```
+
+After this change, every path after `bpf_sk_lookup_tcp()` reaches:
+
+```asm
+if r0 == 0 goto l2_%=;
+r1 = r0;
+call bpf_sk_release;
+```
+
+So the verifier can see that the acquired socket reference is either absent because `r0 == NULL`, or released with `bpf_sk_release()` before program exit.

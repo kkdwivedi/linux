@@ -1,0 +1,60 @@
+Looking at the verifier log, the issue is with instruction 13 where `bpf_probe_read_kernel` is called. The verifier is complaining about "R1 unbounded memory access" because R1 (which points to `r0 + r3`) is not properly bounded.
+
+Let me trace through the code:
+
+1. `r0` points to a map value (struct value with size 48 bytes)
+2. `r3` is loaded from `*(u32*)(r0 + 0)` - this is the `offset` field
+3. `r1 = r0 + r3` - this creates a pointer that could point anywhere depending on the value of `offset`
+
+The problem is that `r3` (the offset) is unbounded - it can be any 32-bit value, which means `r1` could point outside the valid memory region. The verifier requires bounds checking to ensure memory accesses are safe.
+
+The fix is to add bounds checking for the offset before using it. Since we're reading 1 byte (`r2 = 1`), we need to ensure that `r3` (offset) is within valid bounds of the data array.
+
+The `data` array is 44 bytes, so the valid offset range is 0-43.
+
+Here's the fix:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+struct value {
+	__u32 offset;
+	__u8 data[44];
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1);
+	__type(key, __u64);
+	__type(value, struct value);
+} map_a SEC(".maps");
+
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = 0;						\
+	*(u64*)(r2 + 0) = r1;				\
+	r1 = %[map_a] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l0_%=;				\
+	r1 = r0;					\
+	r3 = *(u32*)(r0 + 0);				\
+	if r3 >= 44 goto l0_%=;				\
+	r1 += r3;					\
+	r2 = 1;						\
+	r3 = 0;						\
+	call %[bpf_probe_read_kernel];			\
+l0_%=:	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm(bpf_probe_read_kernel),
+	  __imm_addr(map_a)
+	: __clobber_all);
+}
+```
+
+The key change is adding `if r3 >= 44 goto l0_%=;` after loading `r3` from the offset field. This ensures that the offset is within the valid range [0, 43] for the 44-byte data array before we use it to calculate the final pointer for `bpf_probe_read_kernel`.

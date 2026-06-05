@@ -1,0 +1,47 @@
+## Explanation
+
+The verifier failure is a packet-pointer invalidation problem.
+
+In `entry()` you:
+1. Load `p` from `sk->data` (a packet pointer, `R7=pkt`).
+2. Bounds-check it against `sk->data_end` — this marks `R7` as a valid, readable packet pointer.
+3. Call `helper_a(sk, 0)`.
+4. Dereference `*p = 42`.
+
+The key fact is what `helper_a` eventually does: it calls `bpf_skb_pull_data()`. That helper can **reallocate / move the skb's linear data**, so any previously obtained `sk->data` pointer becomes stale. The verifier knows this and, after the call, invalidates all packet pointers held in registers — turning `R7` from `pkt(r=4)` into a plain scalar:
+
+```
+8: (85) call pc+4
+   ... invalidated: R7: packet data may have moved ...
+10: (63) *(u32 *)(r7 +0) = r1
+R7 invalid mem access 'scalar'
+```
+
+So at line `*p = 42;`, `R7` is no longer a pointer and the store is rejected.
+
+(Even though `helper_a`/`helper_b` are global functions assumed valid, the verifier still conservatively assumes anything that can touch the skb may have moved the packet data.)
+
+## Fix
+
+Reload and re-validate the packet pointer **after** the helper call, before dereferencing it. The smallest source change is to reorder so the load + bounds check happen after `helper_a()`:
+
+```c
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	int *p;
+
+	helper_a(sk, 0);
+
+	p = (void *)(long)sk->data;
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+Now `p` is derived from `sk->data` and bounds-checked *after* the call that could move packet data, so `R7` is a fresh, validated packet pointer when `*p = 42` executes, and the verifier accepts the store.
+
+If the original ordering (check before the call) must be preserved for logic reasons, the equivalent fix is to simply re-read `sk->data`/`sk->data_end` and re-run the bounds check after `helper_a()`; you cannot rely on the pre-call validation surviving across a call that may pull skb data.

@@ -1,0 +1,33 @@
+The verifier is rejecting this at **instruction 0** for a pure policy reason:
+
+- Program type from `SEC("kprobe")` is a kprobe/tracing program type.
+- `bpf_ktime_get_coarse_ns` is **not in the allowed helper set** for that type.
+- So verification fails immediately before any register/state analysis.
+
+That matches the log exactly:
+
+> `program of this type cannot use helper bpf_ktime_get_coarse_ns#160`
+
+### Smallest likely fix
+
+Use a helper that is allowed for kprobe programs, e.g. `bpf_ktime_get_ns`.
+
+#### Patch
+```diff
+@@
+ SEC("kprobe")
+ __naked void entry(void)
+ {
+ 	asm volatile ("					\
+-	call %[bpf_ktime_get_coarse_ns];		\
++	call %[bpf_ktime_get_ns];			\
+ 	r0 = 0;						\
+ 	exit;						\
+ "	:
+-	: __imm(bpf_ktime_get_coarse_ns)
++	: __imm(bpf_ktime_get_ns)
+ 	: __clobber_all);
+ }
+```
+
+If you don’t actually need time at all, removing the helper call entirely would also pass, but the above is the minimal semantic-preserving change.

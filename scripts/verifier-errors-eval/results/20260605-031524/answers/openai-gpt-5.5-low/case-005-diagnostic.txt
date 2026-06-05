@@ -1,0 +1,58 @@
+The verifier rejects the program because `bpf_copy_from_user()` is a sleepable helper, and the program calls it while preemption is disabled:
+
+```c
+bpf_preempt_disable();              // enters non-preemptible region, depth 1
+bpf_copy_from_user(...);            // may sleep: not allowed here
+bpf_preempt_enable();
+```
+
+In a non-preemptible region, the verifier forbids helpers/kfuncs that may sleep. The log is explicit:
+
+```text
+sleepable helper bpf_copy_from_user#148 in non-preemptible region
+```
+
+The earlier line:
+
+```text
+arg#0 reference type('UNKNOWN ') size cannot be determined: -22
+```
+
+does not appear to be the actual rejection reason here; the verifier continues and rejects specifically at the helper call due to execution-context safety.
+
+The smallest source-level fix is to move `bpf_copy_from_user()` outside the preemption-disabled section, or remove the preemption-disable region entirely if it is not needed.
+
+A minimal patch preserving the calls would be:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -8,9 +8,9 @@ int entry(void *ctx)
+ {
+ 	u32 data;
+ 
++	bpf_copy_from_user(&data, sizeof(data), NULL);
+ 	bpf_preempt_disable();
+-	bpf_copy_from_user(&data, sizeof(data), NULL);
+ 	bpf_preempt_enable();
+ 	return 0;
+ }
+```
+
+Alternatively, if the preemption-disabled region is unnecessary, the even cleaner fix is:
+
+```diff
+@@ -8,9 +8,7 @@ int entry(void *ctx)
+ {
+ 	u32 data;
+ 
+-	bpf_preempt_disable();
+ 	bpf_copy_from_user(&data, sizeof(data), NULL);
+-	bpf_preempt_enable();
+ 	return 0;
+ }
+```
+
+Either way, the key requirement is that `bpf_copy_from_user()` must execute while the program is in a sleepable/preemptible context, not between `bpf_preempt_disable()` and `bpf_preempt_enable()`.

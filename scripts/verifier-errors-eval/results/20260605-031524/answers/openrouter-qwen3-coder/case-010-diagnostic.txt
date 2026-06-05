@@ -1,0 +1,43 @@
+Looking at the verifier log, the issue is in `helper_b` function where it tries to call `helper_c(val, skb + 1)`. The problem is that `skb + 1` modifies the context pointer by adding 192 bytes (the size of `struct __sk_buff`), and the verifier disallows dereferencing modified context pointers.
+
+The error occurs because:
+1. `helper_b` receives `skb` as a context pointer
+2. It stores `skb` in register `r6` 
+3. It adds 192 to `r6` (line 21: `r6 += 192`)
+4. It tries to pass this modified pointer to `helper_c` (line 23-24)
+5. The verifier rejects this because context pointers must be used in their original form
+
+The fix is to pass the original `skb` pointer to `helper_c` instead of the modified one. Looking at the code, it seems like the intention was to pass the original `skb` parameter, not `skb + 1`.
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+__attribute__((noinline))
+int helper_a(struct __sk_buff *skb)
+{
+	return skb->len;
+}
+
+int helper_c(int val, struct __sk_buff *skb);
+
+__attribute__((noinline))
+int helper_b(int val, struct __sk_buff *skb)
+{
+	return helper_a(skb) + helper_c(val, skb);
+}
+
+__attribute__((noinline))
+int helper_c(int val, struct __sk_buff *skb)
+{
+	return skb->ifindex * val;
+}
+
+SEC("tc")
+int entry(struct __sk_buff *skb)
+{
+	return helper_a(skb) + helper_b(2, skb) + helper_c(3, skb);
+}
+```
+
+The key change is in `helper_b` function, line 19: changing `helper_c(val, skb + 1)` to `helper_c(val, skb)`. This removes the invalid pointer arithmetic on the context pointer and passes the original context pointer as intended.

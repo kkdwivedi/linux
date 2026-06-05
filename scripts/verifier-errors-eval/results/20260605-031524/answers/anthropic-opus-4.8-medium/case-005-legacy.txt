@@ -1,0 +1,33 @@
+## Explanation
+
+The program runs in a sleepable context (`fentry.s/`). Inside it you bracket a call with `bpf_preempt_disable()` / `bpf_preempt_enable()`, which marks the code in between as **non-preemptible**.
+
+`bpf_copy_from_user()` is a **sleepable** helper — it may fault/sleep when reading user memory. The verifier forbids calling any sleepable helper while preemption is disabled, hence:
+
+```
+sleepable helper bpf_copy_from_user#148 in non-preemptible region
+```
+
+(The earlier line `arg#0 reference type('UNKNOWN ') size cannot be determined: -22` is unrelated noise from BTF arg checking and is not the failure point.)
+
+## Fix
+
+The sleepable copy must happen outside the preempt-disabled region. The smallest source-level change is to move the `bpf_copy_from_user()` call out from between `bpf_preempt_disable()`/`bpf_preempt_enable()`:
+
+```c
+SEC("?fentry.s/sys_getpgid")
+int entry(void *ctx)
+{
+	u32 data;
+
+	bpf_preempt_disable();
+	bpf_preempt_enable();
+
+	bpf_copy_from_user(&data, sizeof(data), NULL);
+	return 0;
+}
+```
+
+Or, if the intent is just to exercise something inside the non-preemptible region, replace the sleepable helper with a non-sleepable one (e.g. `bpf_probe_read_user(&data, sizeof(data), NULL)`), which is permitted in a non-preemptible region.
+
+Either change removes the "sleepable helper in non-preemptible region" rejection and lets the program verify.

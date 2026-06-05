@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Remove the byte store to fp-7 before reloading the pointer.",
+    "Store the scalar into a different stack slot that does not overlap the pointer spill.",
+    "Reload/use the original context pointer instead of the corrupted spill."
+  ],
+  "canonical_fix": "Do not partially overwrite the stack slot that contains the spilled pointer. Use a separate stack slot/register for the scalar byte, or reload the original pointer from a preserved uncorrupted source before dereferencing.",
+  "case_id": "case-003",
+  "category": "Register Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The program spills a pointer to the stack, partially overwrites one byte of the spill with a scalar, reloads the corrupted stack slot, and then dereferences the result. The verifier no longer treats the reloaded value as a pointer.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-r1-0528/case-003-legacy.txt",
+    "case_id": "case-003",
+    "model": "deepseek/deepseek-r1-0528",
+    "profile": "openrouter-deepseek-r1-0528",
+    "prompt_bytes": 1266,
+    "prompt_path": "public/case-003/prompt_legacy.md",
+    "prompt_sha256": "ff79e3ce2090bf446fcac0650e4037fac5ac92314018b0ce73b4c838bf23c7cf",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-r1-0528/case-003-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "9197a49a-66e9-478a-be9d-07aba6c43a86",
+    "started_at": "2026-06-05T03:19:07+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "The verifier error occurs because storing a byte at `r10 - 7` corrupts the context pointer stored at `r10 - 8`. The context pointer (originally in `r1`) is saved as an 8-byte value at `[r10 - 8]` (covering bytes from `r10-8` to `r10-1`). The byte store at `r10 - 7` overwrites the first byte of this 8-byte slot, causing the verifier to lose track of the pointer type. When the context pointer is later loaded and dereferenced (`*(u64*)(r0 + 8)`), the verifier sees `r0` as a scalar (unknown value) rather than a valid pointer, leading to \"invalid mem access\".\n\n### Fix\nMove the byte store to a non-overlapping stack location (`r10 - 16`) to avoid corrupting the context pointer. This uses a separate stack slot, preserving the pointer type.\n\n```patch\n--- a/prog.c\n+++ b/prog.c\n@@ -5,7 +5,7 @@ SEC(\"socket\")\n {\n \tasm volatile (\"\t\t\t\t\t\\\n \t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n-\t*(u8*)(r10 - 7) = r0;\t\t\t\t\\\n+\t*(u8*)(r10 - 16) = r0;\t\t\t\t\\\n \tr0 = 0x23;\t\t\t\t\t\\\n \tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n \tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n```\n\n### Explanation\n- The context pointer stored at `r10 - 8` remains intact.\n- The byte store now uses a separate stack slot (`r10 - 16`), avoiding type corruption.\n- The context load at `r10 - 8` retains its pointer type, allowing safe dereference.\n\nThis minimal change preserves program behavior while satisfying the verifier's type tracking.",
+  "must_mention": [
+    "The pointer spill is corrupted by a partial write",
+    "The reload becomes scalar/unknown",
+    "Dereferencing the scalar is invalid"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a bounds check after the pointer has already become scalar",
+    "Changes only the final load offset",
+    "Claims the issue is packet or map bounds"
+  ]
+}

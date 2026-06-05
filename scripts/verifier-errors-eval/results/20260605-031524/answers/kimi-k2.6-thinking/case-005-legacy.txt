@@ -1,0 +1,43 @@
+**Explanation**
+
+The verifier rejects the program because `bpf_copy_from_user` is a *sleepable* helper, and the eBPF verifier forbids calling sleepable helpers while preemption is disabled.
+
+In the source:
+
+```c
+bpf_preempt_disable();
+bpf_copy_from_user(&data, sizeof(data), NULL);
+bpf_preempt_enable();
+```
+
+`bpf_preempt_disable()` puts the program into a non‑preemptible region. Immediately after that, `bpf_copy_from_user()` is invoked. Since copying from user space may fault and sleep, the verifier emits:
+
+```
+sleepable helper bpf_copy_from_user#148 in non-preemptible region
+```
+
+and aborts verification.
+
+The first line of the log (`arg#0 reference type('UNKNOWN ') size cannot be determined: -22`) is a non‑fatal warning about the unresolved BTF type for the `fentry.s` target function’s context, but it is **not** the fatal error. Even if that were resolved, the preempt‑region violation would still cause the load to fail.
+
+**Fix**
+
+Remove the `bpf_preempt_disable()` / `bpf_preempt_enable()` pair so that the sleepable helper runs in a preemptible context (which is allowed in a sleepable `fentry.s` program). This is the smallest source change that satisfies the verifier.
+
+**Patch**
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -109,9 +109,7 @@ int entry(void *ctx)
+ {
+ 	u32 data;
+ 
+-	bpf_preempt_disable();
+ 	bpf_copy_from_user(&data, sizeof(data), NULL);
+-	bpf_preempt_enable();
+ 	return 0;
+ }
+```
+
+With these two calls removed, the program no longer enters a non‑preemptible region before the sleepable helper, so the verifier will allow `bpf_copy_from_user`.

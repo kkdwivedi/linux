@@ -1,0 +1,60 @@
+The failure is in `helper_a()`, not at the call site.
+
+Because `helper_a` has global linkage:
+
+```c
+__noinline int helper_a(const struct Item *s)
+```
+
+the BPF verifier validates it as a callable global BPF subprogram. For such a function, the verifier cannot rely only on the one visible call from `entry()`. It treats the pointer argument as possibly NULL:
+
+```text
+R1=mem_or_null(id=1,sz=4)
+```
+
+Then the function does:
+
+```c
+return bpf_get_prandom_u32() < s->x;
+```
+
+which dereferences `s` without proving it is non-NULL. The verifier therefore rejects:
+
+```text
+R6 invalid mem access 'mem_or_null'
+```
+
+The smallest semantics-preserving fix is to add a NULL check inside `helper_a()` before dereferencing `s`.
+
+Patch:
+
+```diff
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ 
+ struct Item {
+ 	int x;
+ };
+ 
+ __noinline int helper_a(const struct Item *s)
+ {
++	if (!s)
++		return 0;
++
+ 	return bpf_get_prandom_u32() < s->x;
+ }
+ 
+ SEC("cgroup_skb/ingress")
+ int entry(struct __sk_buff *skb)
+ {
+ 	const struct Item s = {.x = skb->len};
+ 
+ 	helper_a(&s);
+ 
+ 	return 1;
+ }
+```
+
+After this, the verifier can split the paths: on the NULL path the function returns, and on the remaining path `s` is known to be non-NULL, so `s->x` is safe to load.
+
+An alternative would be to make `helper_a` `static __noinline`, which may allow the verifier to analyze it only from the known call site where `&s` is non-NULL. But that changes linkage/visibility. The NULL check is the safer and more direct verifier fix.

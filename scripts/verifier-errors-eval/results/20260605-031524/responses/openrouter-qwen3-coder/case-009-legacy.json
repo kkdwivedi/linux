@@ -1,0 +1,109 @@
+{
+  "answer_text": "Looking at the verifier log, the issue is clear:\n\nThe error message \"Possibly NULL pointer passed to trusted R1\" occurs at instruction 4, where `bpf_task_acquire(value->task)` is called. The verifier is complaining that `value->task` might be NULL when passed to `bpf_task_acquire()`.\n\nLet me trace through the code:\n\n1. In `helper_a()`, `map_insert(task)` is called first\n2. `map_insert()` creates a map entry with `local.task = NULL` initially\n3. Later it tries to update this with `bpf_kptr_xchg(&value->task, acquired)`\n4. However, there's a race condition or verification issue where the verifier cannot guarantee that `value->task` is non-NULL when `helper_a()` returns and the caller calls `bpf_task_acquire(value->task)`\n\nThe problem is in the `helper_a()` function. After calling `map_insert()`, it calls `map_value_lookup()` which returns the map value, but the verifier cannot prove that `value->task` is non-NULL at this point.\n\nLooking at the code flow:\n- `map_insert()` sets `local.task = NULL` initially\n- Then it tries to acquire the task and exchange it with the NULL value\n- But there's a code path where `map_value_lookup()` is called after `map_insert()` succeeds, but before the kptr exchange happens, or the exchange might have failed\n\nThe fix is to add a NULL check in the caller function `entry()` before calling `bpf_task_acquire()`.\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(value->task);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\nThe issue is that `value->task` could be NULL. The verifier log shows that `R1=rcu_ptr_or_null_task_struct(id=10)` - note the \"or_null\" part.\n\nThe fix is to check if `value->task` is NULL before calling `bpf_task_acquire()`:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value || !value->task)\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(value->task);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-009-legacy.txt",
+    "case_id": "case-009",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 7630,
+    "prompt_path": "public/case-009/prompt_legacy.md",
+    "prompt_sha256": "cf955480f8f9d7c397454ba70a58615a32d27994e0f99c26d423ded383546618",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-009-legacy.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "0ff81bff-c842-4aa0-a6c4-97d90d23cf56",
+    "started_at": "2026-06-05T03:20:58+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00067232,
+    "output_cost_usd": 0.001053,
+    "total_cost_usd": 0.0017253199999999998
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 3056,
+    "output_tokens": 585,
+    "raw_usage": {
+      "completion_tokens": 585,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.00172532,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.001053,
+        "upstream_inference_cost": 0.00172532,
+        "upstream_inference_prompt_cost": 0.00067232
+      },
+      "is_byok": false,
+      "prompt_tokens": 3056,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 211,
+        "video_tokens": 0
+      },
+      "total_tokens": 3641
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 3641
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Looking at the verifier log, the issue is clear:\n\nThe error message \"Possibly NULL pointer passed to trusted R1\" occurs at instruction 4, where `bpf_task_acquire(value->task)` is called. The verifier is complaining that `value->task` might be NULL when passed to `bpf_task_acquire()`.\n\nLet me trace through the code:\n\n1. In `helper_a()`, `map_insert(task)` is called first\n2. `map_insert()` creates a map entry with `local.task = NULL` initially\n3. Later it tries to update this with `bpf_kptr_xchg(&value->task, acquired)`\n4. However, there's a race condition or verification issue where the verifier cannot guarantee that `value->task` is non-NULL when `helper_a()` returns and the caller calls `bpf_task_acquire(value->task)`\n\nThe problem is in the `helper_a()` function. After calling `map_insert()`, it calls `map_value_lookup()` which returns the map value, but the verifier cannot prove that `value->task` is non-NULL at this point.\n\nLooking at the code flow:\n- `map_insert()` sets `local.task = NULL` initially\n- Then it tries to acquire the task and exchange it with the NULL value\n- But there's a code path where `map_value_lookup()` is called after `map_insert()` succeeds, but before the kptr exchange happens, or the exchange might have failed\n\nThe fix is to add a NULL check in the caller function `entry()` before calling `bpf_task_acquire()`.\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(value->task);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\nThe issue is that `value->task` could be NULL. The verifier log shows that `R1=rcu_ptr_or_null_task_struct(id=10)` - note the \"or_null\" part.\n\nThe fix is to check if `value->task` is NULL before calling `bpf_task_acquire()`:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value || !value->task)\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(value->task);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "stop"
+      }
+    ],
+    "created": 1780629658,
+    "id": "gen-1780629658-FjqYFxyEMh4iAB2M94Si",
+    "model": "qwen/qwen3-coder-480b-a35b-07-25",
+    "object": "chat.completion",
+    "provider": "Google",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 585,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.00172532,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.001053,
+        "upstream_inference_cost": 0.00172532,
+        "upstream_inference_prompt_cost": 0.00067232
+      },
+      "is_byok": false,
+      "prompt_tokens": 3056,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 211,
+        "video_tokens": 0
+      },
+      "total_tokens": 3641
+    }
+  },
+  "reasoning_content": ""
+}

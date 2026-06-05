@@ -1,0 +1,29 @@
+The verifier error occurs because the `helper_a` function (which calls `bpf_skb_pull_data`) may invalidate the packet pointer `p` stored in register R7. After the call, the verifier no longer recognizes R7 as a valid packet pointer, treating it as an unknown scalar value. This causes the "R7 invalid mem access 'scalar'" error when attempting to write to `*p`.
+
+The fix involves moving the call to `helper_a` before the packet pointer initialization and bounds check. This ensures:
+1. `bpf_skb_pull_data` is called first (with len=0, safe even for short packets)
+2. Packet pointers (`sk->data`/`sk->data_end`) are reloaded after potential invalidation
+3. The bounds check uses fresh pointers
+4. The write uses a valid post-call pointer
+
+Here's the minimal patch:
+
+```c
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	helper_a(sk, 0);
+	int *p = (void *)(long)sk->data;
+
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+This change:
+- Preserves all helper functions
+- Maintains the same memory access logic
+- Only reorders operations to satisfy verifier requirements
+- Uses standard C99 mixed declarations/code

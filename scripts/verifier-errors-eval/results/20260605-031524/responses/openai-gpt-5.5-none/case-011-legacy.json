@@ -1,0 +1,124 @@
+{
+  "answer_text": "The verifier failure is a reference leak.\n\n`bpf_ringbuf_reserve_dynptr()` creates a ringbuf dynptr with an outstanding reference that must be released on every exit path by either:\n\n- `bpf_ringbuf_submit_dynptr(&ptr, flags)`, or\n- `bpf_ringbuf_discard_dynptr(&ptr, flags)`.\n\nIn this program there are two reservations:\n\n```c\nbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\nbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n```\n\nThe verifier tracks them as two separate references:\n\n```text\nrefs=1,3\n```\n\nOn the `sample != NULL` path, the program submits only `ptr1`:\n\n```c\nbpf_ringbuf_submit_dynptr(&ptr1, 0);\nreturn 0;\n```\n\nAfter that call, reference `1` is released, but reference `3`, corresponding to `ptr2`, is still live:\n\n```text\n32: call bpf_ringbuf_submit_dynptr#199   ; refs=3\n34: exit\nUnreleased reference id=3 alloc_insn=14\n```\n\nSo the verifier rejects the program because `ptr2` was reserved but never submitted or discarded on the successful `bpf_dynptr_data()` path.\n\nThe smallest source-level fix is to release `ptr2` before returning on the success path. Since `ptr2` is not used, discard it.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -24,6 +24,7 @@ int entry(void *ctx)\n \t}\n \n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n \n \treturn 0;\n }\n```\n\nResulting function:\n\n```c\nSEC(\"?raw_tp\")\nint entry(void *ctx)\n{\n\tstruct bpf_dynptr ptr1, ptr2;\n\tstruct sample *sample;\n\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n\n\tsample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));\n\tif (!sample) {\n\t\tbpf_ringbuf_discard_dynptr(&ptr1, 0);\n\t\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\t\treturn 0;\n\t}\n\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\n\treturn 0;\n}\n```\n\nThis should satisfy the verifier because both ringbuf dynptr references are released on both control-flow paths.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-none/case-011-legacy.txt",
+    "case_id": "case-011",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-none",
+    "prompt_bytes": 3372,
+    "prompt_path": "public/case-011/prompt_legacy.md",
+    "prompt_sha256": "762b0c608dbde5c1090172be3b10e7e17988b9698301148bebea627aedc1c8f8",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-none/case-011-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "none"
+    },
+    "run_id": "3e72dd99-f237-4ed9-9b9e-5700bd0e31d4",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00663,
+    "output_cost_usd": 0.01872,
+    "total_cost_usd": 0.02535
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1326,
+    "output_tokens": 624,
+    "raw_usage": {
+      "input_tokens": 1326,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 624,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 1950
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1950
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629335,
+    "created_at": 1780629325,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_041ef97861902a4e006a223f4d65c8819ea7ead73d3734a3ca",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier failure is a reference leak.\n\n`bpf_ringbuf_reserve_dynptr()` creates a ringbuf dynptr with an outstanding reference that must be released on every exit path by either:\n\n- `bpf_ringbuf_submit_dynptr(&ptr, flags)`, or\n- `bpf_ringbuf_discard_dynptr(&ptr, flags)`.\n\nIn this program there are two reservations:\n\n```c\nbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\nbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n```\n\nThe verifier tracks them as two separate references:\n\n```text\nrefs=1,3\n```\n\nOn the `sample != NULL` path, the program submits only `ptr1`:\n\n```c\nbpf_ringbuf_submit_dynptr(&ptr1, 0);\nreturn 0;\n```\n\nAfter that call, reference `1` is released, but reference `3`, corresponding to `ptr2`, is still live:\n\n```text\n32: call bpf_ringbuf_submit_dynptr#199   ; refs=3\n34: exit\nUnreleased reference id=3 alloc_insn=14\n```\n\nSo the verifier rejects the program because `ptr2` was reserved but never submitted or discarded on the successful `bpf_dynptr_data()` path.\n\nThe smallest source-level fix is to release `ptr2` before returning on the success path. Since `ptr2` is not used, discard it.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -24,6 +24,7 @@ int entry(void *ctx)\n \t}\n \n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n \n \treturn 0;\n }\n```\n\nResulting function:\n\n```c\nSEC(\"?raw_tp\")\nint entry(void *ctx)\n{\n\tstruct bpf_dynptr ptr1, ptr2;\n\tstruct sample *sample;\n\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n\n\tsample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));\n\tif (!sample) {\n\t\tbpf_ringbuf_discard_dynptr(&ptr1, 0);\n\t\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\t\treturn 0;\n\t}\n\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\n\treturn 0;\n}\n```\n\nThis should satisfy the verifier because both ringbuf dynptr references are released on both control-flow paths.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_041ef97861902a4e006a223f4dfc60819e928ab48202e326d5",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "none",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1326,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 624,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 1950
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

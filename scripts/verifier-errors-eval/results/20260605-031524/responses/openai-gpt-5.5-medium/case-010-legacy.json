@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier rejects `helper_b()` because of this call:\n\n```c\nhelper_c(val, skb + 1);\n```\n\n`skb` is a BPF context pointer. In C, `skb + 1` advances by `sizeof(*skb)`, which the verifier log shows as `192` bytes:\n\n```text\n21: (07) r6 += 192                    ; R6=ctx(imm=192)\n...\n24: (85) call pc+2\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\nSo `helper_c()` receives a modified context pointer, `ctx + 192`, and then dereferences it:\n\n```c\nreturn skb->ifindex * val;\n```\n\nThe verifier does not allow a BPF subprogram to dereference a modified context pointer like that. For a `tc` program, the `struct __sk_buff *` argument should be the original context pointer, not `skb + 1`.\n\nSmallest source-level fix: pass `skb` directly to `helper_c()`.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -16,7 +16,7 @@ int helper_c(int val, struct __sk_buff *skb);\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n \n __attribute__((noinline))\n```\n\nWith this change, `helper_c()` receives the original `ctx` pointer, so its access to `skb->ifindex` should be verifier-acceptable.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-medium/case-010-legacy.txt",
+    "case_id": "case-010",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-medium",
+    "prompt_bytes": 2233,
+    "prompt_path": "public/case-010/prompt_legacy.md",
+    "prompt_sha256": "42cb94c19ecff9212d01b745ca76ad135db7dce4e6c15eefc8d6cb8a521dd385",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-medium/case-010-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "1abd7cb5-935c-472c-9a40-23ef31f47854",
+    "started_at": "2026-06-05T03:15:37+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.003985,
+    "output_cost_usd": 0.02694,
+    "total_cost_usd": 0.030924999999999998
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 797,
+    "output_tokens": 898,
+    "raw_usage": {
+      "input_tokens": 797,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 898,
+      "output_tokens_details": {
+        "reasoning_tokens": 516
+      },
+      "total_tokens": 1695
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 516,
+    "total_tokens": 1695
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629360,
+    "created_at": 1780629337,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0c8be00348f51efc006a223f59e77c819dbe4babd461c1aaa3",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0c8be00348f51efc006a223f5aa880819d89cebf385ca3ee78",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier rejects `helper_b()` because of this call:\n\n```c\nhelper_c(val, skb + 1);\n```\n\n`skb` is a BPF context pointer. In C, `skb + 1` advances by `sizeof(*skb)`, which the verifier log shows as `192` bytes:\n\n```text\n21: (07) r6 += 192                    ; R6=ctx(imm=192)\n...\n24: (85) call pc+2\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\nSo `helper_c()` receives a modified context pointer, `ctx + 192`, and then dereferences it:\n\n```c\nreturn skb->ifindex * val;\n```\n\nThe verifier does not allow a BPF subprogram to dereference a modified context pointer like that. For a `tc` program, the `struct __sk_buff *` argument should be the original context pointer, not `skb + 1`.\n\nSmallest source-level fix: pass `skb` directly to `helper_c()`.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -16,7 +16,7 @@ int helper_c(int val, struct __sk_buff *skb);\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n \n __attribute__((noinline))\n```\n\nWith this change, `helper_c()` receives the original `ctx` pointer, so its access to `skb->ifindex` should be verifier-acceptable.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0c8be00348f51efc006a223f6a26a8819daa1c6ad8dae84994",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 797,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 898,
+      "output_tokens_details": {
+        "reasoning_tokens": 516
+      },
+      "total_tokens": 1695
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

@@ -1,0 +1,40 @@
+`helper_a()` is making a **direct bpf2bpf recursive call** to itself:
+
+```asm
+l0_%=: call helper_a;
+```
+
+The verifier rejects recursion up front (before symbolic execution), which is why log shows:
+
+- `recursive call from helper_a() to helper_a()`
+- `processed 0 insns`
+
+So this is not a register/state bug; it’s a forbidden call graph shape.
+
+### Smallest likely fix
+
+Remove self-call recursion and use a local bounded loop (backward jump) instead.
+
+#### Patch
+
+```diff
+@@
+ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+ 	asm volatile ("					\
++l0_%=:	r1 += 1;					\
++	r0 = r1;					\
++	if r1 < 4 goto l0_%=;				\
++	exit;						\
+-	r1 += 1;					\
+-	r0 = r1;					\
+-	if r1 < 4 goto l0_%=;				\
+-	exit;						\
+-l0_%=:	call helper_a;					\
+-	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+This preserves the intended “increment until 4” behavior but eliminates forbidden recursion, so verifier should proceed and accept (bounded loop, no recursive call edge).

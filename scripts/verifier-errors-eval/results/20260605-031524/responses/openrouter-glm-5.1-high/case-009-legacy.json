@@ -1,0 +1,117 @@
+{
+  "answer_text": "## Verifier Failure Explanation\n\nThe failure occurs at the `bpf_task_acquire(value->task)` call in the `entry` function:\n\n```\n3: (79) r1 = *(u64 *)(r0 +0)    ; R1=rcu_ptr_or_null_task_struct(id=10)\n4: (85) call bpf_task_acquire#63762\nPossibly NULL pointer passed to trusted R1\n```\n\nWhen reading `value->task` (a kptr stored in the map), the verifier types it as `rcu_ptr_or_null_task_struct` \u2014 meaning it **could be NULL**. The `bpf_task_acquire` kfunc requires a **trusted, non-NULL** pointer as its argument. Since the verifier cannot prove `value->task` is non-NULL, it rejects the call.\n\nThis makes sense: even though `map_insert` stores a non-NULL task pointer via `bpf_kptr_xchg`, the verifier doesn't track that across function calls. When `entry` reads the kptr back from the map, it must account for the possibility that the field was never populated (or was cleared).\n\n## Fix\n\nAdd a NULL check on `value->task` before passing it to `bpf_task_acquire`:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n\tif (!value->task)       // <-- add this NULL check\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(value->task);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\nAfter the NULL check, the verifier will narrow the type from `rcu_ptr_or_null_task_struct` to `rcu_ptr_task_struct` (non-NULL), which satisfies the `trusted` argument requirement of `bpf_task_acquire`.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-glm-5.1-high/case-009-legacy.txt",
+    "case_id": "case-009",
+    "model": "z-ai/glm-5.1",
+    "profile": "openrouter-glm-5.1-high",
+    "prompt_bytes": 7630,
+    "prompt_path": "public/case-009/prompt_legacy.md",
+    "prompt_sha256": "cf955480f8f9d7c397454ba70a58615a32d27994e0f99c26d423ded383546618",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-glm-5.1-high/case-009-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "904f536d-3aab-4f76-9043-e6a967b94322",
+    "started_at": "2026-06-05T03:21:25+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00279496,
+    "output_cost_usd": 0.00496804,
+    "total_cost_usd": 0.007763
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 2852,
+    "output_tokens": 1613,
+    "raw_usage": {
+      "completion_tokens": 1613,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 1188
+      },
+      "cost": 0.0094265,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.00603262,
+        "upstream_inference_cost": 0.0094265,
+        "upstream_inference_prompt_cost": 0.00339388
+      },
+      "is_byok": false,
+      "prompt_tokens": 2852,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 4465
+    },
+    "reasoning_content_chars": 4214,
+    "reasoning_tokens": 1188,
+    "total_tokens": 4465
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Verifier Failure Explanation\n\nThe failure occurs at the `bpf_task_acquire(value->task)` call in the `entry` function:\n\n```\n3: (79) r1 = *(u64 *)(r0 +0)    ; R1=rcu_ptr_or_null_task_struct(id=10)\n4: (85) call bpf_task_acquire#63762\nPossibly NULL pointer passed to trusted R1\n```\n\nWhen reading `value->task` (a kptr stored in the map), the verifier types it as `rcu_ptr_or_null_task_struct` \u2014 meaning it **could be NULL**. The `bpf_task_acquire` kfunc requires a **trusted, non-NULL** pointer as its argument. Since the verifier cannot prove `value->task` is non-NULL, it rejects the call.\n\nThis makes sense: even though `map_insert` stores a non-NULL task pointer via `bpf_kptr_xchg`, the verifier doesn't track that across function calls. When `entry` reads the kptr back from the map, it must account for the possibility that the field was never populated (or was cleared).\n\n## Fix\n\nAdd a NULL check on `value->task` before passing it to `bpf_task_acquire`:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n\tif (!value->task)       // <-- add this NULL check\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(value->task);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\nAfter the NULL check, the verifier will narrow the type from `rcu_ptr_or_null_task_struct` to `rcu_ptr_task_struct` (non-NULL), which satisfies the `trusted` argument requirement of `bpf_task_acquire`.",
+          "reasoning": "Let me analyze the verifier failure step by step.\n\nThe error message is:\n```\n4: (85) call bpf_task_acquire#63762\nPossibly NULL pointer passed to trusted R1\n```\n\nThis happens at line 42 in the entry function:\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\nLet me trace through the code to understand the issue.\n\nIn `entry()`:\n1. `value = helper_a(task)` - returns a `map_value_or_null` pointer\n2. `if (!value) return 0;` - null check, so after this `value` is `map_value`\n3. `acquired = bpf_task_acquire(value->task)` - here `value->task` is loaded from the map value\n\nThe verifier log shows:\n```\n3: (79) r1 = *(u64 *)(r0 +0)          ; R0=map_value(id=9,map=map_a,ks=4,vs=8) R1=rcu_ptr_or_null_task_struct(id=10)\n4: (85) call bpf_task_acquire#63762\nPossibly NULL pointer passed to trusted R1\n```\n\nSo `value->task` is read as `rcu_ptr_or_null_task_struct`, meaning it could be NULL. The `bpf_task_acquire` kfunc requires a trusted (non-NULL) pointer, but the verifier sees that `value->task` could be NULL.\n\nLooking at the code flow:\n- In `map_insert()`, we set `local.task = NULL` and insert it into the map\n- Then we do `bpf_kptr_xchg(&value->task, acquired)` which puts the acquired task pointer into the map value's `task` field\n- But from the verifier's perspective, when we read `value->task` in `entry()`, it could still be NULL because the verifier doesn't track that the kptr was set by `bpf_kptr_xchg` in a previous call\n\nThe issue is that `value->task` is a kptr (kernel pointer) stored in a map. When reading it, the verifier considers it could be NULL (hence `rcu_ptr_or_null_task_struct`). The `bpf_task_acquire` kfunc requires a non-NULL trusted pointer.\n\nThe fix is to add a NULL check for `value->task` before calling `bpf_task_acquire`:\n\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\nshould become:\n\n```c\nif (!value->task)\n    return 0;\n\nacquired = bpf_task_acquire(value->task);\n```\n\nWait, but there's a subtlety. Reading `value->task` from a map gives an `rcu_ptr_or_null`. We need to check it's not NULL before passing to `bpf_task_acquire`. Let me think about how to properly do this.\n\nActually, looking at the verifier log more carefully:\n\n```\n3: (79) r1 = *(u64 *)(r0 +0)          ; R0=map_value(id=9,map=map_a,ks=4,vs=8) R1=rcu_ptr_or_null_task_struct(id=10)\n4: (85) call bpf_task_acquire#63762\nPossibly NULL pointer passed to trusted R1\n```\n\nThe type is `rcu_ptr_or_null_task_struct` - it's \"or_null\", meaning it could be NULL. The `bpf_task_acquire` kfunc takes a trusted pointer argument, which must not be NULL.\n\nThe fix is to add a NULL check on `value->task` before passing it to `bpf_task_acquire`. The simplest way:\n\n```c\nif (!value->task)\n    return 0;\n\nacquired = bpf_task_acquire(value->task);\n```\n\nThis should make the verifier happy because after the NULL check, `value->task` would be known to be non-NULL, and the `bpf_task_acquire` call would receive a valid trusted pointer.\n\nWait, but there's another subtlety. After the NULL check, will the verifier still consider the pointer as trusted? Let me think...\n\nWhen you read a kptr from a map value, it comes back as `rcu_ptr_or_null`. After a NULL check, it becomes `rcu_ptr` (non-NULL). The `bpf_task_acquire` kfunc requires a `trusted` pointer. An `rcu_ptr` should be acceptable as a trusted pointer for `bpf_task_acquire` since kptrs stored in maps are trusted by nature (they were put there via `bpf_kptr_xchg` which validates them).\n\nActually, looking at the BPF verifier code, `bpf_task_acquire` takes a `trusted` argument. An `rcu_ptr` (kptr read from map) should be considered trusted. The issue is purely the \"or_null\" part - the verifier can't prove it's not NULL.\n\nSo the fix is simply to add a NULL check before calling `bpf_task_acquire`:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n\tif (!value->task)\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(value->task);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\nThis is the smallest fix - just adding a NULL check for `value->task` before passing it to `bpf_task_acquire`.",
+          "reasoning_details": [
+            {
+              "format": "unknown",
+              "index": 0,
+              "text": "Let me analyze the verifier failure step by step.\n\nThe error message is:\n```\n4: (85) call bpf_task_acquire#63762\nPossibly NULL pointer passed to trusted R1\n```\n\nThis happens at line 42 in the entry function:\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\nLet me trace through the code to understand the issue.\n\nIn `entry()`:\n1. `value = helper_a(task)` - returns a `map_value_or_null` pointer\n2. `if (!value) return 0;` - null check, so after this `value` is `map_value`\n3. `acquired = bpf_task_acquire(value->task)` - here `value->task` is loaded from the map value\n\nThe verifier log shows:\n```\n3: (79) r1 = *(u64 *)(r0 +0)          ; R0=map_value(id=9,map=map_a,ks=4,vs=8) R1=rcu_ptr_or_null_task_struct(id=10)\n4: (85) call bpf_task_acquire#63762\nPossibly NULL pointer passed to trusted R1\n```\n\nSo `value->task` is read as `rcu_ptr_or_null_task_struct`, meaning it could be NULL. The `bpf_task_acquire` kfunc requires a trusted (non-NULL) pointer, but the verifier sees that `value->task` could be NULL.\n\nLooking at the code flow:\n- In `map_insert()`, we set `local.task = NULL` and insert it into the map\n- Then we do `bpf_kptr_xchg(&value->task, acquired)` which puts the acquired task pointer into the map value's `task` field\n- But from the verifier's perspective, when we read `value->task` in `entry()`, it could still be NULL because the verifier doesn't track that the kptr was set by `bpf_kptr_xchg` in a previous call\n\nThe issue is that `value->task` is a kptr (kernel pointer) stored in a map. When reading it, the verifier considers it could be NULL (hence `rcu_ptr_or_null_task_struct`). The `bpf_task_acquire` kfunc requires a non-NULL trusted pointer.\n\nThe fix is to add a NULL check for `value->task` before calling `bpf_task_acquire`:\n\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\nshould become:\n\n```c\nif (!value->task)\n    return 0;\n\nacquired = bpf_task_acquire(value->task);\n```\n\nWait, but there's a subtlety. Reading `value->task` from a map gives an `rcu_ptr_or_null`. We need to check it's not NULL before passing to `bpf_task_acquire`. Let me think about how to properly do this.\n\nActually, looking at the verifier log more carefully:\n\n```\n3: (79) r1 = *(u64 *)(r0 +0)          ; R0=map_value(id=9,map=map_a,ks=4,vs=8) R1=rcu_ptr_or_null_task_struct(id=10)\n4: (85) call bpf_task_acquire#63762\nPossibly NULL pointer passed to trusted R1\n```\n\nThe type is `rcu_ptr_or_null_task_struct` - it's \"or_null\", meaning it could be NULL. The `bpf_task_acquire` kfunc takes a trusted pointer argument, which must not be NULL.\n\nThe fix is to add a NULL check on `value->task` before passing it to `bpf_task_acquire`. The simplest way:\n\n```c\nif (!value->task)\n    return 0;\n\nacquired = bpf_task_acquire(value->task);\n```\n\nThis should make the verifier happy because after the NULL check, `value->task` would be known to be non-NULL, and the `bpf_task_acquire` call would receive a valid trusted pointer.\n\nWait, but there's another subtlety. After the NULL check, will the verifier still consider the pointer as trusted? Let me think...\n\nWhen you read a kptr from a map value, it comes back as `rcu_ptr_or_null`. After a NULL check, it becomes `rcu_ptr` (non-NULL). The `bpf_task_acquire` kfunc requires a `trusted` pointer. An `rcu_ptr` should be acceptable as a trusted pointer for `bpf_task_acquire` since kptrs stored in maps are trusted by nature (they were put there via `bpf_kptr_xchg` which validates them).\n\nActually, looking at the BPF verifier code, `bpf_task_acquire` takes a `trusted` argument. An `rcu_ptr` (kptr read from map) should be considered trusted. The issue is purely the \"or_null\" part - the verifier can't prove it's not NULL.\n\nSo the fix is simply to add a NULL check before calling `bpf_task_acquire`:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n\tif (!value->task)\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(value->task);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\nThis is the smallest fix - just adding a NULL check for `value->task` before passing it to `bpf_task_acquire`.",
+              "type": "reasoning.text"
+            }
+          ],
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "stop"
+      }
+    ],
+    "created": 1780629685,
+    "id": "gen-1780629685-BqcTEEbJwZS6LqMkZo7Z",
+    "model": "z-ai/glm-5.1-20260406",
+    "object": "chat.completion",
+    "provider": "StreamLake",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1613,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 1188
+      },
+      "cost": 0.0094265,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.00603262,
+        "upstream_inference_cost": 0.0094265,
+        "upstream_inference_prompt_cost": 0.00339388
+      },
+      "is_byok": false,
+      "prompt_tokens": 2852,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 4465
+    }
+  },
+  "reasoning_content": "Let me analyze the verifier failure step by step.\n\nThe error message is:\n```\n4: (85) call bpf_task_acquire#63762\nPossibly NULL pointer passed to trusted R1\n```\n\nThis happens at line 42 in the entry function:\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\nLet me trace through the code to understand the issue.\n\nIn `entry()`:\n1. `value = helper_a(task)` - returns a `map_value_or_null` pointer\n2. `if (!value) return 0;` - null check, so after this `value` is `map_value`\n3. `acquired = bpf_task_acquire(value->task)` - here `value->task` is loaded from the map value\n\nThe verifier log shows:\n```\n3: (79) r1 = *(u64 *)(r0 +0)          ; R0=map_value(id=9,map=map_a,ks=4,vs=8) R1=rcu_ptr_or_null_task_struct(id=10)\n4: (85) call bpf_task_acquire#63762\nPossibly NULL pointer passed to trusted R1\n```\n\nSo `value->task` is read as `rcu_ptr_or_null_task_struct`, meaning it could be NULL. The `bpf_task_acquire` kfunc requires a trusted (non-NULL) pointer, but the verifier sees that `value->task` could be NULL.\n\nLooking at the code flow:\n- In `map_insert()`, we set `local.task = NULL` and insert it into the map\n- Then we do `bpf_kptr_xchg(&value->task, acquired)` which puts the acquired task pointer into the map value's `task` field\n- But from the verifier's perspective, when we read `value->task` in `entry()`, it could still be NULL because the verifier doesn't track that the kptr was set by `bpf_kptr_xchg` in a previous call\n\nThe issue is that `value->task` is a kptr (kernel pointer) stored in a map. When reading it, the verifier considers it could be NULL (hence `rcu_ptr_or_null_task_struct`). The `bpf_task_acquire` kfunc requires a non-NULL trusted pointer.\n\nThe fix is to add a NULL check for `value->task` before calling `bpf_task_acquire`:\n\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\nshould become:\n\n```c\nif (!value->task)\n    return 0;\n\nacquired = bpf_task_acquire(value->task);\n```\n\nWait, but there's a subtlety. Reading `value->task` from a map gives an `rcu_ptr_or_null`. We need to check it's not NULL before passing to `bpf_task_acquire`. Let me think about how to properly do this.\n\nActually, looking at the verifier log more carefully:\n\n```\n3: (79) r1 = *(u64 *)(r0 +0)          ; R0=map_value(id=9,map=map_a,ks=4,vs=8) R1=rcu_ptr_or_null_task_struct(id=10)\n4: (85) call bpf_task_acquire#63762\nPossibly NULL pointer passed to trusted R1\n```\n\nThe type is `rcu_ptr_or_null_task_struct` - it's \"or_null\", meaning it could be NULL. The `bpf_task_acquire` kfunc takes a trusted pointer argument, which must not be NULL.\n\nThe fix is to add a NULL check on `value->task` before passing it to `bpf_task_acquire`. The simplest way:\n\n```c\nif (!value->task)\n    return 0;\n\nacquired = bpf_task_acquire(value->task);\n```\n\nThis should make the verifier happy because after the NULL check, `value->task` would be known to be non-NULL, and the `bpf_task_acquire` call would receive a valid trusted pointer.\n\nWait, but there's another subtlety. After the NULL check, will the verifier still consider the pointer as trusted? Let me think...\n\nWhen you read a kptr from a map value, it comes back as `rcu_ptr_or_null`. After a NULL check, it becomes `rcu_ptr` (non-NULL). The `bpf_task_acquire` kfunc requires a `trusted` pointer. An `rcu_ptr` should be acceptable as a trusted pointer for `bpf_task_acquire` since kptrs stored in maps are trusted by nature (they were put there via `bpf_kptr_xchg` which validates them).\n\nActually, looking at the BPF verifier code, `bpf_task_acquire` takes a `trusted` argument. An `rcu_ptr` (kptr read from map) should be considered trusted. The issue is purely the \"or_null\" part - the verifier can't prove it's not NULL.\n\nSo the fix is simply to add a NULL check before calling `bpf_task_acquire`:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n\tif (!value->task)\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(value->task);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\nThis is the smallest fix - just adding a NULL check for `value->task` before passing it to `bpf_task_acquire`."
+}

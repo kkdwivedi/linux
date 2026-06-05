@@ -1,0 +1,45 @@
+The failure is caused by using a packet pointer that was validated before a helper call that can change the skb data area.
+
+In the log:
+
+```text
+2: r7 = *(u32 *)(r1 +76)         ; R7=pkt(r=0)
+...
+5: if r3 > r2 goto ...           ; R7 becomes pkt(r=4)
+...
+8: call helper_a
+...
+10: *(u32 *)(r7 +0) = r1
+R7 invalid mem access 'scalar'
+```
+
+`R7` originally holds `sk->data`, and the bounds check proves that 4 bytes are accessible. But `helper_a()` calls `helper_b()`, which calls:
+
+```c
+bpf_skb_pull_data(sk, len);
+```
+
+`bpf_skb_pull_data()` may reallocate/linearize/unclone the skb and may change `sk->data` / `sk->data_end`. Therefore the verifier invalidates all previously checked packet pointers across that call. After the call, the old `p`/`R7` is no longer a valid `PTR_TO_PACKET`; it is treated as a scalar, so the direct packet write fails verification.
+
+The fix is to do the `bpf_skb_pull_data()` call before loading/checking packet pointers, or reload and recheck `sk->data`/`sk->data_end` after the call.
+
+Smallest source-level fix:
+
+```diff
+ SEC("tc")
+ int entry(struct __sk_buff *sk)
+ {
+-	int *p = (void *)(long)sk->data;
++	int *p;
+ 
++	helper_a(sk, 0);
++	p = (void *)(long)sk->data;
+ 	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+ 		return TCX_DROP;
+-	helper_a(sk, 0);
+ 	*p = 42;
+ 	return TCX_PASS;
+ }
+```
+
+After this change, the verifier should see the packet pointer load and bounds check after the skb-changing helper call, so the `*p = 42` write uses a fresh, valid, range-checked packet pointer.

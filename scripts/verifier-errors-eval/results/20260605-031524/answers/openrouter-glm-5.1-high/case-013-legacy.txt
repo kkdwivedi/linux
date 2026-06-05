@@ -1,0 +1,25 @@
+## Verifier Failure Analysis
+
+The error is:
+```
+combined stack size of 3 calls is 544. Too large
+```
+
+The BPF verifier limits the **combined stack size** across a call chain to 512 bytes (`MAX_BPF_STACK`).
+
+### Call chain and stack usage
+
+The deepest call path is: `entry` → `helper_c` → `helper_b` (or `helper_d`).
+
+Each of `helper_b`, `helper_c`, and `helper_d` allocates a `volatile char buf[MAX_STACK]` where `MAX_STACK = 260`. The BPF verifier aligns each frame to 16 bytes, so 260 rounds up to **272 bytes** per frame. Two nested frames = 272 × 2 = **544 bytes**, which exceeds the 512-byte limit.
+
+### Fix
+
+Reduce `MAX_STACK` from 260 to 256. Since 256 is already 16-byte aligned, each frame will be exactly 256 bytes, and the combined stack for two nested calls will be 256 × 2 = **512 bytes**, which is exactly at the limit.
+
+```c
+-#define MAX_STACK 260
++#define MAX_STACK 256
+```
+
+This is the smallest change — it only adjusts the constant so the combined stack of the deepest call chain fits within the 512-byte verifier limit, while keeping the test's intent of stressing stack usage near the limit.

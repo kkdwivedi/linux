@@ -1,0 +1,130 @@
+{
+  "answer_text": "The failure is not caused by an invalid skb access or bad argument type. It is the verifier\u2019s combined BPF-to-BPF call stack limit.\n\n`helper_b()`, `helper_c()`, and `helper_d()` each allocate:\n\n```c\nvolatile char buf[MAX_STACK] = {};\n```\n\nWith `MAX_STACK == 260`, the generated BPF stack frame is rounded/aligned to about `272` bytes. When `entry()` calls `helper_c()`, and `helper_c()` calls `helper_b()`, both `helper_c`\u2019s and `helper_b`\u2019s stack frames are live at the same time:\n\n```text\nentry -> helper_c -> helper_b\n```\n\nSo the verifier sees roughly:\n\n```text\n272 + 272 = 544 bytes\n```\n\nwhich exceeds the 512-byte combined call-chain stack limit.\n\nThe smallest likely source fix is to reduce the local buffer size so each frame rounds to 256 bytes instead of 272. Since 512 bytes is allowed and only values greater than 512 fail, changing `MAX_STACK` from `260` to `256` should make the deepest chains:\n\n```text\nentry -> helper_c -> helper_b\nentry -> helper_c -> helper_d\n```\n\nuse at most:\n\n```text\n256 + 256 = 512 bytes\n```\n\nand pass verification.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -1,7 +1,7 @@\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n \n-#define MAX_STACK 260\n+#define MAX_STACK 256\n \n static __attribute__((noinline))\n int helper_a(int val, struct __sk_buff *skb)\n```\n\nIf a particular compiler/kernel combination still emits extra stack in `entry()`, then reducing further to `248` would provide margin, but based on the verifier log, `260 -> 256` is the minimal likely fix.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-high/case-013-diagnostic.txt",
+    "case_id": "case-013",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-high",
+    "prompt_bytes": 2658,
+    "prompt_path": "public/case-013/prompt_diagnostic.md",
+    "prompt_sha256": "044070894a5a67f43ab32448001b1bd67c0db88fee4087d1bb67f71a9273513d",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-high/case-013-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "5780cff5-ccb2-4157-aa24-049d5be91f58",
+    "started_at": "2026-06-05T03:16:00+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.0038,
+    "output_cost_usd": 0.29277,
+    "total_cost_usd": 0.29657
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 760,
+    "output_tokens": 9759,
+    "raw_usage": {
+      "input_tokens": 760,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 9759,
+      "output_tokens_details": {
+        "reasoning_tokens": 9322
+      },
+      "total_tokens": 10519
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 9322,
+    "total_tokens": 10519
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629581,
+    "created_at": 1780629360,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0f6e2da22344c4d9006a223f7065c081a082bdc04836847b2c",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0f6e2da22344c4d9006a223f7102fc81a0b223c1cafb795fca",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is not caused by an invalid skb access or bad argument type. It is the verifier\u2019s combined BPF-to-BPF call stack limit.\n\n`helper_b()`, `helper_c()`, and `helper_d()` each allocate:\n\n```c\nvolatile char buf[MAX_STACK] = {};\n```\n\nWith `MAX_STACK == 260`, the generated BPF stack frame is rounded/aligned to about `272` bytes. When `entry()` calls `helper_c()`, and `helper_c()` calls `helper_b()`, both `helper_c`\u2019s and `helper_b`\u2019s stack frames are live at the same time:\n\n```text\nentry -> helper_c -> helper_b\n```\n\nSo the verifier sees roughly:\n\n```text\n272 + 272 = 544 bytes\n```\n\nwhich exceeds the 512-byte combined call-chain stack limit.\n\nThe smallest likely source fix is to reduce the local buffer size so each frame rounds to 256 bytes instead of 272. Since 512 bytes is allowed and only values greater than 512 fail, changing `MAX_STACK` from `260` to `256` should make the deepest chains:\n\n```text\nentry -> helper_c -> helper_b\nentry -> helper_c -> helper_d\n```\n\nuse at most:\n\n```text\n256 + 256 = 512 bytes\n```\n\nand pass verification.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -1,7 +1,7 @@\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n \n-#define MAX_STACK 260\n+#define MAX_STACK 256\n \n static __attribute__((noinline))\n int helper_a(int val, struct __sk_buff *skb)\n```\n\nIf a particular compiler/kernel combination still emits extra stack in `entry()`, then reducing further to `248` would provide margin, but based on the verifier log, `260 -> 256` is the minimal likely fix.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0f6e2da22344c4d9006a224047191881a0978558d1b17ed2fd",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 760,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 9759,
+      "output_tokens_details": {
+        "reasoning_tokens": 9322
+      },
+      "total_tokens": 10519
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

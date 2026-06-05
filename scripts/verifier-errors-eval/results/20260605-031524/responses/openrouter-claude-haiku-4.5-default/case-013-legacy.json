@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Verifier Failure Analysis\n\nThe verifier is rejecting this program because the **combined stack size of nested function calls exceeds the limit of 512 bytes**.\n\nHere's the call chain and stack usage:\n\n1. `entry()` calls `helper_c()`\n2. `helper_c()` allocates 260 bytes on stack, then calls `helper_b()`\n3. `helper_b()` allocates 260 bytes on stack, then calls `helper_a()`\n4. `helper_a()` allocates some stack space\n\nThe verifier tracks the maximum combined stack depth across all nested calls:\n- `helper_c`: 260 bytes\n- `helper_b`: 260 bytes  \n- `helper_a`: 24 bytes (typical frame overhead)\n- **Total: ~544 bytes** (exceeds 512-byte limit)\n\nAdditionally, `helper_c()` also calls `helper_d()` which allocates another 260 bytes, creating another deep call chain.\n\n## Solution\n\nThe simplest fix is to **reduce `MAX_STACK` from 260 to a smaller value** that keeps the combined stack usage under 512 bytes. Given three nested functions each allocating `MAX_STACK` bytes, we need:\n\n`3 * MAX_STACK + overhead < 512`\n\nSetting `MAX_STACK = 128` gives us approximately `3 * 128 + 24 = 408 bytes`, which is safe.\n\n## Patch\n\n```c\n#define MAX_STACK 128\n```\n\n**Why this works:** By reducing the per-function stack allocation from 260 to 128 bytes, the combined stack depth of nested calls drops from 544 bytes to approximately 408 bytes, which is well under the 512-byte verifier limit. This is the minimal change that addresses the root cause without restructuring the call graph.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-013-legacy.txt",
+    "case_id": "case-013",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 1649,
+    "prompt_path": "public/case-013/prompt_legacy.md",
+    "prompt_sha256": "4d1d466cfe05bcf610e895dd892a6a1aa50e76dc1045f63dfca8de2da264bd35",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-013-legacy.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "baa39667-c45a-4195-984b-d4e63f7c3f36",
+    "started_at": "2026-06-05T03:19:03+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000714,
+    "output_cost_usd": 0.002165,
+    "total_cost_usd": 0.0028789999999999996
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 714,
+    "output_tokens": 433,
+    "raw_usage": {
+      "completion_tokens": 433,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.002879,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002165,
+        "upstream_inference_cost": 0.002879,
+        "upstream_inference_prompt_cost": 0.000714
+      },
+      "is_byok": false,
+      "prompt_tokens": 714,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1147
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1147
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Verifier Failure Analysis\n\nThe verifier is rejecting this program because the **combined stack size of nested function calls exceeds the limit of 512 bytes**.\n\nHere's the call chain and stack usage:\n\n1. `entry()` calls `helper_c()`\n2. `helper_c()` allocates 260 bytes on stack, then calls `helper_b()`\n3. `helper_b()` allocates 260 bytes on stack, then calls `helper_a()`\n4. `helper_a()` allocates some stack space\n\nThe verifier tracks the maximum combined stack depth across all nested calls:\n- `helper_c`: 260 bytes\n- `helper_b`: 260 bytes  \n- `helper_a`: 24 bytes (typical frame overhead)\n- **Total: ~544 bytes** (exceeds 512-byte limit)\n\nAdditionally, `helper_c()` also calls `helper_d()` which allocates another 260 bytes, creating another deep call chain.\n\n## Solution\n\nThe simplest fix is to **reduce `MAX_STACK` from 260 to a smaller value** that keeps the combined stack usage under 512 bytes. Given three nested functions each allocating `MAX_STACK` bytes, we need:\n\n`3 * MAX_STACK + overhead < 512`\n\nSetting `MAX_STACK = 128` gives us approximately `3 * 128 + 24 = 408 bytes`, which is safe.\n\n## Patch\n\n```c\n#define MAX_STACK 128\n```\n\n**Why this works:** By reducing the per-function stack allocation from 260 to 128 bytes, the combined stack depth of nested calls drops from 544 bytes to approximately 408 bytes, which is well under the 512-byte verifier limit. This is the minimal change that addresses the root cause without restructuring the call graph.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629543,
+    "id": "gen-1780629543-KYy5jUOqrMdBgeUMRrc7",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 433,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.002879,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002165,
+        "upstream_inference_cost": 0.002879,
+        "upstream_inference_prompt_cost": 0.000714
+      },
+      "is_byok": false,
+      "prompt_tokens": 714,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1147
+    }
+  },
+  "reasoning_content": ""
+}

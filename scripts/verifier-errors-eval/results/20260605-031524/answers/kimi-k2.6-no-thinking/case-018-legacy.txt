@@ -1,0 +1,55 @@
+I'll analyze this verifier failure step by step.
+
+## Verifier Failure Analysis
+
+Looking at the verifier log, the failure occurs at instruction 10 with the error:
+```
+bpf_res_spin_unlock cannot be out of order
+```
+
+Let me trace through the execution path:
+
+1. **Instruction 0-2**: `bpf_res_spin_lock(&lock_a)` is called, succeeds (R0=0)
+2. **Instruction 3**: Branch not taken (R0=0, so we fall through)
+3. **Instruction 4-6**: `bpf_res_spin_lock(&lock_b)` is called, succeeds (R0=0)
+4. **Instruction 7**: `w6 = w0` (saves return value 0 into R6)
+5. **Instruction 8-10**: Attempts `bpf_res_spin_unlock(&lock_a)` — **FAILS**
+
+The problem is that the verifier tracks lock acquisition state per-instruction, not per-register. When we reach instruction 8-10, the verifier sees we're trying to unlock `lock_a`, but from its perspective, the most recently acquired lock is `lock_b` (at instruction 6). The verifier enforces strict **LIFO (Last-In-First-Out)** ordering for spin locks — you must unlock the most recently acquired lock first.
+
+## The Bug
+
+The source code unlocks `lock_a` before `lock_b`:
+```c
+bpf_res_spin_unlock(&lock_a);  // wrong: lock_b was acquired after lock_a
+bpf_res_spin_unlock(&lock_b);
+```
+
+But locks must be released in reverse order of acquisition. Since `lock_a` was acquired first, then `lock_b`, we must unlock `lock_b` first, then `lock_a`.
+
+## The Fix
+
+Swap the unlock order to maintain LIFO ordering:
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -180,8 +180,8 @@ int entry(struct __sk_buff *ctx)
+ 	if (bpf_res_spin_lock(&lock_b)) {
+ 		bpf_res_spin_unlock(&lock_a);
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+ 	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+This ensures:
+- `lock_a` acquired first
+- `lock_b` acquired second
+- `lock_b` unlocked first (LIFO)
+- `lock_a` unlocked last
+
+This matches the error path too: when `bpf_res_spin_lock(&lock_b)` fails, we only have `lock_a` held, so unlocking just `lock_a` is correct.

@@ -1,0 +1,29 @@
+## Root Cause Analysis
+
+The failure is caused by a partial stack-slot overwrite that destroys the pointer type tracking:
+
+1. `*(u64*)(r10 - 8) = r1` stores the `ctx()` pointer across stack bytes **fp-8 … fp-1** (8 bytes).
+2. `*(u8*)(r10 - 7) = r0` writes a scalar byte to **fp-7**, which lies *inside* that same 8-byte slot.
+3. The verifier marks every byte of fp-8 as `m` (mixed), so when…
+4. `r0 = *(u64*)(r10 - 8)` reloads the slot, it can only produce an unknown **scalar** — the ctx pointer type is gone.
+5. `r0 = *(u64*)(r0 + 8)` then fails with `R0 invalid mem access 'scalar'` because r0 is no longer a pointer.
+
+## Fix
+
+The byte store at offset −7 overlaps with the 8-byte slot at [fp-8 … fp-1]. Moving it to **fp-9** places it completely outside that range (the next free byte below the u64 slot), keeping the ctx pointer type intact.
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -9,7 +9,7 @@ __naked void entry(void)
+ 	asm volatile ("					\
+ 	*(u64*)(r10 - 8) = r1;				\
+ 	r0 = 0x23;					\
+-	*(u8*)(r10 - 7) = r0;				\
++	*(u8*)(r10 - 9) = r0;				\
+ 	r0 = *(u64*)(r10 - 8);				\
+ 	r0 = *(u64*)(r0 + 8);				\
+ 	exit;						\
+```
+
+With this change the u64 at [fp-8 … fp-1] is never overwritten, so the reload on instruction 3 produces `R0=ctx()` instead of `R0=scalar()`, and the subsequent dereference `*(u64*)(r0 + 8)` is verified as a legal context access.

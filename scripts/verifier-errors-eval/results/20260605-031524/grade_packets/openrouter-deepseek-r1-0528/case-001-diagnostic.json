@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Use bpf_cpumask_create(), check for NULL, call bpf_cpumask_populate on the returned cpumask pointer, and release it before returning.",
+    "Replace the integer-cast pointer with another verifier-known memory object accepted by the kfunc contract."
+  ],
+  "canonical_fix": "Allocate or otherwise use verifier-known cpumask memory and pass that pointer to bpf_cpumask_populate, then release it if ownership was acquired.",
+  "case_id": "case-001",
+  "category": "Call Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The first argument to bpf_cpumask_populate is produced by casting the integer constant 0x123456 to a cpumask pointer. The verifier tracks it as a scalar, not as verifier-known writable memory of the required cpumask size.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-r1-0528/case-001-diagnostic.txt",
+    "case_id": "case-001",
+    "model": "deepseek/deepseek-r1-0528",
+    "profile": "openrouter-deepseek-r1-0528",
+    "prompt_bytes": 3387,
+    "prompt_path": "public/case-001/prompt_diagnostic.md",
+    "prompt_sha256": "70fa73da88be6c0d0c8fc97fe892aca7a31514097f240a7d4ded815530dce3b0",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-r1-0528/case-001-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "7f2f181b-c751-484f-8c96-deb332706fb6",
+    "started_at": "2026-06-05T03:19:07+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier fails because the first argument to `bpf_cpumask_populate` is an invalid scalar value (`0x123456`) cast to a pointer. The verifier requires this argument to be a pointer to valid memory (e.g., stack, map, or context) of type `struct cpumask` (16 bytes), not an arbitrary integer.\n\n### Fix Explanation:\nReplace the invalid scalar pointer with a stack-allocated `struct cpumask`. This provides verifier-known memory of the correct type/size.\n\n### Patch:\n```diff\n--- original.c\n+++ fixed.c\n@@ -7,10 +7,10 @@\n SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n-\tstruct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;\n+\tstruct cpumask mask;\n \tu64 bits;\n \tint ret;\n \n-\tret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));\n+\tret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));\n \tif (!ret)\n \t\treturn 2;\n```\n\n### Fixed Source:\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_tracing.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct cpumask mask;\n\tu64 bits;\n\tint ret;\n\n\tret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));\n\tif (!ret)\n\t\treturn 2;\n\n\treturn 0;\n}\n```",
+  "must_mention": [
+    "R1 is a scalar/integer, not memory",
+    "The destination pointer must be verifier-known memory",
+    "Do not cast a constant integer to a pointer"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes the integer value",
+    "Adds a NULL check around the integer-cast pointer",
+    "Suppresses or ignores the return value without fixing the destination pointer"
+  ]
+}

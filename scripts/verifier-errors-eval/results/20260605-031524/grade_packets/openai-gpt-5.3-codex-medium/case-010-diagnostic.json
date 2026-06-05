@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Change helper_c(val, skb + 1) to helper_c(val, skb).",
+    "Preserve the original context pointer in another variable/register and pass that original pointer to functions that dereference ctx fields."
+  ],
+  "canonical_fix": "Pass the original skb pointer to helper_c, or keep an unmodified copy for context dereferences and perform any needed offset arithmetic only in verifier-allowed ways.",
+  "case_id": "case-010",
+  "category": "Register Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "helper_b passes skb + 1 to helper_c, whose argument is later dereferenced as a context pointer. The verifier rejects dereferencing a modified ctx pointer because the callee no longer receives the original context pointer form.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-medium/case-010-diagnostic.txt",
+    "case_id": "case-010",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-medium",
+    "prompt_bytes": 3922,
+    "prompt_path": "public/case-010/prompt_diagnostic.md",
+    "prompt_sha256": "c9975b0bd7d86b4edddce6166024784483798109ab83deeb5185dbddd366cae7",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-medium/case-010-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "332033a6-7b24-4822-b866-71def09c7a1a",
+    "started_at": "2026-06-05T03:16:29+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier is rejecting this because of **context pointer arithmetic**:\n\n```c\nhelper_c(val, skb + 1)\n```\n\n`skb` is a `PTR_TO_CTX` (`struct __sk_buff *`).  \nFor this pointer type, you can\u2019t shift it (`+ 1`, which becomes `+192` bytes here) and then pass it to a function that dereferences it as a context object (`helper_c` reads `skb->ifindex`).\n\nFrom log:\n\n- `r6 += 192` \u2192 modified ctx pointer\n- passed as arg to `helper_c`\n- inside `helper_c`, dereference would be on modified ctx ptr\n- verifier error: `dereference of modified ctx ptr ... disallowed`\n\nSo the smallest fix is to pass the **original ctx pointer** unchanged.\n\n### Minimal patch\n\n```diff\ndiff --git a/case.c b/case.c\nindex 1111111..2222222 100644\n--- a/case.c\n+++ b/case.c\n@@ -16,7 +16,7 @@ int helper_c(int val, struct __sk_buff *skb);\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n```\n\nThat should satisfy verifier type rules for context pointers.",
+  "must_mention": [
+    "skb + 1 modifies the ctx pointer",
+    "helper_c dereferences the ctx pointer",
+    "The callee needs the original ctx pointer"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check to skb",
+    "Changes helper_c's field access but still passes skb + 1 as ctx",
+    "Treats the error as stack depth or packet bounds"
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Use bpf_cpumask_create(), check for NULL, call bpf_cpumask_populate on the returned cpumask pointer, and release it before returning.",
+    "Replace the integer-cast pointer with another verifier-known memory object accepted by the kfunc contract."
+  ],
+  "canonical_fix": "Allocate or otherwise use verifier-known cpumask memory and pass that pointer to bpf_cpumask_populate, then release it if ownership was acquired.",
+  "case_id": "case-001",
+  "category": "Call Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The first argument to bpf_cpumask_populate is produced by casting the integer constant 0x123456 to a cpumask pointer. The verifier tracks it as a scalar, not as verifier-known writable memory of the required cpumask size.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-001-diagnostic.txt",
+    "case_id": "case-001",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 3387,
+    "prompt_path": "public/case-001/prompt_diagnostic.md",
+    "prompt_sha256": "70fa73da88be6c0d0c8fc97fe892aca7a31514097f240a7d4ded815530dce3b0",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-001-diagnostic.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "9afee4f8-e109-4317-af86-f69adaab3d68",
+    "started_at": "2026-06-05T03:17:56+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Analysis\n\nThe verifier failure is clear: the program is attempting to pass an invalid pointer to `bpf_cpumask_populate()`.\n\n**Root cause:** The line:\n```c\nstruct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;\n```\n\nThis casts a constant integer (0x123456) to a pointer. When this is passed to `bpf_cpumask_populate()`, the verifier sees `R1` as a scalar value, not verifier-known memory. The kfunc requires actual memory that the verifier can track (stack, map, context, etc.) with the correct size and type.\n\n**Why it fails:** kfuncs have strict type safety requirements. They need to verify that:\n1. The pointer points to valid, tracked memory (not an arbitrary integer cast)\n2. The memory size is sufficient (16 bytes for `struct cpumask`)\n\n## Fix\n\nTo pass verification, allocate a proper stack variable and pass its address. This gives the verifier visibility into valid memory:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_tracing.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct cpumask mask = {};\n\tu64 bits;\n\tint ret;\n\n\tret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));\n\tif (!ret)\n\t\treturn 2;\n\n\treturn 0;\n}\n```\n\n**Changes:**\n1. Remove the invalid pointer cast: `struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;`\n2. Replace it with a proper stack-allocated `struct cpumask mask = {};`\n3. Pass `&mask` instead of the invalid pointer\n\n**Why this works:** The verifier now sees:\n- `R1` points to stack memory (fp-16 or similar)\n- The memory is of type `struct cpumask` with sufficient size\n- This satisfies the kfunc's contract for valid, tracked memory",
+  "must_mention": [
+    "R1 is a scalar/integer, not memory",
+    "The destination pointer must be verifier-known memory",
+    "Do not cast a constant integer to a pointer"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes the integer value",
+    "Adds a NULL check around the integer-cast pointer",
+    "Suppresses or ignores the return value without fixing the destination pointer"
+  ]
+}

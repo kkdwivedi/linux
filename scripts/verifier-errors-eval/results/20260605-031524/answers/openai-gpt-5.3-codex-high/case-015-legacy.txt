@@ -1,0 +1,31 @@
+`R7` holds `p` (a packet pointer derived from `sk->data`).  
+You validate it against `sk->data_end`, then call `helper_a()`, which (through `helper_b`) calls `bpf_skb_pull_data()`.
+
+For verifier purposes, `bpf_skb_pull_data()` can change packet backing memory, so any previously-derived packet pointers/bounds are invalid after that call. That’s why at store time:
+
+- before call: `R7=pkt(...)`
+- after call: `R7` no longer trusted as packet pointer (`scalar`)
+- write `*(u32 *)(r7 +0)` fails: `R7 invalid mem access 'scalar'`
+
+### Smallest likely fix
+Do the pull-data call **before** taking/validating `sk->data`, or re-load and re-check after the call.
+
+#### Minimal patch (reorder in `entry`)
+```diff
+ SEC("tc")
+ int entry(struct __sk_buff *sk)
+ {
+-	int *p = (void *)(long)sk->data;
+-
+-	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+-		return TCX_DROP;
+ 	helper_a(sk, 0);
++	int *p = (void *)(long)sk->data;
++	if ((void *)(p + 1) > (void *)(long)sk->data_end)
++		return TCX_DROP;
+ 	*p = 42;
+ 	return TCX_PASS;
+ }
+```
+
+This ensures pointer derivation + bounds check happen after the potentially mutating helper, which should satisfy the verifier.

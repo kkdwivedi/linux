@@ -1,0 +1,58 @@
+The verifier failure is caused by corrupting a spilled pointer on the stack.
+
+Step-by-step:
+
+```asm
+*(u64*)(r10 - 8) = r1;
+```
+
+This spills `r1`, which is the context pointer, into stack slot `fp-8 .. fp-1`. The verifier records that stack slot as containing a valid `ctx` pointer.
+
+Then:
+
+```asm
+r0 = 0x23;
+*(u8*)(r10 - 7) = r0;
+```
+
+This writes one byte into the middle of that spilled 8-byte pointer, at `fp-7`. After a partial overwrite, the verifier can no longer treat the 8-byte stack slot as a valid spilled pointer. It marks it as unknown scalar data:
+
+```text
+fp-8=mmmmmmmm
+```
+
+So when the program reloads:
+
+```asm
+r0 = *(u64*)(r10 - 8);
+```
+
+`r0` becomes an unknown scalar, not a pointer. The following dereference is therefore rejected:
+
+```asm
+r0 = *(u64*)(r0 + 8);
+```
+
+because scalar values cannot be dereferenced.
+
+The smallest source-level fix is to avoid writing into the same 8-byte stack slot that holds the spilled pointer. For example, move the byte store to a non-overlapping stack location such as `r10 - 16`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -7,7 +7,7 @@ __naked void entry(void)
+ 	asm volatile ("					\
+ 	*(u64*)(r10 - 8) = r1;				\
+ 	r0 = 0x23;					\
+-	*(u8*)(r10 - 7) = r0;				\
++	*(u8*)(r10 - 16) = r0;				\
+ 	r0 = *(u64*)(r10 - 8);				\
+ 	r0 = *(u64*)(r0 + 8);				\
+ 	exit;						\
+```
+
+With that change, the spill at `r10 - 8` remains intact, so the verifier should be able to reload `r0` as a `ctx` pointer instead of as a scalar, allowing the subsequent memory access to be checked as a context access rather than rejected as a scalar dereference.

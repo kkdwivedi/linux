@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier failure is due to lock release order.\n\nThe program acquires locks in this order:\n\n```c\nlock_a\nlock_b\n```\n\nBut on the successful path it releases them in this order:\n\n```c\nunlock(lock_a);\nunlock(lock_b);\n```\n\nThat violates the verifier\u2019s resource lifetime rule for `bpf_res_spin_lock`: nested locks must be released in last-in, first-out order. Since `lock_b` is the most recently acquired lock, it must be released before `lock_a`.\n\nThe failing verifier instruction is:\n\n```text\n10: call bpf_res_spin_unlock\nbpf_res_spin_unlock cannot be out of order\n```\n\nAt that point, the verifier believes both `lock_a` and `lock_b` are held, with `lock_b` on top of the active lock stack. The program tries to unlock `lock_a`, which is not the most recent lock, so verification fails.\n\nThe smallest fix is to swap the unlock order on the successful path.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -12,7 +12,7 @@ int entry(struct __sk_buff *ctx)\n \t\tbpf_res_spin_unlock(&lock_a);\n \t\treturn 0;\n \t}\n-\tbpf_res_spin_unlock(&lock_a);\n \tbpf_res_spin_unlock(&lock_b);\n+\tbpf_res_spin_unlock(&lock_a);\n \treturn 0;\n }\n```\n\nResulting program:\n\n```c\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tif (bpf_res_spin_lock(&lock_a))\n\t\treturn 0;\n\tif (bpf_res_spin_lock(&lock_b)) {\n\t\tbpf_res_spin_unlock(&lock_a);\n\t\treturn 0;\n\t}\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n\treturn 0;\n}\n```\n\nThis preserves the failure path for `lock_b`, where only `lock_a` needs to be released, and fixes the success path so locks are released in reverse acquisition order.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-high/case-018-diagnostic.txt",
+    "case_id": "case-018",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-high",
+    "prompt_bytes": 2550,
+    "prompt_path": "public/case-018/prompt_diagnostic.md",
+    "prompt_sha256": "b2c0e6d8199078791c9358d84b560ed1081e0fd58d1a492ad2d0272f131fa115",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-high/case-018-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "7c0f46fe-4674-4474-a6cf-74ee13440935",
+    "started_at": "2026-06-05T03:16:05+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.004275,
+    "output_cost_usd": 0.04461,
+    "total_cost_usd": 0.048885
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 855,
+    "output_tokens": 1487,
+    "raw_usage": {
+      "input_tokens": 855,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1487,
+      "output_tokens_details": {
+        "reasoning_tokens": 1034
+      },
+      "total_tokens": 2342
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 1034,
+    "total_tokens": 2342
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629394,
+    "created_at": 1780629365,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0c05a8a51bba05ad006a223f753e98819db6de06d6ccde72d2",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0c05a8a51bba05ad006a223f75fa88819d9aff68d43070e251",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier failure is due to lock release order.\n\nThe program acquires locks in this order:\n\n```c\nlock_a\nlock_b\n```\n\nBut on the successful path it releases them in this order:\n\n```c\nunlock(lock_a);\nunlock(lock_b);\n```\n\nThat violates the verifier\u2019s resource lifetime rule for `bpf_res_spin_lock`: nested locks must be released in last-in, first-out order. Since `lock_b` is the most recently acquired lock, it must be released before `lock_a`.\n\nThe failing verifier instruction is:\n\n```text\n10: call bpf_res_spin_unlock\nbpf_res_spin_unlock cannot be out of order\n```\n\nAt that point, the verifier believes both `lock_a` and `lock_b` are held, with `lock_b` on top of the active lock stack. The program tries to unlock `lock_a`, which is not the most recent lock, so verification fails.\n\nThe smallest fix is to swap the unlock order on the successful path.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -12,7 +12,7 @@ int entry(struct __sk_buff *ctx)\n \t\tbpf_res_spin_unlock(&lock_a);\n \t\treturn 0;\n \t}\n-\tbpf_res_spin_unlock(&lock_a);\n \tbpf_res_spin_unlock(&lock_b);\n+\tbpf_res_spin_unlock(&lock_a);\n \treturn 0;\n }\n```\n\nResulting program:\n\n```c\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tif (bpf_res_spin_lock(&lock_a))\n\t\treturn 0;\n\tif (bpf_res_spin_lock(&lock_b)) {\n\t\tbpf_res_spin_unlock(&lock_a);\n\t\treturn 0;\n\t}\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n\treturn 0;\n}\n```\n\nThis preserves the failure path for `lock_b`, where only `lock_a` needs to be released, and fixes the success path so locks are released in reverse acquisition order.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0c05a8a51bba05ad006a223f8ca38c819d805963d0220b8ea9",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 855,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1487,
+      "output_tokens_details": {
+        "reasoning_tokens": 1034
+      },
+      "total_tokens": 2342
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

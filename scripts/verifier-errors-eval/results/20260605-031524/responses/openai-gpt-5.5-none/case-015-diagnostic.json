@@ -1,0 +1,124 @@
+{
+  "answer_text": "The failure is caused by using a packet data pointer across a helper call that may invalidate packet pointers.\n\nIn `entry()`:\n\n```c\nint *p = (void *)(long)sk->data;\n\nif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\treturn TCX_DROP;\n\nhelper_a(sk, 0);\n\n*p = 42;\n```\n\nThe verifier initially proves that `p` points to at least 4 valid bytes of packet data. But `helper_a()` calls:\n\n```c\nhelper_b(sk, len) -> bpf_skb_pull_data(sk, len)\n```\n\n`bpf_skb_pull_data()` can move or reallocate packet data. Even with `len == 0`, the verifier treats this helper as invalidating existing packet pointers. Therefore, after:\n\n```c\nhelper_a(sk, 0);\n```\n\nthe old `p` stored in register `R7` is no longer considered a packet pointer. The verifier marks it as a scalar, and the later store:\n\n```c\n*p = 42;\n```\n\nfails with:\n\n```text\nR7 invalid mem access 'scalar'\n```\n\nThe smallest source-level fix is to reload `sk->data` and `sk->data_end` after the helper call, then redo the bounds check before dereferencing.\n\nPatch:\n\n```diff\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n \n __noinline long helper_b(struct __sk_buff *sk, __u32 len)\n {\n \treturn bpf_skb_pull_data(sk, len);\n }\n \n __noinline long helper_a(struct __sk_buff *sk, __u32 len)\n {\n \treturn helper_b(sk, len);\n }\n \n SEC(\"tc\")\n int entry(struct __sk_buff *sk)\n {\n \tint *p = (void *)(long)sk->data;\n \n \tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n \t\treturn TCX_DROP;\n \thelper_a(sk, 0);\n+\n+\tp = (void *)(long)sk->data;\n+\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n+\t\treturn TCX_DROP;\n+\n \t*p = 42;\n \treturn TCX_PASS;\n }\n```\n\nThis should satisfy the verifier because the store uses a fresh packet pointer loaded after the potentially packet-moving helper call, and that fresh pointer is bounds-checked before use.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-none/case-015-diagnostic.txt",
+    "case_id": "case-015",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-none",
+    "prompt_bytes": 3663,
+    "prompt_path": "public/case-015/prompt_diagnostic.md",
+    "prompt_sha256": "f4ee93633090707b3340ee048a1cd9c29849370062dafdfa25c31c23d9df8821",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-none/case-015-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "none"
+    },
+    "run_id": "bfcc4f32-bd34-4694-beb5-0ca7abb0b50a",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.005955,
+    "output_cost_usd": 0.0156,
+    "total_cost_usd": 0.021554999999999998
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1191,
+    "output_tokens": 520,
+    "raw_usage": {
+      "input_tokens": 1191,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 520,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 1711
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1711
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629334,
+    "created_at": 1780629324,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_02c472dc7533855f006a223f4cec34819d8f913c4d89ba76a4",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is caused by using a packet data pointer across a helper call that may invalidate packet pointers.\n\nIn `entry()`:\n\n```c\nint *p = (void *)(long)sk->data;\n\nif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\treturn TCX_DROP;\n\nhelper_a(sk, 0);\n\n*p = 42;\n```\n\nThe verifier initially proves that `p` points to at least 4 valid bytes of packet data. But `helper_a()` calls:\n\n```c\nhelper_b(sk, len) -> bpf_skb_pull_data(sk, len)\n```\n\n`bpf_skb_pull_data()` can move or reallocate packet data. Even with `len == 0`, the verifier treats this helper as invalidating existing packet pointers. Therefore, after:\n\n```c\nhelper_a(sk, 0);\n```\n\nthe old `p` stored in register `R7` is no longer considered a packet pointer. The verifier marks it as a scalar, and the later store:\n\n```c\n*p = 42;\n```\n\nfails with:\n\n```text\nR7 invalid mem access 'scalar'\n```\n\nThe smallest source-level fix is to reload `sk->data` and `sk->data_end` after the helper call, then redo the bounds check before dereferencing.\n\nPatch:\n\n```diff\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n \n __noinline long helper_b(struct __sk_buff *sk, __u32 len)\n {\n \treturn bpf_skb_pull_data(sk, len);\n }\n \n __noinline long helper_a(struct __sk_buff *sk, __u32 len)\n {\n \treturn helper_b(sk, len);\n }\n \n SEC(\"tc\")\n int entry(struct __sk_buff *sk)\n {\n \tint *p = (void *)(long)sk->data;\n \n \tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n \t\treturn TCX_DROP;\n \thelper_a(sk, 0);\n+\n+\tp = (void *)(long)sk->data;\n+\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n+\t\treturn TCX_DROP;\n+\n \t*p = 42;\n \treturn TCX_PASS;\n }\n```\n\nThis should satisfy the verifier because the store uses a fresh packet pointer loaded after the potentially packet-moving helper call, and that fresh pointer is bounds-checked before use.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_02c472dc7533855f006a223f4d8fc4819db42653d4dbf0f4c4",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "none",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1191,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 520,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 1711
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

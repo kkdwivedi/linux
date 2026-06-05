@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Use bpf_rcu_read_lock(), load task = value->task, check if (!task), call bpf_task_acquire(task) only on the non-NULL path, and unlock appropriately.",
+    "Avoid reading a nullable map kptr field directly and instead pass a task pointer from a trusted source that already satisfies bpf_task_acquire's argument contract."
+  ],
+  "canonical_fix": "Load value->task into a temporary, prove it is non-NULL on the call path, and use the verifier-required trusted/RCU-safe access pattern before calling bpf_task_acquire.",
+  "case_id": "case-009",
+  "category": "Call Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "value->task is loaded from a map value as an RCU/null-capable task pointer. bpf_task_acquire requires an argument that the verifier can prove is non-NULL and trusted/acceptable for that kfunc. Passing the field directly does not satisfy that contract.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-high/case-009-diagnostic.txt",
+    "case_id": "case-009",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-high",
+    "prompt_bytes": 9539,
+    "prompt_path": "public/case-009/prompt_diagnostic.md",
+    "prompt_sha256": "b18a80e715b0997c1feba2b4b098abd71869a9fb867ace1b91abe52c1a1cab07",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-high/case-009-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "0de34d4a-0443-4809-8ffb-5b8a42b0efc9",
+    "started_at": "2026-06-05T03:15:55+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier failure is at:\n\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\n`value` is a map value, and `value->task` is a kptr stored in the map. When the verifier loads it, it gets:\n\n```text\nR1=rcu_ptr_or_null_task_struct\n```\n\nSo the pointer may be `NULL`. But `bpf_task_acquire()` requires a non-NULL `struct task_struct *` argument. The verifier does not infer that `value->task` must be non-NULL just because `helper_a()` inserted/acquired one earlier; map contents can be NULL or changed, and a kptr load from a map is treated as nullable.\n\nThe smallest safe fix is to load `value->task` into a temporary, check it for NULL, and only then call `bpf_task_acquire()` on the checked pointer. Use a temporary so the verifier sees the same register being NULL-checked and passed to the kfunc.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..1111111 100644\n--- a/case.c\n+++ b/case.c\n@@ -66,7 +66,7 @@ static struct map_value *helper_a(struct task_struct *task)\n SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n-\tstruct task_struct *acquired;\n+\tstruct task_struct *acquired, *stored;\n \tstruct map_value *value;\n \n \tvalue = helper_a(task);\n@@ -74,7 +74,11 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)\n \t\treturn 0;\n \n-\tacquired = bpf_task_acquire(value->task);\n+\tstored = value->task;\n+\tif (!stored)\n+\t\treturn 0;\n+\n+\tacquired = bpf_task_acquire(stored);\n \tif (!acquired)\n \t\treturn 0;\n \n```\n\nAfter this change, the verifier should refine `stored` from `rcu_ptr_or_null_task_struct` to non-NULL `rcu_ptr_task_struct` on the fallthrough path, satisfying the argument requirements for `bpf_task_acquire()`.",
+  "must_mention": [
+    "The first argument may be NULL",
+    "The pointer comes from value->task/map kptr state",
+    "The call must happen only after the verifier can prove the pointer satisfies the kfunc contract"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check on the returned acquired pointer only",
+    "Checks value but not value->task",
+    "Casts value->task to another pointer type without proving trust/non-NULL"
+  ]
+}

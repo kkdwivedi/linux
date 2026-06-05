@@ -1,0 +1,76 @@
+The failure is caused by using a packet data pointer across a helper call that may invalidate packet pointers.
+
+In `entry()`:
+
+```c
+int *p = (void *)(long)sk->data;
+
+if ((void *)(p + 1) > (void *)(long)sk->data_end)
+	return TCX_DROP;
+
+helper_a(sk, 0);
+
+*p = 42;
+```
+
+The verifier initially proves that `p` points to at least 4 valid bytes of packet data. But `helper_a()` calls:
+
+```c
+helper_b(sk, len) -> bpf_skb_pull_data(sk, len)
+```
+
+`bpf_skb_pull_data()` can move or reallocate packet data. Even with `len == 0`, the verifier treats this helper as invalidating existing packet pointers. Therefore, after:
+
+```c
+helper_a(sk, 0);
+```
+
+the old `p` stored in register `R7` is no longer considered a packet pointer. The verifier marks it as a scalar, and the later store:
+
+```c
+*p = 42;
+```
+
+fails with:
+
+```text
+R7 invalid mem access 'scalar'
+```
+
+The smallest source-level fix is to reload `sk->data` and `sk->data_end` after the helper call, then redo the bounds check before dereferencing.
+
+Patch:
+
+```diff
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ 
+ __noinline long helper_b(struct __sk_buff *sk, __u32 len)
+ {
+ 	return bpf_skb_pull_data(sk, len);
+ }
+ 
+ __noinline long helper_a(struct __sk_buff *sk, __u32 len)
+ {
+ 	return helper_b(sk, len);
+ }
+ 
+ SEC("tc")
+ int entry(struct __sk_buff *sk)
+ {
+ 	int *p = (void *)(long)sk->data;
+ 
+ 	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+ 		return TCX_DROP;
+ 	helper_a(sk, 0);
++
++	p = (void *)(long)sk->data;
++	if ((void *)(p + 1) > (void *)(long)sk->data_end)
++		return TCX_DROP;
++
+ 	*p = 42;
+ 	return TCX_PASS;
+ }
+```
+
+This should satisfy the verifier because the store uses a fresh packet pointer loaded after the potentially packet-moving helper call, and that fresh pointer is bounds-checked before use.

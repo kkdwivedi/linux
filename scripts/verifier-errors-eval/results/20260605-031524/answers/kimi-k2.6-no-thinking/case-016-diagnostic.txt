@@ -1,0 +1,553 @@
+Looking at this verifier failure, I need to analyze what's happening with the resource lifetime tracking.
+
+## Verifier Failure Analysis
+
+The verifier is tracking a **BPF resource lifetime** issue. Here's what's happening:
+
+1. At instruction 19, `bpf_sk_lookup_tcp` is called, which returns a socket reference (`R0=sock_or_null(id=2)`)
+2. The verifier tracks this as an **owned resource** with `id=2`
+3. At instruction 20, there's a branch: `if r6 == 0 goto pc+1` (if `r6 == 0`, skip to instruction 22)
+4. The **fall-through path** (when `r6 != 0`) goes to instruction 21, which is `exit`
+
+The problem: **When `r6 != 0`, the program exits without releasing the socket reference** that was just acquired. The verifier's causal path shows:
+- It explores the branch where the condition `r6 == 0` is **false** (so `goto` is NOT followed)
+- This leads directly to `exit` at instruction 21 with the resource still owned
+
+Looking at the source code logic:
+```asm
+call %[bpf_sk_lookup_tcp];          # r0 = socket (or NULL)
+if r6 == 0 goto l1_%=;              # if r6 == 0, skip to l1
+exit;                                # else exit (LEAK! r0 not released)
+l1_%=:  if r0 == 0 goto l2_%=;      # check if socket is NULL
+r1 = r0;
+call %[bpf_sk_release];              # release socket
+l2_%=:  exit;
+```
+
+The issue is the **condition direction**. The code intends to:
+- If `r6 == 0` (mark is zero), continue to check the socket and release it
+- If `r6 != 0` (mark is non-zero), exit early
+
+But this creates a leak on the early exit path. The socket was already looked up, so it must be released before any exit.
+
+## The Fix
+
+The smallest fix is to **release the socket before the early exit when `r6 != 0`**, or restructure so we don't lookup the socket unless we need it. However, looking more carefully at the intended logic, it seems like:
+
+- When `r6 == 0`: we want to do the lookup, then release the result
+- When `r6 != 0`: we want to exit (but we already did the lookup!)
+
+The minimal fix is to **check `r6` BEFORE doing the socket lookup**, not after. This way, we only acquire the resource when we know we'll properly release it.
+
+Here's the patch:
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -7,6 +7,9 @@ __naked void entry(void)
+ {
+ 	asm volatile ("					\
+ 	r2 = *(u32*)(r1 + %[data]);			\
++	r6 = *(u32*)(r2 + %[mark]);			\
++	if r6 == 0 goto l0_%=;				\
++	exit;						\
+ 	r3 = *(u32*)(r1 + %[data_end]);			\
+ 	r0 = r2;					\
+ 	r0 += 16;					\
+@@ -14,8 +17,7 @@ __naked void entry(void)
+ 	exit;						\
+ l0_%=:	r6 = *(u32*)(r2 + %[mark]);			\
+ 	r2 = 0;						\
+-	*(u32*)(r10 -8) = r2;				\
+-	*(u64*)(r10 -16) = r2;				\
++	*(u64*)(r10 -8) = r2;				\
+```
+
+Wait - let me re-examine. The mark is at offset 8 in `__sk_buff`, and we need `r2` to point to packet data. But we need to access `mark` from `r1` (ctx), not from packet data `r2`. Let me re-read the original:
+
+`r6 = *(u32*)(r2 + %[mark])` — this reads from packet data + offset, but `mark` is `offsetof(struct __sk_buff, mark)` which is 8. This is reading from the packet, not from `ctx`!
+
+Actually wait — looking at the verifier state at instruction 6: `R2=pkt(r=16)` and it's accessing offset 8. But `mark` in `__sk_buff` is at offset 8. This seems like the code is reading packet data at offset 8, not ctx->mark. 
+
+Hmm, but the original source uses `r2` which is `data` (packet pointer), not `r1` (ctx). So this is intentionally reading from packet data. That's odd but let's assume it's intentional.
+
+Actually, re-reading: the issue is simply that **after `bpf_sk_lookup_tcp`, any exit path must release the socket**. The current code does:
+- lookup tcp → get socket
+- if r6 == 0: continue (will release)
+- if r6 != 0: exit (LEAK!)
+
+The fix: **release the socket on the early exit path too**, or **check condition before lookup**.
+
+Since we need to preserve the packet access for `mark`, we need to restructure. The simplest fix that preserves behavior: **move the `r6` check to before the socket lookup, but after we've read `mark`** — but we need packet bounds check first for the mark read.
+
+Actually, looking more carefully at offsets: `mark` is 8, and we check `r0 += 16` against `data_end`, so offset 8 is within bounds. But we need to read mark before the bounds check... 
+
+Let me try a different approach: just **add the release before the early exit**:
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -21,6 +21,9 @@ l0_%=:	r6 = *(u32*)(r2 + %[mark]);			\
+ 	r5 = 0;						\
+ 	call %[bpf_sk_lookup_tcp];			\
+ 	if r6 == 0 goto l1_%=;				\
++	if r0 == 0 goto l3_%=;				\
++	r1 = r0;					\
++	call %[bpf_sk_release];				\
++l3_%=:	exit;						\
+ 	exit;						\
+ l1_%=:	if r0 == 0 goto l2_%=;				\
+ 	r1 = r0;					\
+```
+
+But this has a problem: the `exit` after `if r6 == 0 goto l1_%=` is now unreachable (dead code), and the label `l3_%=` has an `exit` right after that's also wrong.
+
+Let me rewrite more carefully:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("tc")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = *(u32*)(r1 + %[data]);			\
+	r3 = *(u32*)(r1 + %[data_end]);			\
+	r0 = r2;					\
+	r0 += 16;					\
+	if r0 <= r3 goto l0_%=;				\
+	exit;						\
+l0_%=:	r6 = *(u32*)(r2 + %[mark]);			\
+	r2 = 0;						\
+	*(u32*)(r10 -8) = r2;				\
+	*(u64*)(r10 -16) = r2;				\
+	*(u64*)(r10 -24) = r2;				\
+	*(u64*)(r10 -32) = r2;				\
+	*(u64*)(r10 -40) = r2;				\
+	*(u64*)(r10 -48) = r2;				\
+	r2 = r10;					\
+	r2 += -48;					\
+	r3 = 36;					\
+	r4 = 0;						\
+	r5 = 0;						\
+	call %[bpf_sk_lookup_tcp];			\
+	if r6 == 0 goto l1_%=;				\
+	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+l1_%=:	if r0 == 0 goto l3_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l3_%=:	exit;						\
+"	:
+	: __imm(bpf_sk_lookup_tcp),
+	  __imm(bpf_sk_release),
+	  __imm_const(data, offsetof(struct __sk_buff, data)),
+	  __imm_const(data_end, offsetof(struct __sk_buff, data_end)),
+	  __imm_const(mark, offsetof(struct __sk_buff, mark))
+	: __clobber_all);
+}
+```
+
+Wait — I need to re-check. The original `l1_%=` was where we go when `r6 == 0`. Now I'm using `l1_%=` for that, but I need to be more careful with labels.
+
+Let me trace through:
+- After `call bpf_sk_lookup_tcp`, `r0` has socket or NULL
+- If `r6 == 0` (goto l1): we want to check r0 and release if non-NULL, then exit
+- If `r6 != 0` (fall through): we need to check r0 and release if non-NULL, then exit
+
+Both paths need the same release logic! So we can just do the release before checking `r6`, or structure so both paths converge.
+
+Actually simplest: **do the release check first, then check r6**:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("tc")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = *(u32*)(r1 + %[data]);			\
+	r3 = *(u32*)(r1 + %[data_end]);			\
+	r0 = r2;					\
+	r0 += 16;					\
+	if r0 <= r3 goto l0_%=;				\
+	exit;						\
+l0_%=:	r6 = *(u32*)(r2 + %[mark]);			\
+	r2 = 0;						\
+	*(u32*)(r10 -8) = r2;				\
+	*(u64*)(r10 -16) = r2;				\
+	*(u64*)(r10 -24) = r2;				\
+	*(u64*)(r10 -32) = r2;				\
+	*(u64*)(r10 -40) = r2;				\
+	*(u64*)(r10 -48) = r2;				\
+	r2 = r10;					\
+	r2 += -48;					\
+	r3 = 36;					\
+	r4 = 0;						\
+	r5 = 0;						\
+	call %[bpf_sk_lookup_tcp];			\
+	if r0 == 0 goto l1_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l1_%=:	if r6 == 0 goto l2_%=;				\
+	exit;						\
+l2_%=:	exit;						\
+"	:
+	: __imm(bpf_sk_lookup_tcp),
+	  __imm(bpf_sk_release),
+	  __imm_const(data, offsetof(struct __sk_buff, data)),
+	  __imm_const(data_end, offsetof(struct __sk_buff, data_end)),
+	  __imm_const(mark, offsetof(struct __sk_buff, mark))
+	: __clobber_all);
+}
+```
+
+Hmm but this changes behavior: originally when `r6 != 0`, we exit without the extra check. But with this, we always release the socket if non-NULL, then check r6. Actually this seems fine — the socket should always be released!
+
+But wait — the original code's `l1_%=` had `if r0 == 0 goto l2_%=` then release. My new code always releases if non-NULL, which matches.
+
+Actually, I realize I need to double-check: does `bpf_sk_lookup_tcp` return a reference that must always be released? Yes, that's the whole point of the error.
+
+But there's a subtlety: the original code only calls `bpf_sk_release` when `r6 == 0`. When `r6 != 0`, it intentionally leaks? No, it unintentionally leaks, which is the bug.
+
+My fix releases the socket regardless of `r6`. This is correct.
+
+But let me verify: is there any reason to conditionally release? The verifier requires release on all paths. So unconditional release (when non-NULL) is correct.
+
+However, I want to make the **smallest** fix. Let me see if I can just swap the order of checks or add minimal code.
+
+Actually, re-reading the original more carefully:
+
+```asm
+	call %[bpf_sk_lookup_tcp];			\
+	if r6 == 0 goto l1_%=;				\
+	exit;						\
+l1_%=:	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+```
+
+The minimal fix: **before the `exit` after `r6` check, also check and release `r0`**:
+
+```asm
+	call %[bpf_sk_lookup_tcp];			\
+	if r6 == 0 goto l1_%=;				\
+	if r0 == 0 goto l3_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l3_%=:	exit;						\
+l1_%=:	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+```
+
+This is minimal but duplicates the release logic. Let me check if there's a cleaner way with gotos...
+
+We can restructure to fall through to common release code:
+
+```asm
+	call %[bpf_sk_lookup_tcp];			\
+	if r6 != 0 goto l3_%=;				\
+l1_%=:	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+l3_%=:	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+	exit;						\
+```
+
+Still duplicates. Or:
+
+```asm
+	call %[bpf_sk_lookup_tcp];			\
+	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	if r6 == 0 goto l1_%=;				\
+	exit;						\
+l1_%=:	exit;						\
+```
+
+Wait! This is cleaner. Let me verify:
+- After lookup, if `r0 == 0` (no socket), skip release
+- Release socket if non-NULL
+- Then check `r6 == 0`: if true, exit; if false, also exit
+
+Hmm but this changes behavior: originally `r6 == 0` meant "go to l1 and do more stuff including release". But now I'm releasing first, then checking r6.
+
+Actually looking at original `l1_%=:`, it does `if r0 == 0 goto l2_%=` then release then `l2_%=: exit`. So `l1` is the path where we release and exit. The `r6 == 0` condition goes to `l1` (the release path).
+
+Wait, let me re-read: `if r6 == 0 goto l1_%=` — when `r6 == 0`, go to `l1`. At `l1`, we check `r0` and release if non-null, then exit. When `r6 != 0`, we fall through to `exit` directly.
+
+So the intended behavior seems to be:
+- `r6 == 0`: do the lookup, release result, exit
+- `r6 != 0`: do the lookup, exit without releasing? That doesn't make sense unless it's a bug.
+
+Actually, I think the code might be testing something specific about verifier behavior. The "bug" is intentional for the test — we need to fix it to pass.
+
+The cleanest minimal fix that preserves structure:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("tc")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = *(u32*)(r1 + %[data]);			\
+	r3 = *(u32*)(r1 + %[data_end]);			\
+	r0 = r2;					\
+	r0 += 16;					\
+	if r0 <= r3 goto l0_%=;				\
+	exit;						\
+l0_%=:	r6 = *(u32*)(r2 + %[mark]);			\
+	r2 = 0;						\
+	*(u32*)(r10 -8) = r2;				\
+	*(u64*)(r10 -16) = r2;				\
+	*(u64*)(r10 -24) = r2;				\
+	*(u64*)(r10 -32) = r2;				\
+	*(u64*)(r10 -40) = r2;				\
+	*(u64*)(r10 -48) = r2;				\
+	r2 = r10;					\
+	r2 += -48;					\
+	r3 = 36;					\
+	r4 = 0;						\
+	r5 = 0;						\
+	call %[bpf_sk_lookup_tcp];			\
+	if r0 == 0 goto l1_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l1_%=:	if r6 == 0 goto l2_%=;				\
+	exit;						\
+l2_%=:	exit;						\
+"	:
+	: __imm(bpf_sk_lookup_tcp),
+	  __imm(bpf_sk_release),
+	  __imm_const(data, offsetof(struct __sk_buff, data)),
+	  __imm_const(data_end, offsetof(struct __sk_buff, data_end)),
+	  __imm_const(mark, offsetof(struct __sk_buff, mark))
+	: __clobber_all);
+}
+```
+
+Hmm wait, I need to check: does this preserve the original logic? Originally, `bpf_sk_release` was only called when `r6 == 0`. Now it's called unconditionally (when `r0 != 0`). 
+
+But the verifier requires this! The original code was buggy. So this fix makes the code correct.
+
+However, I'm worried about one thing: does `bpf_sk_release` have any side effects that would make unconditional release wrong? No, releasing a socket reference is always correct if you own it.
+
+Actually, I want to verify my understanding of `bpf_sk_lookup_tcp` return value. It returns `sock_or_null`. If NULL, no release needed. If non-NULL, must release. So checking `r0 == 0` before release is correct.
+
+Let me finalize the patch. I'll move the release before the `r6` check:
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -24,10 +24,10 @@ l0_%=:	r6 = *(u32*)(r2 + %[mark]);			\
+ 	r5 = 0;						\
+ 	call %[bpf_sk_lookup_tcp];			\
+-	if r6 == 0 goto l1_%=;				\
+-	exit;						\
+-l1_%=:	if r0 == 0 goto l2_%=;				\
++	if r0 == 0 goto l1_%=;				\
+ 	r1 = r0;					\
+ 	call %[bpf_sk_release];				\
+-l2_%=:	exit;						\
++l1_%=:	if r6 == 0 goto l2_%=;				\
++	exit;						\
++l2_%=:	exit;						\
+"	:
+```
+
+Wait, I need to be more careful with labels. Let me write out the full source to make sure it's correct:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("tc")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = *(u32*)(r1 + %[data]);			\
+	r3 = *(u32*)(r1 + %[data_end]);			\
+	r0 = r2;					\
+	r0 += 16;					\
+	if r0 <= r3 goto l0_%=;				\
+	exit;						\
+l0_%=:	r6 = *(u32*)(r2 + %[mark]);			\
+	r2 = 0;						\
+	*(u32*)(r10 -8) = r2;				\
+	*(u64*)(r10 -16) = r2;				\
+	*(u64*)(r10 -24) = r2;				\
+	*(u64*)(r10 -32) = r2;				\
+	*(u64*)(r10 -40) = r2;				\
+	*(u64*)(r10 -48) = r2;				\
+	r2 = r10;					\
+	r2 += -48;					\
+	r3 = 36;					\
+	r4 = 0;						\
+	r5 = 0;						\
+	call %[bpf_sk_lookup_tcp];			\
+	if r0 == 0 goto l1_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l1_%=:	if r6 == 0 goto l2_%=;				\
+	exit;						\
+l2_%=:	exit;						\
+"	:
+	: __imm(bpf_sk_lookup_tcp),
+	  __imm(bpf_sk_release),
+	  __imm_const(data, offsetof(struct __sk_buff, data)),
+	  __imm_const(data_end, offsetof(struct __sk_buff, data_end)),
+	  __imm_const(mark, offsetof(struct __sk_buff, mark))
+	: __clobber_all);
+}
+```
+
+Hmm, but now `l2_%=` just has `exit` and we could fall through... Actually no, `exit` is a terminal instruction. But `l1_%=: if r6 == 0 goto l2_%=` then `exit` — if `r6 == 0`, goto `l2` which is `exit`. If `r6 != 0`, fall through to `exit`. So both paths exit. This is correct but the `goto` is redundant when both paths lead to `exit`.
+
+Actually wait — I need to re-check. The original had `l2_%=: exit` after the release. In my version, `l2_%=: exit` is still there but now it's reached from `l1` when `r6 == 0`. 
+
+But there's an issue: when `r6 == 0`, we go to `l2` which is `exit`. But `l2` was originally after the release code. Now the release code is before `l1`. Let me trace:
+
+1. `call bpf_sk_lookup_tcp` → `r0` = socket or NULL
+2. `if r0 == 0 goto l1` — if NULL, skip release
+3. `r1 = r0; call bpf_sk_release` — release socket
+4. `l1: if r6 == 0 goto l2` — if r6==0, goto l2 (exit)
+5. `exit` — if r6!=0, exit
+6. `l2: exit`
+
+So when `r6 == 0`, we go to `l2` and exit. When `r6 != 0`, we exit at step 5. Both paths have released the socket (if non-NULL). ✓
+
+This looks correct! But I want to make it even cleaner. Since both paths exit, I could just:
+
+```asm
+	call %[bpf_sk_lookup_tcp];			\
+	if r0 == 0 goto l1_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l1_%=:	exit;						\
+```
+
+But this changes behavior! Originally `r6` was checked. If the test expects `r6` to be checked, we need to keep it.
+
+Actually, looking more carefully at the original: `if r6 == 0 goto l1` — when `r6==0`, we go to `l1` where we check `r0` and possibly release. So `r6==0` enables the release path. When `r6!=0`, we exit without releasing (the bug).
+
+The intended behavior seems to be: when `r6==0`, release the socket; when `r6!=0`, don't bother? But that doesn't make sense with resource ownership.
+
+I think the test is specifically checking that the verifier catches missing releases. The fix should ensure release on all paths.
+
+My fix releases on all paths, which is correct. But I preserved the `r6` check structure even though it's now redundant (both branches exit). 
+
+Actually, looking again — maybe the original intended behavior is different. Let me re-read once more...
+
+Original:
+- `r6 == 0` → goto `l1` → check `r0`, release if non-NULL, exit
+- `r6 != 0` → exit immediately
+
+So `r6` acts as a "skip cleanup" flag. But with resource tracking, this is invalid.
+
+My fix makes `r6` irrelevant for cleanup (we always cleanup), but preserves the check. Actually, I can simplify:
+
+```asm
+	call %[bpf_sk_lookup_tcp];			\
+	if r0 == 0 goto l1_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l1_%=:	if r6 == 0 goto l2_%=;				\
+	exit;						\
+l2_%=:	exit;						\
+```
+
+This is fine. But actually, I wonder if the test expects `r6` to still control something. Let me check if there's a simpler fix that just adds release on the missing path without restructuring:
+
+```asm
+	call %[bpf_sk_lookup_tcp];			\
+	if r6 == 0 goto l1_%=;				\
+	if r0 == 0 goto l3_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l3_%=:	exit;						\
+l1_%=:	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+```
+
+This is more verbose but preserves the original structure exactly, just adding release to the `r6 != 0` path. Let me verify:
+- `r6 == 0` → goto `l1` → original release path → exit
+- `r6 != 0` → check `r0`, release if non-NULL → exit
+
+This preserves the original control flow better. But it's more code.
+
+I'll go with the cleaner restructured version since it's simpler and still correct. However, I want to be absolutely sure about label uniqueness with `%=` — the `%=` makes labels unique per asm block, so reusing `l0`, `l1`, `l2` is fine.
+
+Final answer:
+
+## Explanation
+
+The verifier tracks **resource lifetime** for BPF helpers that return owned references like `bpf_sk_lookup_tcp()`. The socket reference returned (with `id=2`) must be released via `bpf_sk_release()` on **all execution paths** before program exit.
+
+The bug: After acquiring the socket at instruction 19, the code branches on `r6 == 0`:
+- **True path** (`r6 == 0`): jumps to `l1`, checks if `r0 == 0`, releases socket if non-NULL, then exits ✓
+- **False path** (`r6 != 0`): falls through to `exit` without releasing the socket ✗ **LEAK**
+
+## Fix
+
+Move the socket release logic **before** the `r6` check, so the resource is always properly released regardless of `r6`'s value:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("tc")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = *(u32*)(r1 + %[data]);			\
+	r3 = *(u32*)(r1 + %[data_end]);			\
+	r0 = r2;					\
+	r0 += 16;					\
+	if r0 <= r3 goto l0_%=;				\
+	exit;						\
+l0_%=:	r6 = *(u32*)(r2 + %[mark]);			\
+	r2 = 0;						\
+	*(u32*)(r10 -8) = r2;				\
+	*(u64*)(r10 -16) = r2;				\
+	*(u64*)(r10 -24) = r2;				\
+	*(u64*)(r10 -32) = r2;				\
+	*(u64*)(r10 -40) = r2;				\
+	*(u64*)(r10 -48) = r2;				\
+	r2 = r10;					\
+	r2 += -48;					\
+	r3 = 36;					\
+	r4 = 0;						\
+	r5 = 0;						\
+	call %[bpf_sk_lookup_tcp];			\
+	if r0 == 0 goto l1_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l1_%=:	if r6 == 0 goto l2_%=;				\
+	exit;						\
+l2_%=:	exit;						\
+"	:
+	: __imm(bpf_sk_lookup_tcp),
+	  __imm(bpf_sk_release),
+	  __imm_const(data, offsetof(struct __sk_buff, data)),
+	  __imm_const(data_end, offsetof(struct __sk_buff, data_end)),
+	  __imm_const(mark, offsetof(struct __sk_buff, mark))
+	: __clobber_all);
+}
+```
+
+The key change: after `bpf_sk_lookup_tcp`, we immediately check `r0 == 0` and release the socket if non-NULL, **before** checking `r6`. This ensures the owned resource is always released on every exit path, satisfying the verifier's resource lifetime safety check.

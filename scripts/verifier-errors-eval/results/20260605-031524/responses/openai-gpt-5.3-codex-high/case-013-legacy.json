@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier is rejecting this due to **call-chain stack depth**, not invalid memory access.\n\n### Why it fails\n\n`helper_b`, `helper_c`, and `helper_d` each allocate:\n\n```c\nvolatile char buf[MAX_STACK] = {};\n```\n\nwith `MAX_STACK = 260`.\n\nIn BPF, the verifier computes worst-case **combined stack usage across nested BPF-to-BPF calls** and enforces a 512-byte limit.  \nYour log shows:\n\n- `combined stack size of 3 calls is 544. Too large`\n\nSo along one 3-function chain (e.g. `helper_c -> helper_b -> helper_a`), total frame sizes add up to 544 bytes, exceeding 512.\n\n---\n\n### Smallest likely fix\n\nReduce `MAX_STACK` so each frame is smaller.  \nA one-line change to `248` is the minimal safe-looking adjustment (260-byte arrays typically round up in frame size; 248 avoids crossing 512 in the reported 3-call chain).\n\n#### Patch\n\n```diff\n@@\n-#define MAX_STACK 260\n+#define MAX_STACK 248\n```\n\nThis keeps structure/logic intact and should bring combined stack depth under the verifier limit.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-013-legacy.txt",
+    "case_id": "case-013",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 1649,
+    "prompt_path": "public/case-013/prompt_legacy.md",
+    "prompt_sha256": "4d1d466cfe05bcf610e895dd892a6a1aa50e76dc1045f63dfca8de2da264bd35",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-013-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "149d3056-9224-4610-a2a2-51a99ab1004a",
+    "started_at": "2026-06-05T03:16:53+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00095725,
+    "output_cost_usd": 0.024094,
+    "total_cost_usd": 0.02505125
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 547,
+    "output_tokens": 1721,
+    "raw_usage": {
+      "input_tokens": 547,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1721,
+      "output_tokens_details": {
+        "reasoning_tokens": 1467
+      },
+      "total_tokens": 2268
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 1467,
+    "total_tokens": 2268
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629440,
+    "created_at": 1780629413,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0e38ff03626b7670006a223fa5b394819cbf276e03f5f39255",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0e38ff03626b7670006a223fa626ac819c8e246ea110d62eeb",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier is rejecting this due to **call-chain stack depth**, not invalid memory access.\n\n### Why it fails\n\n`helper_b`, `helper_c`, and `helper_d` each allocate:\n\n```c\nvolatile char buf[MAX_STACK] = {};\n```\n\nwith `MAX_STACK = 260`.\n\nIn BPF, the verifier computes worst-case **combined stack usage across nested BPF-to-BPF calls** and enforces a 512-byte limit.  \nYour log shows:\n\n- `combined stack size of 3 calls is 544. Too large`\n\nSo along one 3-function chain (e.g. `helper_c -> helper_b -> helper_a`), total frame sizes add up to 544 bytes, exceeding 512.\n\n---\n\n### Smallest likely fix\n\nReduce `MAX_STACK` so each frame is smaller.  \nA one-line change to `248` is the minimal safe-looking adjustment (260-byte arrays typically round up in frame size; 248 avoids crossing 512 in the reported 3-call chain).\n\n#### Patch\n\n```diff\n@@\n-#define MAX_STACK 260\n+#define MAX_STACK 248\n```\n\nThis keeps structure/logic intact and should bring combined stack depth under the verifier limit.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0e38ff03626b7670006a223fbd02a8819ca9b8ace2fa532ef0",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 547,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1721,
+      "output_tokens_details": {
+        "reasoning_tokens": 1467
+      },
+      "total_tokens": 2268
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

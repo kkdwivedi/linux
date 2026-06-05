@@ -1,0 +1,50 @@
+## Analysis
+
+The verifier failure is clear: the program is attempting to pass an invalid pointer to `bpf_cpumask_populate()`.
+
+**Root cause:** The line:
+```c
+struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+```
+
+This casts a constant integer (0x123456) to a pointer. When this is passed to `bpf_cpumask_populate()`, the verifier sees `R1` as a scalar value, not verifier-known memory. The kfunc requires actual memory that the verifier can track (stack, map, context, etc.) with the correct size and type.
+
+**Why it fails:** kfuncs have strict type safety requirements. They need to verify that:
+1. The pointer points to valid, tracked memory (not an arbitrary integer cast)
+2. The memory size is sufficient (16 bytes for `struct cpumask`)
+
+## Fix
+
+To pass verification, allocate a proper stack variable and pass its address. This gives the verifier visibility into valid memory:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct cpumask mask = {};
+	u64 bits;
+	int ret;
+
+	ret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));
+	if (!ret)
+		return 2;
+
+	return 0;
+}
+```
+
+**Changes:**
+1. Remove the invalid pointer cast: `struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;`
+2. Replace it with a proper stack-allocated `struct cpumask mask = {};`
+3. Pass `&mask` instead of the invalid pointer
+
+**Why this works:** The verifier now sees:
+- `R1` points to stack memory (fp-16 or similar)
+- The memory is of type `struct cpumask` with sufficient size
+- This satisfies the kfunc's contract for valid, tracked memory

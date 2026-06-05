@@ -1,0 +1,68 @@
+{
+  "acceptable_fixes": [
+    "Check if (offset > 47) exit before using it for a 1-byte access to a 48-byte object.",
+    "Check if (offset + 1 > sizeof(struct value)) exit in a verifier-friendly way that avoids overflow.",
+    "Mask or clamp the offset so the verifier can prove the adjusted pointer remains within the map value."
+  ],
+  "canonical_fix": "Add an upper-bound check on the loaded offset before adding it to the map-value pointer, proving offset + access size <= object size.",
+  "case_id": "case-014",
+  "category": "Memory Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program loads a variable offset from the map value and adds it to the map-value pointer before a helper reads one byte. The verifier knows the offset is non-negative but has no safe upper bound, so it cannot prove offset + size stays within the 48-byte map value.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-014-diagnostic.txt",
+    "case_id": "case-014",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 4492,
+    "prompt_path": "public/case-014/prompt_diagnostic.md",
+    "prompt_sha256": "ac5a2ab54da5cf45e897928788b3ed66a0aaeb6499aac9a13e24b90fac12b24c",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-014-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "5e64d4d0-9d0e-4a12-8339-dd19028b9d6a",
+    "started_at": "2026-06-05T03:17:21+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation\n\nThe verifier rejects the `bpf_probe_read_kernel` call because its destination pointer `R1` has a *variable, unbounded* offset.\n\nThe offset comes from this load:\n\n```\nr3 = *(u32*)(r0 + 0);   // reads value->offset, scalar 0..0xffffffff\nr1 += r3;               // r1 = map_value + unbounded offset\n```\n\n`r3` is an untrusted 32\u2011bit value loaded from the map, so it spans `[0, 4294967295]`. After `r1 += r3`, the verifier can no longer prove `offset + size <= 48` for the map value, hence:\n\n```\nR1 unbounded memory access, make sure to bounds check any such access\n```\n\n## Fix\n\nBound `r3` before using it as a pointer offset. The object is 48 bytes and the access size is 1, so any `r3 <= 47` is safe. Add a check (e.g. `r3 > 43`, matching the `data[44]` field, or simply mask it):\n\n```c\n\tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n\tif r3 > 43 goto l0_%=;\t\t\t\t\\\n\tr1 += r3;\t\t\t\t\t\\\n```\n\nAfter this branch, the verifier knows `r3 \u2208 [0, 43]`, so `r1` has a bounded offset and `offset + 1 <= 48` holds, satisfying the bounds check.\n\nEquivalently a mask works:\n\n```c\n\tr3 &= 0x1f;     /* r3 in [0,31] */\n\tr1 += r3;\n```\n\nEither edit gives `R1` a provable upper bound, letting the program pass verification.",
+  "must_mention": [
+    "The offset is variable and lacks an upper bound",
+    "The object/map value size is finite",
+    "The proof needed is offset plus access size within bounds"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks that map_lookup_elem returned non-NULL",
+    "Adds a lower-bound check only",
+    "Checks after the helper access"
+  ]
+}

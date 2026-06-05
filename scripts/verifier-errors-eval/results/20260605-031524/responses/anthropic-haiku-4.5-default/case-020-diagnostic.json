@@ -1,0 +1,79 @@
+{
+  "answer_text": "## Analysis\n\nThe verifier failure is a **liveness analysis complexity limit exceeded** error. This occurs when the verifier's liveness analysis phase encounters too many distinct call paths to the same subprogram.\n\n### Root Cause\n\nThe code creates a deeply nested call chain:\n- `entry` calls `helper_a` 50 times\n- `helper_a` calls `helper_b` 50 times\n- `helper_b` calls `helper_c` 50 times\n- ... and so on through `helper_g`\n\nThis results in 50^7 \u2248 78 billion potential call paths to `helper_g`. The verifier's liveness analysis must track which registers/stack locations are live at each point, and with so many distinct paths reaching the same subprogram with different call contexts, it exceeds the internal complexity limit (10001 recomputations).\n\nThe verifier's liveness analysis phase tracks variable liveness across all possible call paths. When it encounters the same function reachable through many different call chains with different argument patterns, it must re-analyze liveness multiple times, causing exponential complexity growth.\n\n## Fix\n\nThe smallest fix is to **reduce the call tree depth or breadth**. The simplest approach is to reduce `CALLS_50` to a smaller number that stays under the complexity limit.\n\n### Proposed Patch\n\n```c\n#define CALLS_10(fn) \\\n\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n\tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n```\n\nChange to:\n\n```c\n#define CALLS_10(fn) \\\n\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n\tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn)\n```\n\nThis reduces from 50 calls per function to 20 calls per function, which lowers the call path combinations from 50^7 to 20^7 (\u22481.28 million), staying well under the liveness analysis complexity budget.\n\nAlternatively, reduce the call chain depth by removing one or more helper levels (e.g., remove `helper_b` and have `helper_a` directly call `helper_c`).",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-020-diagnostic.txt",
+    "case_id": "case-020",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 4110,
+    "prompt_path": "public/case-020/prompt_diagnostic.md",
+    "prompt_sha256": "cb7344658f86bd080c64c73a9c8ee3095a7de5b045356c00872dce60afb5bfb8",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-020-diagnostic.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "f49c5fad-54c5-4b55-8b8e-f68359769631",
+    "started_at": "2026-06-05T04:23:17+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.001763,
+    "output_cost_usd": 0.00359,
+    "total_cost_usd": 0.005353
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1763,
+    "output_tokens": 718,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 1763,
+      "output_tokens": 718,
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 2481
+  },
+  "raw_response": {
+    "content": [
+      {
+        "text": "## Analysis\n\nThe verifier failure is a **liveness analysis complexity limit exceeded** error. This occurs when the verifier's liveness analysis phase encounters too many distinct call paths to the same subprogram.\n\n### Root Cause\n\nThe code creates a deeply nested call chain:\n- `entry` calls `helper_a` 50 times\n- `helper_a` calls `helper_b` 50 times\n- `helper_b` calls `helper_c` 50 times\n- ... and so on through `helper_g`\n\nThis results in 50^7 \u2248 78 billion potential call paths to `helper_g`. The verifier's liveness analysis must track which registers/stack locations are live at each point, and with so many distinct paths reaching the same subprogram with different call contexts, it exceeds the internal complexity limit (10001 recomputations).\n\nThe verifier's liveness analysis phase tracks variable liveness across all possible call paths. When it encounters the same function reachable through many different call chains with different argument patterns, it must re-analyze liveness multiple times, causing exponential complexity growth.\n\n## Fix\n\nThe smallest fix is to **reduce the call tree depth or breadth**. The simplest approach is to reduce `CALLS_50` to a smaller number that stays under the complexity limit.\n\n### Proposed Patch\n\n```c\n#define CALLS_10(fn) \\\n\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n\tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n```\n\nChange to:\n\n```c\n#define CALLS_10(fn) \\\n\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n\tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn)\n```\n\nThis reduces from 50 calls per function to 20 calls per function, which lowers the call path combinations from 50^7 to 20^7 (\u22481.28 million), staying well under the liveness analysis complexity budget.\n\nAlternatively, reduce the call chain depth by removing one or more helper levels (e.g., remove `helper_b` and have `helper_a` directly call `helper_c`).",
+        "type": "text"
+      }
+    ],
+    "id": "msg_013fvuRVkDiybdBKFFDjc5tN",
+    "model": "claude-haiku-4-5-20251001",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 1763,
+      "output_tokens": 718,
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

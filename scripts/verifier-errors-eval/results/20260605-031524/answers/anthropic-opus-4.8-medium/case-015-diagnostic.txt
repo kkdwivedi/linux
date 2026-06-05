@@ -1,0 +1,52 @@
+## Explanation
+
+The verifier tracks packet pointers (`pkt`) derived from `sk->data`. Any helper that can change the packet layout—like `bpf_skb_pull_data()`—invalidates all previously-held packet pointers, turning them back into plain scalars.
+
+Here the flow is:
+
+1. `p` is loaded from `sk->data` → `R7 = pkt(r=0)`.
+2. The bounds check `p+1 > data_end` validates `R7` (range becomes 4 bytes).
+3. `helper_a(sk, 0)` is called. Because it is a **global** function (and ultimately calls `bpf_skb_pull_data`), the verifier conservatively assumes the packet data may have moved. It invalidates `R7`, converting it from a packet pointer to a scalar.
+4. `*p = 42` then dereferences `R7`, which is now a scalar → `R7 invalid mem access 'scalar'`.
+
+The verifier even tells you exactly this in the causal path:
+> `R7: packet data may have moved; previous value was pkt at offset 0`
+
+The validation of the pointer happened **before** a call that can move the packet, so the validated pointer is stale by the time it is used.
+
+## Fix
+
+Reload `p` from `sk->data` and re-run the bounds check **after** the helper call, so the pointer used for the store is freshly validated against the (possibly new) packet bounds:
+
+```c
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	int *p;
+
+	/* call helper first; it may pull/move packet data */
+	helper_a(sk, 0);
+
+	/* reload and revalidate the packet pointer afterwards */
+	p = (void *)(long)sk->data;
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+This satisfies the verifier because the bounds check that establishes `R7` (or whatever register holds `p`) as a valid packet pointer now occurs *after* the last operation that could invalidate it, so the pointer is provably in-range at the point of the store.
+
+If the original ordering must be kept (check, then call, then store), the equivalent fix is to simply move the reload+recheck to right before `*p = 42`:
+
+```c
+	helper_a(sk, 0);
+	p = (void *)(long)sk->data;            /* reload */
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;                   /* revalidate */
+	*p = 42;
+```
+
+Either way, the key is: **do not rely on a packet pointer validated before a helper call that can move packet data—reload and recheck it afterward.**

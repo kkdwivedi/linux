@@ -1,0 +1,58 @@
+Looking at this eBPF program, I can see the issue:
+
+## Problem Analysis
+
+The verifier is rejecting the program because it detects an **infinite recursion**. The `helper_a` function calls itself recursively without any proper termination condition that the verifier can statically analyze. Even though there's a conditional check `if r1 < 4 goto l0_%=`, the verifier cannot guarantee that the recursion will terminate within its analysis limits.
+
+The key issues are:
+1. **Unbounded recursion**: The verifier sees a direct recursive call that could potentially loop infinitely
+2. **Naked functions**: These bypass normal C compilation checks and rely entirely on the verifier
+3. **Verifier limitations**: The verifier has a default limit of 1M instructions and cannot handle unbounded recursion
+
+## Solution
+
+The smallest fix is to eliminate the recursion entirely by converting it to a loop structure that the verifier can properly analyze. Here's the patch:
+
+```diff
+--- a/program.c
++++ b/program.c
+@@ -4,17 +4,15 @@
+ SEC("tracepoint")
+ __naked void entry(void)
+ {
+-	asm volatile ("					\
+-	r1 = 0;						\
+-	call helper_a;					\
+-	exit;						\
+-"	::: __clobber_all);
++	asm volatile ("					\
++	r1 = 0;						\
++1:	r1 += 1;					\
++	if r1 < 4 goto 1b;				\
++	r0 = r1;					\
++	exit;						\
++"	::: __clobber_all);
+ }
+ 
+-static __naked __noinline __attribute__((used))
+-void helper_a(void)
+-{
+-	asm volatile ("					\
+-	r1 += 1;					\
+-	r0 = r1;					\
+-	if r1 < 4 goto l0_%=;				\
+-	exit;						\
+-l0_%=:	call helper_a;					\
+-	exit;						\
+-"	::: __clobber_all);
+-}
+```
+
+## Why This Fix Works
+
+1. **Eliminates recursion**: The self-call to `helper_a` is removed entirely
+2. **Preserves logic**: The program still increments `r1` until it reaches 4, then returns the value
+3. **Verifier-friendly**: Uses a simple loop structure that the verifier can easily bound and analyze
+4. **Minimal change**: Only removes the problematic recursive pattern while maintaining the same functional behavior
+
+The program now performs the same computation (incrementing r1 from 0 to 4 and returning 4 in r0) but uses an iterative approach instead of recursion, which satisfies the verifier's requirements.

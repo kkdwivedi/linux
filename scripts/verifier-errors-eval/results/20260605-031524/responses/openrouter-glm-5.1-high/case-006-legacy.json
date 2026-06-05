@@ -1,0 +1,117 @@
+{
+  "answer_text": "## Verifier Failure Explanation\n\nThe error message is clear:\n\n```\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\nThe program is declared as `SEC(\"kprobe\")`, which corresponds to `BPF_PROG_TYPE_KPROBE`. The helper `bpf_ktime_get_coarse_ns` is **not available** for kprobe-type programs. In the kernel, this helper is only exposed through `tracing_func_proto()` (used by `raw_tp`/`tp` programs), not through `kprobe_prog_func_proto()`.\n\nThe kprobe program type does, however, have access to `bpf_ktime_get_ns`.\n\n## Fix\n\nReplace `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns`, which is available for kprobe programs:\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"kprobe\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_ns];\t\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_ns)\n\t: __clobber_all);\n}\n```\n\nThis is the smallest change: swap the helper name in both the `call` instruction and the `__imm` operand. `bpf_ktime_get_ns` is in `kprobe_prog_func_proto()` and will pass verification for `SEC(\"kprobe\")` programs.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-glm-5.1-high/case-006-legacy.txt",
+    "case_id": "case-006",
+    "model": "z-ai/glm-5.1",
+    "profile": "openrouter-glm-5.1-high",
+    "prompt_bytes": 1056,
+    "prompt_path": "public/case-006/prompt_legacy.md",
+    "prompt_sha256": "120f6abe2c1570fcf1f340a5df8b99d8138acdc6e56cef9bda9d3f882cdbea64",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-glm-5.1-high/case-006-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "9db3215d-82cb-492a-bf7f-541b3c71634d",
+    "started_at": "2026-06-05T03:21:20+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00039102,
+    "output_cost_usd": 0.00207592,
+    "total_cost_usd": 0.0024669400000000004
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 399,
+    "output_tokens": 674,
+    "raw_usage": {
+      "completion_tokens": 674,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 343
+      },
+      "cost": 0.0035242,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0029656,
+        "upstream_inference_cost": 0.0035242,
+        "upstream_inference_prompt_cost": 0.0005586
+      },
+      "is_byok": false,
+      "prompt_tokens": 399,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1073
+    },
+    "reasoning_content_chars": 1254,
+    "reasoning_tokens": 343,
+    "total_tokens": 1073
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Verifier Failure Explanation\n\nThe error message is clear:\n\n```\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\nThe program is declared as `SEC(\"kprobe\")`, which corresponds to `BPF_PROG_TYPE_KPROBE`. The helper `bpf_ktime_get_coarse_ns` is **not available** for kprobe-type programs. In the kernel, this helper is only exposed through `tracing_func_proto()` (used by `raw_tp`/`tp` programs), not through `kprobe_prog_func_proto()`.\n\nThe kprobe program type does, however, have access to `bpf_ktime_get_ns`.\n\n## Fix\n\nReplace `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns`, which is available for kprobe programs:\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"kprobe\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_ns];\t\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_ns)\n\t: __clobber_all);\n}\n```\n\nThis is the smallest change: swap the helper name in both the `call` instruction and the `__imm` operand. `bpf_ktime_get_ns` is in `kprobe_prog_func_proto()` and will pass verification for `SEC(\"kprobe\")` programs.",
+          "reasoning": "The verifier log shows:\n\n```\n0: (85) call bpf_ktime_get_coarse_ns#160\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\nThe program is using `SEC(\"kprobe\")` which is a BPF program type `BPF_PROG_TYPE_KPROBE`. The helper `bpf_ktime_get_coarse_ns` is not available for kprobe program types.\n\nLooking at the kernel source, `bpf_ktime_get_coarse_ns` is available for tracing program types but not for kprobe. The `bpf_ktime_get_ns` helper is available for kprobe programs.\n\nWait, let me reconsider. In newer kernels, `bpf_ktime_get_coarse_ns` might be available for tracing programs. The kprobe program type might not have access to it.\n\nThe fix would be to either:\n1. Change the helper to `bpf_ktime_get_ns` which is available for kprobe programs\n2. Change the program type to one that supports `bpf_ktime_get_coarse_ns`\n\nThe simplest fix would be to change `bpf_ktime_get_coarse_ns` to `bpf_ktime_get_ns`, which is available for kprobe programs.\n\nActually, looking more carefully, in the kernel, `bpf_ktime_get_coarse_ns` is listed in `tracing_func_proto` but not in `kprobe_prog_func_proto`. The `bpf_ktime_get_ns` is available in `kprobe_prog_func_proto`.\n\nSo the fix is to replace `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns`.",
+          "reasoning_details": [
+            {
+              "format": "unknown",
+              "index": 0,
+              "text": "The verifier log shows:\n\n```\n0: (85) call bpf_ktime_get_coarse_ns#160\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\nThe program is using `SEC(\"kprobe\")` which is a BPF program type `BPF_PROG_TYPE_KPROBE`. The helper `bpf_ktime_get_coarse_ns` is not available for kprobe program types.\n\nLooking at the kernel source, `bpf_ktime_get_coarse_ns` is available for tracing program types but not for kprobe. The `bpf_ktime_get_ns` helper is available for kprobe programs.\n\nWait, let me reconsider. In newer kernels, `bpf_ktime_get_coarse_ns` might be available for tracing programs. The kprobe program type might not have access to it.\n\nThe fix would be to either:\n1. Change the helper to `bpf_ktime_get_ns` which is available for kprobe programs\n2. Change the program type to one that supports `bpf_ktime_get_coarse_ns`\n\nThe simplest fix would be to change `bpf_ktime_get_coarse_ns` to `bpf_ktime_get_ns`, which is available for kprobe programs.\n\nActually, looking more carefully, in the kernel, `bpf_ktime_get_coarse_ns` is listed in `tracing_func_proto` but not in `kprobe_prog_func_proto`. The `bpf_ktime_get_ns` is available in `kprobe_prog_func_proto`.\n\nSo the fix is to replace `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns`.",
+              "type": "reasoning.text"
+            }
+          ],
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "stop"
+      }
+    ],
+    "created": 1780629680,
+    "id": "gen-1780629680-GAnlCGCqfo7i0avy3rjy",
+    "model": "z-ai/glm-5.1-20260406",
+    "object": "chat.completion",
+    "provider": "Z.AI",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 674,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 343
+      },
+      "cost": 0.0035242,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0029656,
+        "upstream_inference_cost": 0.0035242,
+        "upstream_inference_prompt_cost": 0.0005586
+      },
+      "is_byok": false,
+      "prompt_tokens": 399,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1073
+    }
+  },
+  "reasoning_content": "The verifier log shows:\n\n```\n0: (85) call bpf_ktime_get_coarse_ns#160\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\nThe program is using `SEC(\"kprobe\")` which is a BPF program type `BPF_PROG_TYPE_KPROBE`. The helper `bpf_ktime_get_coarse_ns` is not available for kprobe program types.\n\nLooking at the kernel source, `bpf_ktime_get_coarse_ns` is available for tracing program types but not for kprobe. The `bpf_ktime_get_ns` helper is available for kprobe programs.\n\nWait, let me reconsider. In newer kernels, `bpf_ktime_get_coarse_ns` might be available for tracing programs. The kprobe program type might not have access to it.\n\nThe fix would be to either:\n1. Change the helper to `bpf_ktime_get_ns` which is available for kprobe programs\n2. Change the program type to one that supports `bpf_ktime_get_coarse_ns`\n\nThe simplest fix would be to change `bpf_ktime_get_coarse_ns` to `bpf_ktime_get_ns`, which is available for kprobe programs.\n\nActually, looking more carefully, in the kernel, `bpf_ktime_get_coarse_ns` is listed in `tracing_func_proto` but not in `kprobe_prog_func_proto`. The `bpf_ktime_get_ns` is available in `kprobe_prog_func_proto`.\n\nSo the fix is to replace `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns`."
+}

@@ -1,0 +1,37 @@
+## Explanation
+
+The verifier rejects the `bpf_probe_read_kernel` call because its destination pointer `R1` has a *variable, unbounded* offset.
+
+The offset comes from this load:
+
+```
+r3 = *(u32*)(r0 + 0);   // reads value->offset, scalar 0..0xffffffff
+r1 += r3;               // r1 = map_value + unbounded offset
+```
+
+`r3` is an untrusted 32‑bit value loaded from the map, so it spans `[0, 4294967295]`. After `r1 += r3`, the verifier can no longer prove `offset + size <= 48` for the map value, hence:
+
+```
+R1 unbounded memory access, make sure to bounds check any such access
+```
+
+## Fix
+
+Bound `r3` before using it as a pointer offset. The object is 48 bytes and the access size is 1, so any `r3 <= 47` is safe. Add a check (e.g. `r3 > 43`, matching the `data[44]` field, or simply mask it):
+
+```c
+	r3 = *(u32*)(r0 + 0);				\
+	if r3 > 43 goto l0_%=;				\
+	r1 += r3;					\
+```
+
+After this branch, the verifier knows `r3 ∈ [0, 43]`, so `r1` has a bounded offset and `offset + 1 <= 48` holds, satisfying the bounds check.
+
+Equivalently a mask works:
+
+```c
+	r3 &= 0x1f;     /* r3 in [0,31] */
+	r1 += r3;
+```
+
+Either edit gives `R1` a provable upper bound, letting the program pass verification.

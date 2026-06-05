@@ -1,0 +1,22 @@
+The verifier error occurs because `helper_a` is considered a sleepable function due to its call to `bpf_copy_from_user`, and it is invoked within an IRQ-disabled region created by `bpf_local_irq_save` and `bpf_local_irq_restore`. Sleepable functions cannot be called in IRQ-disabled contexts.
+
+The simplest fix is to move the call to `helper_a` outside the IRQ-disabled section, either before `bpf_local_irq_save` or after `bpf_local_irq_restore`. The patch below places it after the restore to maintain the original order of operations as closely as possible.
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -494,9 +494,9 @@ int __noinline helper_a(int i)
+ SEC("?syscall")
+ int entry(void *ctx)
+ {
+ 	unsigned long flags;
+ 
+ 	bpf_local_irq_save(&flags);
+-	helper_a(0);
+ 	bpf_local_irq_restore(&flags);
++	helper_a(0);
+ 	return 0;
+ }
+```
+
+This change ensures `helper_a` is no longer inside the IRQ-disabled region, satisfying the verifier's execution context safety requirements.

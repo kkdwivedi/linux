@@ -1,0 +1,52 @@
+## Explanation
+
+The verifier tracks each reserved ringbuf dynptr as an *owned resource* that must be released (submitted or discarded) on **every** path to exit.
+
+In this program two dynptrs are reserved:
+- `ptr1` (id=2 in the log)
+- `ptr2` (id=3/id=4 in the log)
+
+On the failure path (`!sample`) both `ptr1` and `ptr2` are discarded — that path is fine.
+
+But on the **success path** (when `sample != 0`), the code only does:
+
+```c
+bpf_ringbuf_submit_dynptr(&ptr1, 0);
+return 0;
+```
+
+`ptr2` is never released on this path, so its reference leaks:
+
+```
+Unreleased reference id=3 alloc_insn=14
+```
+
+## Fix
+
+Release `ptr2` on the success path too. The smallest fix is to submit (or discard) `ptr2` before the final return:
+
+```c
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_submit_dynptr(&ptr2, 0);
+
+	return 0;
+```
+
+### Patch
+
+```c
+@@
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
++	bpf_ringbuf_submit_dynptr(&ptr2, 0);
+ 
+ 	return 0;
+ }
+```
+
+Now every exit path releases both reserved dynptrs:
+- `!sample` path: discards `ptr1` and `ptr2`.
+- success path: submits `ptr1` and `ptr2`.
+
+This satisfies the verifier's resource-lifetime requirement that the owned resource id=3 (`ptr2`) be released before exit.
+
+(Using `bpf_ringbuf_discard_dynptr(&ptr2, 0)` would work equally well for satisfying the verifier; choose submit vs. discard based on intended semantics.)

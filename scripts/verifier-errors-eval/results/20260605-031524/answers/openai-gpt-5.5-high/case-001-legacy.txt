@@ -1,0 +1,45 @@
+The verifier failure is caused by passing an arbitrary integer as the first argument to `bpf_cpumask_populate()`:
+
+```c
+struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+...
+bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
+```
+
+In the verifier log:
+
+```text
+2: (b7) r1 = 1193046
+...
+4: (85) call bpf_cpumask_populate#61745
+R1 type=scalar expected=fp
+```
+
+`0x123456` is just a scalar value, not a verifier-recognized pointer. For this kfunc, argument 1 is expected to be a frame-pointer-derived stack pointer, i.e. a valid stack object. The verifier therefore rejects `R1`.
+
+Also, `bits` is currently uninitialized. Once the first argument is fixed, the verifier may then complain about passing uninitialized stack memory as the source buffer, so it should be initialized too.
+
+Smallest likely source-level fix: use a real stack `struct cpumask` and initialize `bits`.
+
+Patch:
+
+```diff
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+-	u64 bits;
++	struct cpumask mask;
++	u64 bits = 0;
+ 	int ret;
+ 
+-	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
++	ret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));
+ 	if (!ret)
+ 		return 2;
+ 
+ 	return 0;
+ }
+```
+
+This makes `R1` a stack pointer instead of a scalar constant, satisfying the verifier’s `expected=fp` requirement, and ensures the buffer passed via `&bits` is initialized.

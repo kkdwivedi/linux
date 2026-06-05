@@ -1,0 +1,118 @@
+{
+  "answer_text": "## What the verifier is complaining about\n\nThe error is:\n\n```\n10: (63) *(u32 *)(r7 +0) = r1\nR7 invalid mem access 'scalar'\n```\n\n`R7` holds your packet pointer `p` (loaded from `sk->data`). At the time of the store it is no longer a `pkt` pointer \u2014 it has been turned into a `scalar`.\n\n## Why it happens\n\nYou do the bounds check *before* calling `helper_a()`:\n\n```c\nint *p = (void *)(long)sk->data;\nif ((void *)(p + 1) > (void *)(long)sk->data_end)   /* validates p */\n    return TCX_DROP;\nhelper_a(sk, 0);                                    /* <-- invalidates packet ptrs */\n*p = 42;                                            /* p is now stale */\n```\n\n`helper_a()` is a **global** function. The verifier treats a call to a global function conservatively: because such a function may call helpers that reposition/relinearize the packet (here `helper_a` \u2192 `helper_b` \u2192 `bpf_skb_pull_data()`, which can change `data`/`data_end`), **all packet pointers held by the caller are invalidated across the call**. So the previously-validated `R7` is downgraded to a scalar, and the store `*p = 42` is rejected.\n\nThis is correct behavior: a previous bounds check is meaningless after a call that can move the packet.\n\n## The fix\n\nRe-load the packet pointer and re-do the bounds check **after** the call. The smallest change is to reorder so the load/check happens after `helper_a()`:\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p;\n\n\thelper_a(sk, 0);\n\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nNow `p` is derived from `sk->data` *after* any packet-modifying call, and the bounds check immediately precedes the store with no intervening call, so the verifier can keep `p` as a valid `pkt` pointer with the proven range.\n\n(Equivalently, if the original ordering must be kept, simply re-read `p` and re-run the `p + 1 > data_end` check between `helper_a()` and the store \u2014 the key point is that a fresh, validated packet pointer must be used after the global-function call.)",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-opus-4.8-high/case-015-legacy.txt",
+    "case_id": "case-015",
+    "model": "anthropic/claude-opus-4.8",
+    "profile": "openrouter-claude-opus-4.8-high",
+    "prompt_bytes": 1984,
+    "prompt_path": "public/case-015/prompt_legacy.md",
+    "prompt_sha256": "dc0fc1e91b61bdf915966f9cbe5ae652d8b1776a8af859d12e6cd23d52604af2",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-opus-4.8-high/case-015-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "0901c2ba-74a5-47d8-b947-cc7e6d158a07",
+    "started_at": "2026-06-05T03:18:29+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.005745,
+    "output_cost_usd": 0.034075,
+    "total_cost_usd": 0.03982
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1149,
+    "output_tokens": 1363,
+    "raw_usage": {
+      "completion_tokens": 1363,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 166
+      },
+      "cost": 0.03982,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.034075,
+        "upstream_inference_cost": 0.03982,
+        "upstream_inference_prompt_cost": 0.005745
+      },
+      "is_byok": false,
+      "prompt_tokens": 1149,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 2512
+    },
+    "reasoning_content_chars": 655,
+    "reasoning_tokens": 166,
+    "total_tokens": 2512
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## What the verifier is complaining about\n\nThe error is:\n\n```\n10: (63) *(u32 *)(r7 +0) = r1\nR7 invalid mem access 'scalar'\n```\n\n`R7` holds your packet pointer `p` (loaded from `sk->data`). At the time of the store it is no longer a `pkt` pointer \u2014 it has been turned into a `scalar`.\n\n## Why it happens\n\nYou do the bounds check *before* calling `helper_a()`:\n\n```c\nint *p = (void *)(long)sk->data;\nif ((void *)(p + 1) > (void *)(long)sk->data_end)   /* validates p */\n    return TCX_DROP;\nhelper_a(sk, 0);                                    /* <-- invalidates packet ptrs */\n*p = 42;                                            /* p is now stale */\n```\n\n`helper_a()` is a **global** function. The verifier treats a call to a global function conservatively: because such a function may call helpers that reposition/relinearize the packet (here `helper_a` \u2192 `helper_b` \u2192 `bpf_skb_pull_data()`, which can change `data`/`data_end`), **all packet pointers held by the caller are invalidated across the call**. So the previously-validated `R7` is downgraded to a scalar, and the store `*p = 42` is rejected.\n\nThis is correct behavior: a previous bounds check is meaningless after a call that can move the packet.\n\n## The fix\n\nRe-load the packet pointer and re-do the bounds check **after** the call. The smallest change is to reorder so the load/check happens after `helper_a()`:\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p;\n\n\thelper_a(sk, 0);\n\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nNow `p` is derived from `sk->data` *after* any packet-modifying call, and the bounds check immediately precedes the store with no intervening call, so the verifier can keep `p` as a valid `pkt` pointer with the proven range.\n\n(Equivalently, if the original ordering must be kept, simply re-read `p` and re-run the `p + 1 > data_end` check between `helper_a()` and the store \u2014 the key point is that a fresh, validated packet pointer must be used after the global-function call.)",
+          "reasoning": " I'm realizing the verifier is invalidating packet pointers after calling global functions like helper_a because those functions might internally call helpers like bpf_skb_pull_data that modify packet data, so even though the bounds check happened before the call, the register holding the packet pointer (R7 in this case) gets marked as scalar and loses its validity.\n\nThe fix is to reload the packet pointer and re-validate it after the global function call instead of relying on the pre-call bounds check. I'm moving the pointer dereference and bounds check to occur after helper_a returns, which gives the verifier a fresh packet pointer to work with.",
+          "reasoning_details": [
+            {
+              "format": "anthropic-claude-v1",
+              "index": 0,
+              "signature": "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",
+              "text": " I'm realizing the verifier is invalidating packet pointers after calling global functions like helper_a because those functions might internally call helpers like bpf_skb_pull_data that modify packet data, so even though the bounds check happened before the call, the register holding the packet pointer (R7 in this case) gets marked as scalar and loses its validity.\n\nThe fix is to reload the packet pointer and re-validate it after the global function call instead of relying on the pre-call bounds check. I'm moving the pointer dereference and bounds check to occur after helper_a returns, which gives the verifier a fresh packet pointer to work with.",
+              "type": "reasoning.text"
+            }
+          ],
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629509,
+    "id": "gen-1780629509-CS1OUzfw3epalqaJR6aD",
+    "model": "anthropic/claude-4.8-opus-20260528",
+    "object": "chat.completion",
+    "provider": "Anthropic",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1363,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 166
+      },
+      "cost": 0.03982,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.034075,
+        "upstream_inference_cost": 0.03982,
+        "upstream_inference_prompt_cost": 0.005745
+      },
+      "is_byok": false,
+      "prompt_tokens": 1149,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 2512
+    }
+  },
+  "reasoning_content": " I'm realizing the verifier is invalidating packet pointers after calling global functions like helper_a because those functions might internally call helpers like bpf_skb_pull_data that modify packet data, so even though the bounds check happened before the call, the register holding the packet pointer (R7 in this case) gets marked as scalar and loses its validity.\n\nThe fix is to reload the packet pointer and re-validate it after the global function call instead of relying on the pre-call bounds check. I'm moving the pointer dereference and bounds check to occur after helper_a returns, which gives the verifier a fresh packet pointer to work with."
+}

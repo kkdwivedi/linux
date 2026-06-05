@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nAfter calling `helper_a` (a global/non-inlined function that ultimately calls `bpf_skb_pull_data`), the verifier invalidates all packet pointers because `bpf_skb_pull_data` can reallocate the packet buffer, making any previously-validated pointer stale. Since `helper_a` is marked `__noinline` (global), the verifier treats it as a black box and assumes it may change the packet layout.\n\nAt instruction 10, `r7` (which held `p`) is now classified as `scalar` instead of a valid packet pointer, so the write `*p = 42` fails with `R7 invalid mem access 'scalar'`.\n\n## Fix\n\nReload `sk->data` and re-validate the bounds **after** the `helper_a` call:\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p = (void *)(long)sk->data;\n\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\thelper_a(sk, 0);\n\n\t/* Re-validate packet pointer after potential bpf_skb_pull_data */\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nBy reloading `sk->data` into `p` and rechecking `p + 1` against `sk->data_end` after the call, the verifier gets a fresh, properly-bounded packet pointer for the subsequent write.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-medium/case-015-legacy.txt",
+    "case_id": "case-015",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-medium",
+    "prompt_bytes": 1984,
+    "prompt_path": "public/case-015/prompt_legacy.md",
+    "prompt_sha256": "dc0fc1e91b61bdf915966f9cbe5ae652d8b1776a8af859d12e6cd23d52604af2",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-medium/case-015-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "12bea6cb-dd23-4eb6-9c71-fbf55af4eab8",
+    "started_at": "2026-06-05T04:05:21+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.002922,
+    "output_cost_usd": 0.010845,
+    "total_cost_usd": 0.013767000000000001
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 974,
+    "output_tokens": 723,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 974,
+      "output_tokens": 723,
+      "output_tokens_details": {
+        "thinking_tokens": 302
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 797,
+    "reasoning_tokens": 0,
+    "total_tokens": 1697
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "Ev0HCmUIDhgCKkChBA4uScfe2Tz31ZapbgXzPYPiPwXqF1UyI1ypBTgHYFecNie4Ga07LeRJoPNOze1yHNW1mhHRZ/mMwLpp3XFqMhFjbGF1ZGUtc29ubmV0LTQtNjgAQgh0aGlua2luZxIMY/KNu3b7NAH006pVGgx4yknk+MvatitSqtEiMMyvYaZm4ELuDf0AzTyF/L3VB1ZWPiEpIOWGSbbgwDQWLPHx7k4jdb5FWEQTw4RJmSrFBne5d9ffzOY0U4l5ZxzqzvQRvpo9wohzLT2cfE5EnVpI8PxFSICJiCctgx0h4vT8rxh46RjakcWspwor22XOoX4S+esX4JMaDtDuQKtCIwju0ZVG2d4vpgKzp6xTBxv1fxDm4FwPYO8fYW51ndC0asAVUczNhwh2+agjq6OdZEiW6UWEZJ/IgNfsuhJ/1DP45BtuBXDuiZxvUt8tSTcRblHG7YsjDkM5cjqC32HL11EoIQcLr88aU+fDe58tDS78cCyLMkOWrxLHMaUN+muA0zq5I1djkPK/TKPSpg8OMlTtReEwze84l5MeqJKB7cfWBMF3PYLDd3MV/O4GPOX/Hdsp1TG2Yea/pXDZGaZQ2k9xRehaZsC9SffNQqB+LabJn7++CECduWhobiSbqhsIARNGHhNRWeefGj1Gr1KuDQ1FMAO7ix3UlmXZfuk4CI3atbvRqTIR5GheJCBR+35eK33tyNGyiAUl5/A0q2wvMa9wbq7zKZ3MBD2RWi5PVaF+twX/6SJaXW2nFrK6CbgKxVKInRnp8UbP08gltAvjVNMmax1rIb5Yaqn4apW0xsa4/vQq0T3pCFuT8zfpUsIAj3tqrfdZkfufpc6NzVssF6w+tmN0Dpw4tAoef/GXfzDtLpA2Nna0ydfdX7Sj5RQJojQ4G4+ZkHR36QqAfZItbAZvPKgHw83hAMrcLaWVhWm+fFEtKlIPCEApbG4fBfSV+U0zSbdFPT+0yCDgg6VbsIGwk6BvflI/1o1kElv1RKxv+QdiE0OzlDBucg5+G6Web3udBVZSt8LWwSVEt6FGlHHvu+tYdnDtRM5aqW6GQqj9ioR1gnboemAeNWlqgj6pxWaR20zhCz1GRKa8B74KgcQhHuN1p9bHRe9FnFyyjePxhCLYtH14xeJONByZXzTQeCYlf1Kg3jJfajbuuPgg9A40n3oLGFoErvOKp0AT+r+7HjnCEvhI8GC2Qguhzuytu/fGFiMaTuJlCfaAYeuZmO+ndtAzP1W7qm6/gGDUyZOhpiV5sWmoJoQblq981zSdLQTI3Im7M1Nxrc217y+IV0bRivpHgeyrp9UEWNJD75dgP8hlasZSiHTbT6RECNhZX1TSD6HpPhgB",
+        "thinking": "The issue is clear: after calling `helper_a` (which is a global function), the verifier forgets the packet pointer validity. Since `helper_a` calls `bpf_skb_pull_data`, which can change the packet data, the verifier correctly invalidates the packet pointer `r7` after the call. After the call returns, `r7` is treated as a scalar, not a valid packet pointer.\n\nThe fix is to re-check the packet bounds after calling `helper_a`. We need to reload `sk->data` and `sk->data_end` and re-validate after the helper call.\n\n\nSo the solution is to reload the packet pointer from `sk->data` after the helper call, then perform the bounds check again before dereferencing it. This way, the verifier sees that we've re-established a valid packet pointer with proper bounds checking before accessing the memory.",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nAfter calling `helper_a` (a global/non-inlined function that ultimately calls `bpf_skb_pull_data`), the verifier invalidates all packet pointers because `bpf_skb_pull_data` can reallocate the packet buffer, making any previously-validated pointer stale. Since `helper_a` is marked `__noinline` (global), the verifier treats it as a black box and assumes it may change the packet layout.\n\nAt instruction 10, `r7` (which held `p`) is now classified as `scalar` instead of a valid packet pointer, so the write `*p = 42` fails with `R7 invalid mem access 'scalar'`.\n\n## Fix\n\nReload `sk->data` and re-validate the bounds **after** the `helper_a` call:\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p = (void *)(long)sk->data;\n\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\thelper_a(sk, 0);\n\n\t/* Re-validate packet pointer after potential bpf_skb_pull_data */\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nBy reloading `sk->data` into `p` and rechecking `p + 1` against `sk->data_end` after the call, the verifier gets a fresh, properly-bounded packet pointer for the subsequent write.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01Y16QCciddP9AuxWPqrpS36",
+    "model": "claude-sonnet-4-6",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 974,
+      "output_tokens": 723,
+      "output_tokens_details": {
+        "thinking_tokens": 302
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": "The issue is clear: after calling `helper_a` (which is a global function), the verifier forgets the packet pointer validity. Since `helper_a` calls `bpf_skb_pull_data`, which can change the packet data, the verifier correctly invalidates the packet pointer `r7` after the call. After the call returns, `r7` is treated as a scalar, not a valid packet pointer.\n\nThe fix is to re-check the packet bounds after calling `helper_a`. We need to reload `sk->data` and `sk->data_end` and re-validate after the helper call.\n\n\nSo the solution is to reload the packet pointer from `sk->data` after the helper call, then perform the bounds check again before dereferencing it. This way, the verifier sees that we've re-established a valid packet pointer with proper bounds checking before accessing the memory."
+}

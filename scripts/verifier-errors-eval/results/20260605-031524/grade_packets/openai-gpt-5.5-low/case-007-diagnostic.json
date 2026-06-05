@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Replace slice_len with sizeof(buffer) or sizeof(*hdr) at the call site.",
+    "Add if (slice_len > sizeof(buffer)) return ...; before bpf_dynptr_slice.",
+    "Clamp or mask slice_len so the verifier proves it cannot exceed the stack buffer."
+  ],
+  "canonical_fix": "Make the slice length verifier-bounded to the fallback buffer size before the call, or pass a compile-time constant size that is no larger than the buffer.",
+  "case_id": "case-007",
+  "category": "Memory Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The dynptr slice fallback buffer is stack memory, but the length comes from a variable global value with no verifier-proven upper bound. The verifier cannot prove the memory/length pair stays within the fallback buffer.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-low/case-007-diagnostic.txt",
+    "case_id": "case-007",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-low",
+    "prompt_bytes": 4340,
+    "prompt_path": "public/case-007/prompt_diagnostic.md",
+    "prompt_sha256": "d1d8d7dccaad3f83ecae6c603310091500168180bae26b21eb757e9dd3d1640d",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-low/case-007-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "low"
+    },
+    "run_id": "245ff69b-796b-4e27-adb1-d35a51b59f4c",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The failure is caused by `slice_len` being a mutable global variable.\n\nAlthough it is initialized to `sizeof(struct ethhdr)`, it lives in `.data`, so the verifier cannot treat it as the constant value `14`. In the log:\n\n```text\n11: r4 = *(u32 *)(r1 +0)\nR4=scalar(smin=0,smax=umax=0xffffffff)\n```\n\n`R4` is the fourth argument to `bpf_dynptr_slice()` \u2014 the buffer length. The verifier sees it as an arbitrary `u32`, from `0` to `UINT_MAX`.\n\nBut the third argument is:\n\n```c\nbuffer\n```\n\nwhich is only:\n\n```c\nchar buffer[sizeof(*hdr)];\n```\n\ni.e. 14 bytes on the stack.\n\nSo the helper call effectively looks to the verifier like:\n\n```c\nbpf_dynptr_slice(&ptr, 0, stack_buffer_14_bytes, unknown_len_up_to_UINT_MAX);\n```\n\nThat violates the helper contract: the memory/length pair must describe memory that is valid for the full requested length. Since `slice_len` might be larger than the stack buffer, verification fails.\n\nThe smallest robust fix is to copy `slice_len` into a local variable, bound-check it against the stack buffer size, and pass that checked local variable to the helper.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -14,13 +14,17 @@ SEC(\"?tc\")\n int entry(struct __sk_buff *skb)\n {\n \tstruct bpf_dynptr ptr;\n \tstruct ethhdr *hdr;\n \tchar buffer[sizeof(*hdr)] = {};\n+\t__u32 len = slice_len;\n \n \tbpf_dynptr_from_skb(skb, 0, &ptr);\n \n-\thdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);\n+\tif (len > sizeof(buffer))\n+\t\treturn SK_DROP;\n+\n+\thdr = bpf_dynptr_slice(&ptr, 0, buffer, len);\n \tif (!hdr)\n \t\treturn SK_DROP;\n \n \treturn SK_PASS;\n }\n```\n\nWhy this should satisfy the verifier:\n\n- `len` is loaded once from the mutable global.\n- The branch `if (len > sizeof(buffer)) return SK_DROP;` constrains the surviving path to `len <= 14`.\n- `buffer` is a 14-byte initialized stack object.\n- Therefore the verifier can prove that the `(buffer, len)` memory/length pair is valid for `bpf_dynptr_slice()`.\n\nAn even smaller semantic change would be to replace `slice_len` with `sizeof(buffer)` directly, but if the test intentionally wants to keep `slice_len` as a runtime global, the bounds-check version is the appropriate verifier-friendly fix.",
+  "must_mention": [
+    "R4/length is variable or unbounded",
+    "The fallback buffer has fixed stack size",
+    "Verifier needs a length upper bound before the call"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks the returned hdr pointer",
+    "Increases unrelated ringbuf size",
+    "Changes the dynptr source but leaves variable length unbounded"
+  ]
+}

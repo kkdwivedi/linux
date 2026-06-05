@@ -1,0 +1,18 @@
+## Verifier Failure Explanation
+
+The program reserves two ringbuf dynptrs (`ptr1` and `ptr2`), but on the path where `bpf_dynptr_data(&ptr1, ...)` succeeds (sample is non-NULL), only `ptr1` is submitted via `bpf_ringbuf_submit_dynptr`. The second dynptr `ptr2` (resource id=3, acquired at instruction 14) is never submitted or discarded on that path, causing a resource leak.
+
+The error path (sample is NULL) correctly discards both, but the success path forgets `ptr2`.
+
+## Fix
+
+Add a release call for `ptr2` on the non-NULL path. Since `ptr2`'s data is never used, discarding it is the most appropriate choice:
+
+```c
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+
+	return 0;
+```
+
+This ensures every acquired resource is released on every code path before the program exits, satisfying the verifier's resource lifetime safety check.

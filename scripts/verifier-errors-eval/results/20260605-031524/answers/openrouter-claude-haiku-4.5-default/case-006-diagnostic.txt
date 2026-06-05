@@ -1,0 +1,31 @@
+## Explanation of the Verifier Failure
+
+The verifier is rejecting the program because:
+
+1. **Program type mismatch**: The program is declared as `SEC("kprobe")`, which makes it a `BPF_PROG_TYPE_KPROBE` program.
+
+2. **Helper not allowed**: The helper `bpf_ktime_get_coarse_ns` is not permitted for `kprobe` program types. The verifier explicitly states: "program of this type cannot use helper bpf_ktime_get_coarse_ns#160"
+
+3. **Root cause**: `bpf_ktime_get_coarse_ns` is typically only allowed for certain program types like `BPF_PROG_TYPE_TRACEPOINT`, `BPF_PROG_TYPE_PERF_EVENT`, `BPF_PROG_TYPE_RAW_TRACEPOINT`, etc., but not for `kprobe`.
+
+## Solution
+
+The smallest fix is to change the program type from `kprobe` to a compatible type that allows `bpf_ktime_get_coarse_ns`. The `tracepoint` program type is a common choice that supports this helper.
+
+### Patch
+
+```c
+SEC("tracepoint/syscalls/sys_enter_openat")
+__naked void entry(void)
+```
+
+Or alternatively, use `perf_event`:
+
+```c
+SEC("perf_event")
+__naked void entry(void)
+```
+
+**Why this works**: By changing from `SEC("kprobe")` to `SEC("tracepoint/...")` or `SEC("perf_event")`, the program type changes to one that has `bpf_ktime_get_coarse_ns` in its allowed helper list, allowing the verifier to accept the helper call.
+
+The tracepoint variant requires specifying a valid tracepoint path (e.g., `syscalls/sys_enter_openat`), while `perf_event` is more generic and doesn't require a specific event specification.

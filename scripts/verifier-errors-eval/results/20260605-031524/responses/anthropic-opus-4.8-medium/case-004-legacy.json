@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\n`helper_a()` is a **global** (non-static) function. Even though it is marked `__noinline`, because it has external linkage the verifier validates it **independently** of its caller. For such functions, a pointer-to-memory argument is presented to the verifier as `mem_or_null` \u2014 i.e. the verifier assumes the caller *might* pass NULL.\n\nWhen the function then does:\n\n```c\nreturn bpf_get_prandom_u32() < s->x;   /* r2 = *(u32 *)(r6 + 0) */\n```\n\nit dereferences `s` without first proving it is non-NULL, so the verifier rejects it:\n\n```\nR6 invalid mem access 'mem_or_null'\n```\n\nThe contents/value being checked (`bpf_get_prandom_u32()`) is irrelevant; the failure is purely that a possibly-NULL pointer is dereferenced.\n\n## Smallest fix\n\nAdd an explicit NULL check before dereferencing `s`. This makes the verifier narrow `mem_or_null` to a valid `mem` pointer on the path that reaches the dereference:\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nAfter the `if (!s)` test, on the fall-through path `s` is known to be a valid `mem(sz=4)` pointer, so `*(u32 *)(s + 0)` is allowed.\n\n### Alternative\n\nIf your libbpf/kernel headers support it, you can instead annotate the argument as guaranteed non-NULL, telling the verifier the caller always passes a valid pointer:\n\n```c\n__noinline int helper_a(const struct Item *s __arg_nonnull)\n{\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nBoth approaches satisfy the verifier; the explicit `if (!s) return 0;` is the most portable and minimal source change.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-004-legacy.txt",
+    "case_id": "case-004",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 1415,
+    "prompt_path": "public/case-004/prompt_legacy.md",
+    "prompt_sha256": "5122475504cbe77965669ffc9de4273ee4a86feb8b73ecbb090ea008b68a08ae",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-004-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "3930e7f8-8f92-4c89-aa64-1399e74bdff4",
+    "started_at": "2026-06-05T03:17:10+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00402,
+    "output_cost_usd": 0.02115,
+    "total_cost_usd": 0.025169999999999998
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 804,
+    "output_tokens": 846,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 804,
+      "output_tokens": 846,
+      "output_tokens_details": {
+        "thinking_tokens": 200
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1650
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EpIGCmMIDhgCKkDQ6ADvnIIuYthHd0LTxIt7pNHJvMIH+kh1gS2ipvetsdCHqlmGCjFNjYkJNhrlT69HvRMFmUDFgiaxW2gX/LcwMg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDGKzGrLJE18CHgpIMBoMbKT09WhttW7DreyHIjAeemzFTeblHGx9iKMKJvgF1p4JtskdXOUQhdK6CZebeQXtKAMGxWK6lUlYWqG2atcq3AS0+PovLVZxoDddYa427pumGe8g9lBelLJ5+/K9aGFsLXJoUzdFfeFR6PwmWjsEcidRJyNyJ3NXMHw1s4Pt7pw8wJgVUc8YwAztKaybAA73oCpdv6lBblJv5tSJlULZjjwEe4HJbeUWRTuWR9P1ve5M3IqH1kqJgrqAQAlG5FvYOfrYeqz9KoKkQDfj9LgjGBcCsbBEvdPGqX1hwJ7OqXaIkLtgCyHIltZ4/kqC+cG50c8p30104d9Gbd/fRJ3VfWHFSE2F4MuBBdbYn+FKGvmZxmpnCT6+B3ZSImGZwusm7wewLhADEQ2sRpu5xyg/n5u0tKvoPhHjRI3iHbQs+Vixn8U7NWbj9Z3GbiYHe+pXMjJemPSUORqIecI6O4AyAfa/9GZTVJok0L1xfgfI+7s5SnE/CspWIAdlg6OUWJby8ukmLwopZeudQUa6APrBCP4tFIthK+tx+IvLGp4AbNYSJqN9lT3aj8gDdgubIfPR2Zn1/ss5mQlTv1+mGpJ0V24by4lKs/Vv46e/fW6dZjacZDMaOigKacOlLwEEOMpYyv3a8g8gXFcWIJjq6DESbDvXJjxaZMyMKpPD5az88z8cQqjEuPMeItNwoAUsy7nT/BFTGlsFRalrMxUmDbWjnLUcg6wt6cNGUmk/IKVyn0fqvWHWqhCUMMzcqLCCppA6A5+U071wxMd+SynxY+ztQiMmSc+q+1ElfKgZg4Sf7BbdhFux/nlRrNF5X20gaN2fngjB/Gnr5h5fG59rg+87i6YQ/DlEyHP/fVhim9LF/dqb0yUA86CNP6kQLeoUGAE=",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\n`helper_a()` is a **global** (non-static) function. Even though it is marked `__noinline`, because it has external linkage the verifier validates it **independently** of its caller. For such functions, a pointer-to-memory argument is presented to the verifier as `mem_or_null` \u2014 i.e. the verifier assumes the caller *might* pass NULL.\n\nWhen the function then does:\n\n```c\nreturn bpf_get_prandom_u32() < s->x;   /* r2 = *(u32 *)(r6 + 0) */\n```\n\nit dereferences `s` without first proving it is non-NULL, so the verifier rejects it:\n\n```\nR6 invalid mem access 'mem_or_null'\n```\n\nThe contents/value being checked (`bpf_get_prandom_u32()`) is irrelevant; the failure is purely that a possibly-NULL pointer is dereferenced.\n\n## Smallest fix\n\nAdd an explicit NULL check before dereferencing `s`. This makes the verifier narrow `mem_or_null` to a valid `mem` pointer on the path that reaches the dereference:\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nAfter the `if (!s)` test, on the fall-through path `s` is known to be a valid `mem(sz=4)` pointer, so `*(u32 *)(s + 0)` is allowed.\n\n### Alternative\n\nIf your libbpf/kernel headers support it, you can instead annotate the argument as guaranteed non-NULL, telling the verifier the caller always passes a valid pointer:\n\n```c\n__noinline int helper_a(const struct Item *s __arg_nonnull)\n{\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nBoth approaches satisfy the verifier; the explicit `if (!s) return 0;` is the most portable and minimal source change.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01BmEUeyBfUNJ65FCUaGBL2m",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 804,
+      "output_tokens": 846,
+      "output_tokens_details": {
+        "thinking_tokens": 200
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

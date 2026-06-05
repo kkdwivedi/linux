@@ -1,0 +1,40 @@
+## Explanation of the Verifier Failure
+
+The verifier is rejecting the program because of an invalid pointer arithmetic operation on a context pointer (`struct __sk_buff *skb`).
+
+**The problem:**
+
+In `helper_b()`, the code does:
+```c
+return helper_a(skb) + helper_c(val, skb + 1);
+```
+
+The expression `skb + 1` performs pointer arithmetic, which the verifier translates to `r6 += 192` (since `sizeof(struct __sk_buff)` is 192 bytes). However, context pointers like `__sk_buff` have special restrictions in the BPF verifier:
+
+1. They must be dereferenced in their **original form** without offset modifications
+2. You cannot pass a modified context pointer to a helper function
+3. The verifier tracks that `R2` was modified from its original state and rejects the call to `helper_c()`
+
+**Why this fails:**
+- Line 21: `r6 += 192` modifies the context pointer
+- Line 23: `r2 = r6` copies the modified pointer
+- Line 24: The call to `helper_c()` receives a context pointer with offset 192, which is disallowed
+
+## The Fix
+
+The simplest fix is to **remove the pointer arithmetic** on the context pointer. Since `skb + 1` doesn't make semantic sense for a network packet buffer anyway, the intended behavior is likely just to pass `skb` directly:
+
+```c
+__attribute__((noinline))
+int helper_b(int val, struct __sk_buff *skb)
+{
+	return helper_a(skb) + helper_c(val, skb);
+}
+```
+
+**Why this works:**
+- Removes the invalid pointer arithmetic on the context pointer
+- Passes the original, unmodified `skb` pointer to `helper_c()`
+- Satisfies the verifier's requirement that context pointers be used in their original form
+
+This is a one-line change that removes the `+ 1` from the `helper_c()` call.

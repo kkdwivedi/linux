@@ -1,0 +1,43 @@
+Looking at this verifier failure, I need to understand what's happening:
+
+## Analysis
+
+### The Problem
+
+The verifier tracks `sk->data` (loaded into `r7`) as a **packet pointer** with a specific offset. After the bounds check at instruction 5, `r7` has type `pkt(r=4,imm=4)` — meaning it's a packet pointer with a 4-byte read range validated.
+
+However, when `helper_a(sk, 0)` is called (instruction 8), this calls `bpf_skb_pull_data()` indirectly. The key issue is that **packet data pointers can be invalidated by helper calls that may change packet layout**. The verifier message clearly states:
+
+> `invalidated: R7: packet data may have moved; previous value was pkt at offset 0`
+
+`bpf_skb_pull_data()` can potentially reallocate or move packet data. After this call, `r7` (which held `sk->data`) becomes a plain **scalar** — the verifier can no longer guarantee it points to valid packet memory.
+
+### Why This Happens
+
+The eBPF verifier is conservative: any helper that might modify packet layout invalidates packet pointers derived from `sk->data` and `sk->data_end`. Even though `helper_a` calls `helper_b` with `len=0` (which might seem like a no-op), the verifier must assume `bpf_skb_pull_data` could change things.
+
+### The Fix
+
+The solution is to **reload `sk->data` and revalidate the bounds after the helper call**. The pointer must be refreshed from the context and the bounds check repeated.
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -1062,8 +1062,13 @@ int entry(struct __sk_buff *sk)
+ 	int *p = (void *)(long)sk->data;
+ 
+ 	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+ 		return TCX_DROP;
+ 	helper_a(sk, 0);
++
++	/* Reload and revalidate after potential packet data movement */
++	p = (void *)(long)sk->data;
++	if ((void *)(p + 1) > (void *)(long)sk->data_end)
++		return TCX_DROP;
++
+ 	*p = 42;
+ 	return TCX_PASS;
+ }
+```
+
+This is the **smallest source-level fix**: reload `sk->data` into `p` and redo the bounds check. This gives the verifier a fresh, valid packet pointer that it can track after the helper call invalidated the previous one.

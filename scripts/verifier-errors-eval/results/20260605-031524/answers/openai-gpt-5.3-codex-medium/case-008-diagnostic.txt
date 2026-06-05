@@ -1,0 +1,51 @@
+The verifier is rejecting this call:
+
+```c
+data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
+```
+
+because `buffer` is only 8 bytes:
+
+```c
+char buffer[8] = {};
+```
+
+`bpf_dynptr_slice()` treats `(R3, R4)` as a pointer/length pair. Here `R3` points to stack slot `buffer` and `R4 = 9`, so the verifier checks whether 9 bytes are valid at that stack location. They are not (only 8 bytes exist), so it fails with:
+
+- `invalid read from stack ... size 9`
+- `Invalid call argument`
+
+### Smallest likely fix
+
+Make the requested length match the buffer size:
+
+```diff
+- data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
++ data = bpf_dynptr_slice(&ptr, 0, buffer, 8);
+```
+
+### Complete minimal patch
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("?cgroup_skb/egress")
+int entry(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+	char buffer[8] = {};
+	__u64 *data;
+
+	if (bpf_dynptr_from_skb(skb, 0, &ptr))
+		return 1;
+
+	data = bpf_dynptr_slice(&ptr, 0, buffer, 8);
+
+	return !!data;
+}
+```
+
+(Alternative would be `char buffer[9]`, but changing `9` to `8` is the smallest edit.)

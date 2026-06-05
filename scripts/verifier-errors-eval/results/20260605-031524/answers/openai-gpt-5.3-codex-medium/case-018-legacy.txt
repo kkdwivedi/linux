@@ -1,0 +1,48 @@
+The verifier error is due to **lock release order**.
+
+You acquire:
+
+1. `lock_a`
+2. `lock_b`
+
+So on the success path, you must release in reverse (LIFO) order:
+
+1. `unlock(lock_b)`
+2. `unlock(lock_a)`
+
+But current code does:
+
+```c
+bpf_res_spin_unlock(&lock_a);
+bpf_res_spin_unlock(&lock_b);
+```
+
+That matches the log:
+
+- after `bpf_res_spin_lock(&lock_b)`, verifier still has a state where `lock_b` is held
+- then it sees `bpf_res_spin_unlock(&lock_a)`
+- rejects with: `bpf_res_spin_unlock cannot be out of order`
+
+### Smallest likely fix
+
+Swap the two unlocks in the non-error path.
+
+```diff
+ SEC("?tc")
+ int entry(struct __sk_buff *ctx)
+ {
+ 	if (bpf_res_spin_lock(&lock_a))
+ 		return 0;
+ 	if (bpf_res_spin_lock(&lock_b)) {
+ 		bpf_res_spin_unlock(&lock_a);
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+-	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+This keeps error-path behavior the same (only `lock_a` held there) and makes success-path unlocking verifier-compliant.

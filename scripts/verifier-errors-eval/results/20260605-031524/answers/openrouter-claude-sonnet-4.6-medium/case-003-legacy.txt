@@ -1,0 +1,46 @@
+## Analysis of the Verifier Failure
+
+### What's happening
+
+1. **Instruction 0**: `*(u64*)(r10 - 8) = r1` — stores the ctx pointer (`r1`) into the 8-byte stack slot covering addresses `[r10-8 … r10-1]`. The verifier tracks `fp-8=ctx()`.
+
+2. **Instruction 2**: `*(u8*)(r10 - 7) = r0` — writes a single byte to `r10-7`, which falls **inside** the same 8-byte slot `[r10-8 … r10-1]`. The verifier sees that the pointer has been partially overwritten and marks the slot as `fp-8=mmmmmmmm` (mixed/corrupt).
+
+3. **Instruction 3**: `r0 = *(u64*)(r10 - 8)` — because the slot is now `mmmmmmmm`, the verifier can only produce `R0=scalar()` instead of `R0=ctx()`.
+
+4. **Instruction 4**: `r0 = *(u64*)(r0 + 8)` — fails because `r0` is a plain scalar, not a tracked pointer; dereferencing it is illegal.
+
+### Root Cause
+
+The byte store at `r10 - 7` overlaps with the pointer stored at `r10 - 8` (which occupies bytes `r10-8` through `r10-1`), destroying the verifier's pointer-type information for that slot.
+
+### Fix
+
+Move the byte store to a stack address **outside** the 8-byte slot, e.g., `r10 - 9`:
+
+```diff
+-	*(u8*)(r10 - 7) = r0;				\
++	*(u8*)(r10 - 9) = r0;				\
+```
+
+`r10 - 9` does not overlap with `[r10-8 … r10-1]`, so the pointer stored at `r10 - 8` remains intact as `ctx()`. After loading it back into `r0`, the verifier knows `r0 = ctx()` and permits the subsequent field access `r0 = *(u64*)(r0 + 8)`.
+
+### Complete Fixed Source
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	*(u64*)(r10 - 8) = r1;				\
+	r0 = 0x23;					\
+	*(u8*)(r10 - 9) = r0;				\
+	r0 = *(u64*)(r10 - 8);				\
+	r0 = *(u64*)(r0 + 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+```

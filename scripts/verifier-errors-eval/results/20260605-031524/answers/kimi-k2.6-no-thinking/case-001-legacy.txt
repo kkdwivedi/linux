@@ -1,0 +1,50 @@
+Looking at the verifier log, I can see the failure clearly:
+
+## Verifier Failure Explanation
+
+The verifier rejects the program at instruction 4, the `bpf_cpumask_populate` call:
+
+```
+R1 type=scalar expected=fp
+```
+
+The issue is with the first argument `R1`:
+- The program sets `r1 = 0x123456` (the hardcoded invalid pointer)
+- The verifier sees this as `type=scalar` (an arbitrary integer/scalar value)
+- But the `bpf_cpumask_populate` helper expects `type=fp` (a frame pointer, meaning a valid pointer to stack memory or a known-valid object)
+
+The `bpf_cpumask_populate` helper requires its first argument `(struct cpumask *)` to be a pointer to valid memory where it can write the cpumask. A hardcoded constant `0x123456` is not a valid memory location - it's just an arbitrary integer that the verifier tracks as a scalar.
+
+The program was apparently trying to test error handling with an "invalid" pointer, but the verifier catches this at compile time rather than allowing it to fail at runtime.
+
+## The Fix
+
+The smallest fix is to provide a valid `struct cpumask` on the stack instead of a hardcoded invalid pointer. We need to allocate stack space for it:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct cpumask mask;
+	u64 bits;
+	int ret;
+
+	ret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));
+	if (!ret)
+		return 2;
+
+	return 0;
+}
+```
+
+## Alternative Interpretation
+
+If the intent was specifically to test that `bpf_cpumask_populate` rejects invalid pointers (a negative test), this cannot be done this way in eBPF - the verifier prevents passing invalid pointers to helpers. The verifier's job is to ensure all pointers are valid before the program runs, so runtime pointer validation of this kind isn't possible.
+
+If this was meant to be a negative test case that should fail verification, then no fix is needed (it's working as intended). But if the goal is a program that passes verification, using a valid stack-allocated `struct cpumask` is the correct approach.

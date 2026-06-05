@@ -1,0 +1,130 @@
+{
+  "answer_text": "`bpf_sk_lookup_tcp()` returns a **referenced socket** in `r0` (type `sock_or_null`).  \nIf `r0 != 0`, that reference must be released with `bpf_sk_release()` on **all exit paths**.\n\n### Why verifier rejects this\nAfter the lookup:\n\n```asm\ncall bpf_sk_lookup_tcp\nif r6 == 0 goto l1\nexit            ; <-- problematic\nl1: if r0 == 0 goto l2\n    r1 = r0\n    call bpf_sk_release\nl2: exit\n```\n\n`r6` is packet mark (independent of `r0`).  \nSo verifier explores path `r6 != 0` where program exits immediately, while `r0` may still hold a referenced socket. That is the unreleased ref id=2 leak.\n\n---\n\n### Smallest likely fix\nRoute that early-exit path through the existing release block instead of exiting directly.\n\n```diff\n@@\n-   if r6 == 0 goto l1_%=;             \\\n-   exit;                              \\\n+   if r6 == 0 goto l1_%=;             \\\n+   goto l1_%=;                        \\\n l1_%=: if r0 == 0 goto l2_%=;         \\\n```\n\nThis keeps behavior (still exits) but ensures any non-NULL `r0` gets released first.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-016-diagnostic.txt",
+    "case_id": "case-016",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 5484,
+    "prompt_path": "public/case-016/prompt_diagnostic.md",
+    "prompt_sha256": "26bd47d73322ec44031e7eab349344e578529fd97883aba22a22f0b6717c829d",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-016-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "e2a59977-1ec9-4678-952d-40f0989a0110",
+    "started_at": "2026-06-05T03:16:57+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00319375,
+    "output_cost_usd": 0.022372,
+    "total_cost_usd": 0.025565749999999998
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1825,
+    "output_tokens": 1598,
+    "raw_usage": {
+      "input_tokens": 1825,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1598,
+      "output_tokens_details": {
+        "reasoning_tokens": 1296
+      },
+      "total_tokens": 3423
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 1296,
+    "total_tokens": 3423
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629441,
+    "created_at": 1780629417,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0504706d27cabd5c006a223fa98f18819f99ad43c2563438e7",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0504706d27cabd5c006a223faa11f0819f889be70bf3c8597b",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "`bpf_sk_lookup_tcp()` returns a **referenced socket** in `r0` (type `sock_or_null`).  \nIf `r0 != 0`, that reference must be released with `bpf_sk_release()` on **all exit paths**.\n\n### Why verifier rejects this\nAfter the lookup:\n\n```asm\ncall bpf_sk_lookup_tcp\nif r6 == 0 goto l1\nexit            ; <-- problematic\nl1: if r0 == 0 goto l2\n    r1 = r0\n    call bpf_sk_release\nl2: exit\n```\n\n`r6` is packet mark (independent of `r0`).  \nSo verifier explores path `r6 != 0` where program exits immediately, while `r0` may still hold a referenced socket. That is the unreleased ref id=2 leak.\n\n---\n\n### Smallest likely fix\nRoute that early-exit path through the existing release block instead of exiting directly.\n\n```diff\n@@\n-   if r6 == 0 goto l1_%=;             \\\n-   exit;                              \\\n+   if r6 == 0 goto l1_%=;             \\\n+   goto l1_%=;                        \\\n l1_%=: if r0 == 0 goto l2_%=;         \\\n```\n\nThis keeps behavior (still exits) but ensures any non-NULL `r0` gets released first.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0504706d27cabd5c006a223fbdabb8819fa063602495c51591",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1825,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1598,
+      "output_tokens_details": {
+        "reasoning_tokens": 1296
+      },
+      "total_tokens": 3423
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

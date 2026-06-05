@@ -1,0 +1,46 @@
+## Explanation
+
+`bpf_res_spin_lock`/`unlock` are subject to **LIFO (last‑in, first‑out) lifetime safety**: the most recently acquired lock must be released first.
+
+In the program the acquisition order is:
+
+1. `lock_a` (acquired first)
+2. `lock_b` (acquired second)
+
+But the success path releases them in the **same** order they were taken:
+
+```c
+bpf_res_spin_unlock(&lock_a);   /* releases the OUTER lock first  -> wrong */
+bpf_res_spin_unlock(&lock_b);
+```
+
+While `lock_b` is still held, you may only release `lock_b`; releasing `lock_a` first violates LIFO. The compiler also hoisted the common `unlock(lock_a)` (it appears in both the failure and success branches) above the `w6 != 0` test, so the verifier sees `unlock(lock_a)` executed at insn 10 *while `lock_b` is the active (top‑of‑stack) lock* — hence:
+
+```
+bpf_res_spin_unlock cannot be out of order
+Resource Lifetime Safety: Unlock out of order
+```
+
+(The unlock in the *failure* branch is fine: there `lock_b` was never acquired, so only `lock_a` is held.)
+
+## Fix
+
+Release the nested locks in reverse acquisition order (`lock_b` before `lock_a`) in the success path:
+
+```c
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);   /* unlock last-acquired first */
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```
+
+This is the minimal change: swap the two trailing `unlock` calls so the release order is LIFO, which satisfies the verifier's resource‑lifetime check.

@@ -1,0 +1,57 @@
+## Explanation
+
+The failure is at instruction 13 (`call bpf_probe_read_kernel`):
+
+```
+R1 unbounded memory access, make sure to bounds check any such access
+```
+
+Walk through what happens to `R1`:
+
+1. `r1 = r0` — `R1` is a `map_value` pointer (size 48).
+2. `r3 = *(u32*)(r0 + 0)` — loads the `offset` field, which the verifier treats as a fully unknown 32-bit scalar: `smin=0, smax=umax=0xffffffff`.
+3. `r1 += r3` — adds that unbounded scalar to the map-value pointer, producing a `map_value` with an unbounded variable offset.
+
+When `bpf_probe_read_kernel(dst=r1, size=1, src=0)` is called, the verifier must prove that the 1-byte write at `R1` stays inside the 48-byte map value. Because the variable offset added to `R1` is unbounded, it cannot prove this, hence the rejection.
+
+The program loaded an attacker-controllable value (`offset`) from the map and used it as a pointer offset without bounding it.
+
+## Fix
+
+Bound the loaded offset before adding it to the pointer so the verifier knows the resulting access stays within the map value. Since we write 1 byte into a 48-byte value, any offset in `[0, 47]` is safe. The simplest, verifier-friendly bound is a mask:
+
+```c
+	r3 = *(u32*)(r0 + 0);				\
+	r3 &= 31;					\
+	r1 += r3;					\
+```
+
+`r3 &= 31` makes `r3` provably in `[0, 31]`, so `r1` becomes a `map_value` with a bounded variable offset, and the 1-byte `bpf_probe_read_kernel` write fits within the 48-byte value.
+
+### Patched asm block
+
+```c
+	asm volatile ("					\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = 0;						\
+	*(u64*)(r2 + 0) = r1;				\
+	r1 = %[map_a] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l0_%=;				\
+	r1 = r0;					\
+	r3 = *(u32*)(r0 + 0);				\
+	r3 &= 31;					\
+	r1 += r3;					\
+	r2 = 1;						\
+	r3 = 0;						\
+	call %[bpf_probe_read_kernel];			\
+l0_%=:	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm(bpf_probe_read_kernel),
+	  __imm_addr(map_a)
+	: __clobber_all);
+```
+
+(Equivalently you could insert an explicit branch such as `if r3 > 47 goto l0_%=;` before `r1 += r3`. The mask is the minimal one-line change and gives the verifier a tight `[0,31]` bound that comfortably fits the access.)

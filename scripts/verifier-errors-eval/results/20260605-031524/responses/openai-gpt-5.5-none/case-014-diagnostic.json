@@ -1,0 +1,124 @@
+{
+  "answer_text": "The verifier rejects the program because `r1`, the source pointer passed to `bpf_probe_read_kernel(dst, size, unsafe_ptr)`, is derived from a map value pointer plus an unchecked variable offset:\n\n```asm\nr1 = r0;                    // r1 = map value pointer, size 48\nr3 = *(u32 *)(r0 + 0);       // r3 = value->offset, range 0..0xffffffff\nr1 += r3;                   // r1 = map_value + unchecked offset\n...\ncall bpf_probe_read_kernel;\n```\n\nThe map value has size 48 bytes:\n\n```c\nstruct value {\n\t__u32 offset;   // bytes 0..3\n\t__u8 data[44]; // bytes 4..47\n};\n```\n\nThe helper reads 1 byte from `r1`:\n\n```asm\nr2 = 1;\n...\ncall bpf_probe_read_kernel;\n```\n\nSo the verifier needs to prove:\n\n```text\noffset + 1 <= 48\n```\n\nBut `offset` is loaded from the map and has no bounds check, so it may be as large as `0xffffffff`. Therefore `map_value + offset` may point outside the map value, and the helper call is rejected.\n\nThe smallest source-level fix is to add a bounds check after loading `offset` and before adding it to the map value pointer. Since the access size is 1 and the object size is 48, the maximum valid offset is 47.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -23,6 +23,7 @@ __naked void entry(void)\n \tif r0 == 0 goto l0_%=;\t\t\t\t\\\n \tr1 = r0;\t\t\t\t\t\\\n \tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n+\tif r3 > 47 goto l0_%=;\t\t\t\t\\\n \tr1 += r3;\t\t\t\t\t\\\n \tr2 = 1;\t\t\t\t\t\t\\\n \tr3 = 0;\t\t\t\t\t\t\\\n```\n\nWith this check, the verifier can constrain `r3` to `0..47` on the fall-through path. Then `r1 = map_value + r3` is known to remain within the 48-byte map value, and the 1-byte read passed to `bpf_probe_read_kernel` satisfies:\n\n```text\nr3 + 1 <= 48\n```\n\nSo the helper argument should pass bounds verification.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-none/case-014-diagnostic.txt",
+    "case_id": "case-014",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-none",
+    "prompt_bytes": 4492,
+    "prompt_path": "public/case-014/prompt_diagnostic.md",
+    "prompt_sha256": "ac5a2ab54da5cf45e897928788b3ed66a0aaeb6499aac9a13e24b90fac12b24c",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-none/case-014-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "none"
+    },
+    "run_id": "3dd6b630-2fa5-4423-8210-940188cae1b2",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.007365,
+    "output_cost_usd": 0.01665,
+    "total_cost_usd": 0.024015
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1473,
+    "output_tokens": 555,
+    "raw_usage": {
+      "input_tokens": 1473,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 555,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 2028
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 2028
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629335,
+    "created_at": 1780629324,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_07d491f72af7e73f006a223f4cecbc81a09a5f0da14ed09f1d",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier rejects the program because `r1`, the source pointer passed to `bpf_probe_read_kernel(dst, size, unsafe_ptr)`, is derived from a map value pointer plus an unchecked variable offset:\n\n```asm\nr1 = r0;                    // r1 = map value pointer, size 48\nr3 = *(u32 *)(r0 + 0);       // r3 = value->offset, range 0..0xffffffff\nr1 += r3;                   // r1 = map_value + unchecked offset\n...\ncall bpf_probe_read_kernel;\n```\n\nThe map value has size 48 bytes:\n\n```c\nstruct value {\n\t__u32 offset;   // bytes 0..3\n\t__u8 data[44]; // bytes 4..47\n};\n```\n\nThe helper reads 1 byte from `r1`:\n\n```asm\nr2 = 1;\n...\ncall bpf_probe_read_kernel;\n```\n\nSo the verifier needs to prove:\n\n```text\noffset + 1 <= 48\n```\n\nBut `offset` is loaded from the map and has no bounds check, so it may be as large as `0xffffffff`. Therefore `map_value + offset` may point outside the map value, and the helper call is rejected.\n\nThe smallest source-level fix is to add a bounds check after loading `offset` and before adding it to the map value pointer. Since the access size is 1 and the object size is 48, the maximum valid offset is 47.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -23,6 +23,7 @@ __naked void entry(void)\n \tif r0 == 0 goto l0_%=;\t\t\t\t\\\n \tr1 = r0;\t\t\t\t\t\\\n \tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n+\tif r3 > 47 goto l0_%=;\t\t\t\t\\\n \tr1 += r3;\t\t\t\t\t\\\n \tr2 = 1;\t\t\t\t\t\t\\\n \tr3 = 0;\t\t\t\t\t\t\\\n```\n\nWith this check, the verifier can constrain `r3` to `0..47` on the fall-through path. Then `r1 = map_value + r3` is known to remain within the 48-byte map value, and the 1-byte read passed to `bpf_probe_read_kernel` satisfies:\n\n```text\nr3 + 1 <= 48\n```\n\nSo the helper argument should pass bounds verification.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_07d491f72af7e73f006a223f4d906c81a0ac18306af3a075dc",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "none",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1473,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 555,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 2028
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

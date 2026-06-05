@@ -1,0 +1,30 @@
+## Verifier Failure Explanation
+
+The error message is clear:
+
+```
+sleepable global function helper_a() called in IRQ-disabled region
+```
+
+The program calls `bpf_local_irq_save(&flags)` which disables IRQs, then calls `helper_a(0)` while IRQs are still disabled. The verifier rejects this because `helper_a` is a **sleepable global function** — it contains `bpf_copy_from_user()`, which is a sleepable helper that may block on page faults. Sleeping is forbidden in an IRQ-disabled region.
+
+Even though `bpf_copy_from_user` is only reachable when `i == 0`, the verifier classifies the entire global function as sleepable because a code path within it can sleep.
+
+## Fix
+
+Move the `helper_a(0)` call **outside** the IRQ-disabled region — either before `bpf_local_irq_save` or after `bpf_local_irq_restore`. The smallest change is to call it before entering the critical section:
+
+```c
+SEC("?syscall")
+int entry(void *ctx)
+{
+	unsigned long flags;
+
+	helper_a(0);
+	bpf_local_irq_save(&flags);
+	bpf_local_irq_restore(&flags);
+	return 0;
+}
+```
+
+This ensures the sleepable function runs in a normal (IRQ-enabled) context, while the IRQ save/restore critical section remains free of any sleepable calls, satisfying the verifier's constraint.

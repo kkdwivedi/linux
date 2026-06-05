@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Swap the two unlock calls on the success path.",
+    "Avoid taking lock_b while lock_a is still held if nesting is unnecessary."
+  ],
+  "canonical_fix": "On the path where both locks are held, call bpf_res_spin_unlock(&lock_b) before bpf_res_spin_unlock(&lock_a).",
+  "case_id": "case-018",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program acquires lock_a and then lock_b, but releases lock_a before lock_b on the success path. Nested resource spin locks must be unlocked in last-in, first-out order.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-018-legacy.txt",
+    "case_id": "case-018",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 1656,
+    "prompt_path": "public/case-018/prompt_legacy.md",
+    "prompt_sha256": "f85594106276b08f72d5a03ad0c0892a8771dbe55514dd329b7aff0246cc5b64",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-018-legacy.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "981302ed-bacf-48d7-b7be-1547f517d396",
+    "started_at": "2026-06-05T04:23:06+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Analysis of the Verifier Failure\n\nThe verifier is rejecting this program with the error: **\"bpf_res_spin_unlock cannot be out of order\"**\n\n### Root Cause\n\nThe issue is with the **lock ordering and control flow**. The verifier tracks spin lock acquisition order to prevent deadlocks. Here's what happens:\n\n1. Lock `lock_a` is acquired at instruction 0\n2. Lock `lock_b` is acquired at instruction 4\n3. At instruction 8, the code attempts to unlock `lock_a`\n\nThe problem is that `lock_a` was acquired **before** `lock_b`, so locks should be released in **reverse order** (LIFO - Last In, First Out). The code is trying to unlock `lock_a` while `lock_b` is still held, which violates the spin lock ordering rules that prevent deadlocks.\n\n### The Fix\n\nThe simplest fix is to reverse the unlock order to match the reverse order of acquisition:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nstruct bpf_res_spin_lock lock_a __hidden SEC(\".data.A\");\nstruct bpf_res_spin_lock lock_b __hidden SEC(\".data.B\");\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tif (bpf_res_spin_lock(&lock_a))\n\t\treturn 0;\n\tif (bpf_res_spin_lock(&lock_b)) {\n\t\tbpf_res_spin_unlock(&lock_a);\n\t\treturn 0;\n\t}\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n\treturn 0;\n}\n```\n\n### Change Summary\n\n**Line to modify:** Swap the order of the two `bpf_res_spin_unlock` calls at the end of the function:\n- **Before:** `bpf_res_spin_unlock(&lock_a); bpf_res_spin_unlock(&lock_b);`\n- **After:** `bpf_res_spin_unlock(&lock_b); bpf_res_spin_unlock(&lock_a);`\n\nThis ensures locks are always released in reverse order of acquisition, satisfying the verifier's deadlock prevention requirements.",
+  "must_mention": [
+    "lock_b was acquired after lock_a",
+    "Unlock order must be LIFO",
+    "The success path unlocks the wrong lock first"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Changes only the error path where lock_b acquisition fails",
+    "Drops one unlock and leaks a held lock",
+    "Confuses spin lock order with IRQ flag variable order"
+  ]
+}

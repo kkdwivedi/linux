@@ -1,0 +1,117 @@
+{
+  "answer_text": "## Verifier Failure Explanation\n\nThe `bpf_local_irq_save`/`bpf_local_irq_restore` helpers enforce **strict LIFO (stack) ordering** \u2014 interrupt states must be restored in the reverse order they were saved, just like nested spinlocks.\n\nThe code saves in this order:\n1. `bpf_local_irq_save(&flags1)` \u2192 id=1\n2. `bpf_local_irq_save(&flags2)` \u2192 id=2\n\nBut then restores in the **wrong** order:\n3. `bpf_local_irq_restore(&flags1)` \u2192 tries to restore id=1, but verifier expects id=2 (the most recently saved)\n\nThe verifier error confirms this:\n> `cannot restore irq state out of order, expected id=2 acquired at insn_idx=7`\n\n## Fix\n\nSwap the two `bpf_local_irq_restore` calls so they are in the correct LIFO order:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);\n\tbpf_local_irq_restore(&flags1);\n\treturn 0;\n}\n```\n\nThis ensures `flags2` (the last saved, id=2) is restored before `flags1` (id=1), satisfying the verifier's stack-ordering constraint.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-glm-5.1-high/case-017-legacy.txt",
+    "case_id": "case-017",
+    "model": "z-ai/glm-5.1",
+    "profile": "openrouter-glm-5.1-high",
+    "prompt_bytes": 1745,
+    "prompt_path": "public/case-017/prompt_legacy.md",
+    "prompt_sha256": "7fc465b0f01c16b7f076395e6776f54156c97eb932b04d9dd1f878444e3ec702",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-glm-5.1-high/case-017-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "4a1b28b2-dd74-47db-b7ec-78fe4dc45525",
+    "started_at": "2026-06-05T03:21:39+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.0006468,
+    "output_cost_usd": 0.00204204,
+    "total_cost_usd": 0.00268884
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 660,
+    "output_tokens": 663,
+    "raw_usage": {
+      "completion_tokens": 663,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 361
+      },
+      "cost": 0.0035832,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0027846,
+        "upstream_inference_cost": 0.0035832,
+        "upstream_inference_prompt_cost": 0.0007986
+      },
+      "is_byok": false,
+      "prompt_tokens": 660,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1323
+    },
+    "reasoning_content_chars": 1373,
+    "reasoning_tokens": 361,
+    "total_tokens": 1323
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Verifier Failure Explanation\n\nThe `bpf_local_irq_save`/`bpf_local_irq_restore` helpers enforce **strict LIFO (stack) ordering** \u2014 interrupt states must be restored in the reverse order they were saved, just like nested spinlocks.\n\nThe code saves in this order:\n1. `bpf_local_irq_save(&flags1)` \u2192 id=1\n2. `bpf_local_irq_save(&flags2)` \u2192 id=2\n\nBut then restores in the **wrong** order:\n3. `bpf_local_irq_restore(&flags1)` \u2192 tries to restore id=1, but verifier expects id=2 (the most recently saved)\n\nThe verifier error confirms this:\n> `cannot restore irq state out of order, expected id=2 acquired at insn_idx=7`\n\n## Fix\n\nSwap the two `bpf_local_irq_restore` calls so they are in the correct LIFO order:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);\n\tbpf_local_irq_restore(&flags1);\n\treturn 0;\n}\n```\n\nThis ensures `flags2` (the last saved, id=2) is restored before `flags1` (id=1), satisfying the verifier's stack-ordering constraint.",
+          "reasoning": "Let me analyze this verifier failure.\n\nThe program uses `bpf_local_irq_save` and `bpf_local_irq_restore` helpers, which are used to save and restore interrupt states in eBPF programs. These helpers work like a stack - you must restore them in the reverse order of how they were saved (LIFO order).\n\nLooking at the code:\n1. `bpf_local_irq_save(&flags1)` - saves irq state, gets id=1\n2. `bpf_local_irq_save(&flags2)` - saves irq state, gets id=2\n3. `bpf_local_irq_restore(&flags1)` - tries to restore flags1 (id=1)\n4. `bpf_local_irq_restore(&flags2)` - tries to restore flags2 (id=2)\n\nThe verifier error says: \"cannot restore irq state out of order, expected id=2 acquired at insn_idx=7\"\n\nThis means the verifier expects the most recently saved irq state (id=2, which is flags2) to be restored first, but the code is trying to restore flags1 (id=1) first. This is a LIFO (Last In, First Out) ordering requirement - like a stack.\n\nThe fix is to swap the order of the restore calls so that flags2 is restored before flags1:\n\n```c\nbpf_local_irq_save(&flags1);\nbpf_local_irq_save(&flags2);\nbpf_local_irq_restore(&flags2);  // restore the most recently saved first\nbpf_local_irq_restore(&flags1);  // then restore the earlier one\n```\n\nThis is analogous to how spinlocks or interrupt disabling must be nested properly - you must release/restore in the reverse order of acquisition.",
+          "reasoning_details": [
+            {
+              "format": "unknown",
+              "index": 0,
+              "text": "Let me analyze this verifier failure.\n\nThe program uses `bpf_local_irq_save` and `bpf_local_irq_restore` helpers, which are used to save and restore interrupt states in eBPF programs. These helpers work like a stack - you must restore them in the reverse order of how they were saved (LIFO order).\n\nLooking at the code:\n1. `bpf_local_irq_save(&flags1)` - saves irq state, gets id=1\n2. `bpf_local_irq_save(&flags2)` - saves irq state, gets id=2\n3. `bpf_local_irq_restore(&flags1)` - tries to restore flags1 (id=1)\n4. `bpf_local_irq_restore(&flags2)` - tries to restore flags2 (id=2)\n\nThe verifier error says: \"cannot restore irq state out of order, expected id=2 acquired at insn_idx=7\"\n\nThis means the verifier expects the most recently saved irq state (id=2, which is flags2) to be restored first, but the code is trying to restore flags1 (id=1) first. This is a LIFO (Last In, First Out) ordering requirement - like a stack.\n\nThe fix is to swap the order of the restore calls so that flags2 is restored before flags1:\n\n```c\nbpf_local_irq_save(&flags1);\nbpf_local_irq_save(&flags2);\nbpf_local_irq_restore(&flags2);  // restore the most recently saved first\nbpf_local_irq_restore(&flags1);  // then restore the earlier one\n```\n\nThis is analogous to how spinlocks or interrupt disabling must be nested properly - you must release/restore in the reverse order of acquisition.",
+              "type": "reasoning.text"
+            }
+          ],
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "stop"
+      }
+    ],
+    "created": 1780629699,
+    "id": "gen-1780629699-dEUagoeFKzPzD2bZWJPY",
+    "model": "z-ai/glm-5.1-20260406",
+    "object": "chat.completion",
+    "provider": "Phala",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 663,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 361
+      },
+      "cost": 0.0035832,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0027846,
+        "upstream_inference_cost": 0.0035832,
+        "upstream_inference_prompt_cost": 0.0007986
+      },
+      "is_byok": false,
+      "prompt_tokens": 660,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1323
+    }
+  },
+  "reasoning_content": "Let me analyze this verifier failure.\n\nThe program uses `bpf_local_irq_save` and `bpf_local_irq_restore` helpers, which are used to save and restore interrupt states in eBPF programs. These helpers work like a stack - you must restore them in the reverse order of how they were saved (LIFO order).\n\nLooking at the code:\n1. `bpf_local_irq_save(&flags1)` - saves irq state, gets id=1\n2. `bpf_local_irq_save(&flags2)` - saves irq state, gets id=2\n3. `bpf_local_irq_restore(&flags1)` - tries to restore flags1 (id=1)\n4. `bpf_local_irq_restore(&flags2)` - tries to restore flags2 (id=2)\n\nThe verifier error says: \"cannot restore irq state out of order, expected id=2 acquired at insn_idx=7\"\n\nThis means the verifier expects the most recently saved irq state (id=2, which is flags2) to be restored first, but the code is trying to restore flags1 (id=1) first. This is a LIFO (Last In, First Out) ordering requirement - like a stack.\n\nThe fix is to swap the order of the restore calls so that flags2 is restored before flags1:\n\n```c\nbpf_local_irq_save(&flags1);\nbpf_local_irq_save(&flags2);\nbpf_local_irq_restore(&flags2);  // restore the most recently saved first\nbpf_local_irq_restore(&flags1);  // then restore the earlier one\n```\n\nThis is analogous to how spinlocks or interrupt disabling must be nested properly - you must release/restore in the reverse order of acquisition."
+}

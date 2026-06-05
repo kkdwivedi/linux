@@ -1,0 +1,52 @@
+## Verifier Failure Analysis
+
+The verifier rejects this program because at instruction 13 (the `bpf_probe_read_kernel` call), **register R1 is unbounded**. Here's why:
+
+1. At instruction 9, `r3` is loaded from offset 0 of the map value: `r3 = *(u32 *)(r0 + 0)`
+   - This gives `r3` a range of `[0, 0xffffffff]` (any 32-bit unsigned value)
+
+2. At instruction 10, `r1 += r3` adds this unbounded value to the map_value pointer
+   - `r1` becomes `map_value + (0 to 0xffffffff)`, which could point anywhere in memory
+
+3. At instruction 13, `bpf_probe_read_kernel(r1, r2, r3)` is called with this unbounded pointer
+   - The verifier cannot allow unbounded memory access because it could read outside the allocated map value
+
+The `offset` field (which is the `__u32` at offset 0) needs to be bounds-checked before being used as an offset into the map value.
+
+## Root Cause
+
+The map value structure is 48 bytes (4-byte offset + 44-byte data array). The `offset` field is read but never validated to ensure that `r0 + offset` stays within bounds `[r0, r0 + 48)`.
+
+## Fix
+
+Bounds-check the offset before adding it to `r1`. The offset must not exceed the remaining size of the map value (48 bytes):
+
+```c
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = 0;						\
+	*(u64*)(r2 + 0) = r1;				\
+	r1 = %[map_a] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l0_%=;				\
+	r1 = r0;					\
+	r3 = *(u32*)(r0 + 0);				\
+	if r3 > 48 goto l0_%=;				\
+	r1 += r3;					\
+	r2 = 1;						\
+	r3 = 0;						\
+	call %[bpf_probe_read_kernel];			\
+l0_%=:	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm(bpf_probe_read_kernel),
+	  __imm_addr(map_a)
+	: __clobber_all);
+}
+```
+
+**Change:** Add the line `if r3 > 48 goto l0_%=;` after loading `r3` and before the addition. This bounds-checks the offset, ensuring `r1 + r3` cannot exceed the map value bounds. The verifier will then recognize that the pointer passed to `bpf_probe_read_kernel` is properly bounded.

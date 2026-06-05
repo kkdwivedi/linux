@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Remove the byte store to fp-7 before reloading the pointer.",
+    "Store the scalar into a different stack slot that does not overlap the pointer spill.",
+    "Reload/use the original context pointer instead of the corrupted spill."
+  ],
+  "canonical_fix": "Do not partially overwrite the stack slot that contains the spilled pointer. Use a separate stack slot/register for the scalar byte, or reload the original pointer from a preserved uncorrupted source before dereferencing.",
+  "case_id": "case-003",
+  "category": "Register Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The program spills a pointer to the stack, partially overwrites one byte of the spill with a scalar, reloads the corrupted stack slot, and then dereferences the result. The verifier no longer treats the reloaded value as a pointer.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-glm-5.1-high/case-003-diagnostic.txt",
+    "case_id": "case-003",
+    "model": "z-ai/glm-5.1",
+    "profile": "openrouter-glm-5.1-high",
+    "prompt_bytes": 2939,
+    "prompt_path": "public/case-003/prompt_diagnostic.md",
+    "prompt_sha256": "f0ae7f2740c6566909dcad09724c1c4e67495167ac5f9dff858044543f91e0e9",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-glm-5.1-high/case-003-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "bf357fc3-a188-4e39-a293-653b00b497a5",
+    "started_at": "2026-06-05T03:21:17+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation of the Verifier Failure\n\nThe program stores the `ctx` pointer (R1) at stack offset `r10 - 8`, then writes the byte value `0x23` to `r10 - 7` \u2014 which is the **second byte** of the same 8-byte stack slot. This partially overwrites the stored pointer. When the 8-byte value is read back from `r10 - 8` into R0, the verifier can no longer track it as the original `ctx` pointer \u2014 it becomes an unknown scalar. The subsequent dereference `*(u64*)(r0 + 8)` then fails because R0 is a scalar, not a pointer.\n\n**Causal chain:**\n1. `*(u64*)(r10 - 8) = r1` \u2014 stores ctx pointer at fp-8\n2. `*(u8*)(r10 - 7) = r0` \u2014 overwrites byte 1 of that pointer, invalidating the tracked type\n3. `r0 = *(u64*)(r10 - 8)` \u2014 reads back a scalar (no longer recognized as ctx)\n4. `r0 = *(u64*)(r0 + 8)` \u2014 **invalid dereference of scalar**\n\n## Fix\n\nMove the byte write to a stack slot that doesn't overlap with the stored pointer. Changing `r10 - 7` to `r10 - 16` uses a separate stack location:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"socket\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n\tr0 = 0x23;\t\t\t\t\t\\\n\t*(u8*)(r10 - 16) = r0;\t\t\t\t\\\n\tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n\tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\nThis preserves the ctx pointer at `r10 - 8` intact, so when it's read back, the verifier still recognizes R0 as a `ctx` pointer and allows the dereference at `r0 + 8`.",
+  "must_mention": [
+    "The pointer spill is corrupted by a partial write",
+    "The reload becomes scalar/unknown",
+    "Dereferencing the scalar is invalid"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a bounds check after the pointer has already become scalar",
+    "Changes only the final load offset",
+    "Claims the issue is packet or map bounds"
+  ]
+}

@@ -1,0 +1,49 @@
+The verifier error occurs because the `helper_a` function is sleepable due to its call to `bpf_copy_from_user`, and it's called within an IRQ-disabled region created by `bpf_local_irq_save`. Sleepable functions cannot be called in IRQ-disabled contexts.
+
+The minimal fix is to move the call to `helper_a` outside the IRQ-disabled section. Here's the patch:
+
+```diff
+--- a.c
++++ b.c
+@@ -16,8 +16,8 @@
+ int entry(void *ctx)
+ {
+ 	unsigned long flags;
+-
+ 	bpf_local_irq_save(&flags);
+-	helper_a(0);
+ 	bpf_local_irq_restore(&flags);
++	helper_a(0);
+ 	return 0;
+ }
+```
+
+Fixed source:
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+int __noinline helper_a(int i)
+{
+	char data[8];
+
+	if (!i)
+		bpf_copy_from_user(data, sizeof(data), NULL);
+	return i;
+}
+
+SEC("?syscall")
+int entry(void *ctx)
+{
+	unsigned long flags;
+
+	bpf_local_irq_save(&flags);
+	bpf_local_irq_restore(&flags);
+	helper_a(0);
+	return 0;
+}
+```
+
+This change ensures the sleepable function is called only after IRQs are re-enabled, satisfying the verifier's requirements while maintaining the original functionality. Note that the NULL pointer issue in `bpf_copy_from_user` remains but wasn't flagged in the provided log.

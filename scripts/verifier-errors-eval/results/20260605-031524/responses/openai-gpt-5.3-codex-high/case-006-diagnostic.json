@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier is rejecting this program for a **policy/compatibility** reason, not a memory-safety reason:\n\n- Program type: `SEC(\"kprobe\")` (`BPF_PROG_TYPE_KPROBE` / tracing)\n- Instruction 0 calls helper: `bpf_ktime_get_coarse_ns`\n- That helper is **not in the allowed helper set** for this prog type, so verification stops immediately.\n\nSo the failure is exactly: *wrong helper for program type*.\n\n### Smallest likely fix\n\nUse a time helper that is allowed for kprobe programs, e.g. `bpf_ktime_get_ns`, or remove the helper call entirely (since return value is discarded anyway).\n\n#### Minimal patch (helper swap)\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -7,11 +7,11 @@ SEC(\"kprobe\")\n __naked void entry(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n-\tcall %[bpf_ktime_get_coarse_ns];\t\t\\\n+\tcall %[bpf_ktime_get_ns];\t\t\t\\\n \tr0 = 0;\t\t\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t:\n-\t: __imm(bpf_ktime_get_coarse_ns)\n+\t: __imm(bpf_ktime_get_ns)\n \t: __clobber_all);\n }\n```\n\nThis keeps behavior effectively the same (result unused), while using a helper typically permitted for kprobe programs.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-006-diagnostic.txt",
+    "case_id": "case-006",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 1849,
+    "prompt_path": "public/case-006/prompt_diagnostic.md",
+    "prompt_sha256": "0c351f7275500308d5dd7e77f65459b6d00560f51ba8d1d768a521650bb1de73",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-006-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "94864604-d57e-4cdf-a97a-8b8da3436e9f",
+    "started_at": "2026-06-05T03:16:46+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.001008,
+    "output_cost_usd": 0.008904,
+    "total_cost_usd": 0.009912
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 576,
+    "output_tokens": 636,
+    "raw_usage": {
+      "input_tokens": 576,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 636,
+      "output_tokens_details": {
+        "reasoning_tokens": 328
+      },
+      "total_tokens": 1212
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 328,
+    "total_tokens": 1212
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629415,
+    "created_at": 1780629407,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_02ce4904981559d8006a223f9f045081a39ace442fe57b2b42",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_02ce4904981559d8006a223f9f646881a382a28ee7919b0985",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier is rejecting this program for a **policy/compatibility** reason, not a memory-safety reason:\n\n- Program type: `SEC(\"kprobe\")` (`BPF_PROG_TYPE_KPROBE` / tracing)\n- Instruction 0 calls helper: `bpf_ktime_get_coarse_ns`\n- That helper is **not in the allowed helper set** for this prog type, so verification stops immediately.\n\nSo the failure is exactly: *wrong helper for program type*.\n\n### Smallest likely fix\n\nUse a time helper that is allowed for kprobe programs, e.g. `bpf_ktime_get_ns`, or remove the helper call entirely (since return value is discarded anyway).\n\n#### Minimal patch (helper swap)\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -7,11 +7,11 @@ SEC(\"kprobe\")\n __naked void entry(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n-\tcall %[bpf_ktime_get_coarse_ns];\t\t\\\n+\tcall %[bpf_ktime_get_ns];\t\t\t\\\n \tr0 = 0;\t\t\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t:\n-\t: __imm(bpf_ktime_get_coarse_ns)\n+\t: __imm(bpf_ktime_get_ns)\n \t: __clobber_all);\n }\n```\n\nThis keeps behavior effectively the same (result unused), while using a helper typically permitted for kprobe programs.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_02ce4904981559d8006a223fa3e69881a3acee0cf0ddc31143",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 576,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 636,
+      "output_tokens_details": {
+        "reasoning_tokens": 328
+      },
+      "total_tokens": 1212
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

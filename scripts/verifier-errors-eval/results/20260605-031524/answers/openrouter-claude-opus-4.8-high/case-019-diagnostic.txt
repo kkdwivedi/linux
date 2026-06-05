@@ -1,0 +1,40 @@
+## Explanation
+
+The verifier rejects this program at the **structural** stage, before instruction-level analysis even begins (note `processed 0 insns`).
+
+`helper_a` calls itself:
+
+```
+l0_%=:	call helper_a;
+	exit;
+```
+
+BPF-to-BPF (subprogram) calls must form a **finite, acyclic call graph**. The verifier needs an acyclic graph to compute a bounded total stack depth and to bound its analysis. A self-call creates a cycle, so it is rejected outright:
+
+```
+recursive call from helper_a() to helper_a()
+Verification failed: Program Structure: Recursive subprogram call
+```
+
+This is not something you can fix with reachability tricks — *any* call cycle is forbidden. As the suggestion says, the recursion must become an explicit bounded loop (the verifier can verify bounded loops, but not recursive subprograms).
+
+## Fix
+
+Turn the tail-recursion into an in-function loop by jumping back to the top instead of calling `helper_a` again. The original recursion was just iterating `r1` up to 4, which is trivially a bounded loop.
+
+```c
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l0_%=:	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l0_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+Here `r1` starts at 0 (set by the caller), increments each iteration, and the backward branch `if r1 < 4 goto l0_%=` terminates once `r1` reaches 4. The loop has a clear, verifier-provable bound, `r0` ends up holding 4, and there is no longer any subprogram cycle — so the program passes the structural check and the loop is accepted as a bounded loop.
+
+This is the minimal change: it removes the self-`call`/`exit` pair and redirects the loop label to the start of the body, preserving the original semantics (counting `r1` from its initial value up to 4).

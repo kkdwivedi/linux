@@ -1,0 +1,54 @@
+The failure is because `helper_a(sk, 0)` eventually calls `bpf_skb_pull_data()`. That helper is packet-mutating: it can reallocate/linearize/change the skb data area, so the verifier invalidates all packet pointers and their previous bounds checks after the call.
+
+Before the call, `p` is valid:
+
+```c
+int *p = (void *)(long)sk->data;
+
+if ((void *)(p + 1) > (void *)(long)sk->data_end)
+        return TCX_DROP;
+```
+
+The verifier records `R7=pkt(r=4)` after the bounds check. But after:
+
+```c
+helper_a(sk, 0);
+```
+
+the old packet pointer in `R7` is no longer trusted and becomes a scalar. Then:
+
+```c
+*p = 42;
+```
+
+tries to dereference that invalidated pointer:
+
+```text
+10: (63) *(u32 *)(r7 +0) = r1
+R7 invalid mem access 'scalar'
+```
+
+The fix is to reload `sk->data`/`sk->data_end` and redo the bounds check after the helper call, before using `p`.
+
+Smallest source-level fix:
+
+```diff
+ SEC("tc")
+ int entry(struct __sk_buff *sk)
+ {
+ 	int *p = (void *)(long)sk->data;
+
+ 	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+ 		return TCX_DROP;
+ 	helper_a(sk, 0);
++
++	p = (void *)(long)sk->data;
++	if ((void *)(p + 1) > (void *)(long)sk->data_end)
++		return TCX_DROP;
++
+ 	*p = 42;
+ 	return TCX_PASS;
+ }
+```
+
+The first check becomes redundant from the verifier’s perspective, but keeping it is the smallest behavioral change. A cleaner equivalent version would move the bounds check to after `helper_a()`.

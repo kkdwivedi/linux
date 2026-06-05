@@ -1,0 +1,79 @@
+The verifier failure is correct: the program acquires two resource spin locks in this order:
+
+```c
+lock_a
+lock_b
+```
+
+but on the successful path it releases them in this order:
+
+```c
+unlock lock_a
+unlock lock_b
+```
+
+That is not allowed. Resource locks must be released in last-in, first-out order, so after acquiring `lock_a` then `lock_b`, the program must release `lock_b` first, then `lock_a`.
+
+The relevant failing path is:
+
+```c
+if (bpf_res_spin_lock(&lock_a))
+	return 0;
+
+if (bpf_res_spin_lock(&lock_b)) {
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+
+/* both lock_a and lock_b are held here */
+bpf_res_spin_unlock(&lock_a); /* wrong: lock_b is the active top lock */
+bpf_res_spin_unlock(&lock_b);
+```
+
+The smallest fix is to swap the final two unlocks:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -12,7 +12,7 @@ int entry(struct __sk_buff *ctx)
+ 		bpf_res_spin_unlock(&lock_a);
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+ 	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+Resulting source:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+struct bpf_res_spin_lock lock_a __hidden SEC(".data.A");
+struct bpf_res_spin_lock lock_b __hidden SEC(".data.B");
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```
+
+Why this should satisfy the verifier:
+
+- If locking `lock_a` fails, no lock is held.
+- If locking `lock_a` succeeds but locking `lock_b` fails, only `lock_a` is held, and the program unlocks `lock_a`.
+- If both locks succeed, the active lock stack is `lock_a -> lock_b`, and the program now unlocks `lock_b` first, then `lock_a`, satisfying the verifier’s LIFO resource lifetime rule.

@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Use bpf_cpumask_create(), check for NULL, call bpf_cpumask_populate on the returned cpumask pointer, and release it before returning.",
+    "Replace the integer-cast pointer with another verifier-known memory object accepted by the kfunc contract."
+  ],
+  "canonical_fix": "Allocate or otherwise use verifier-known cpumask memory and pass that pointer to bpf_cpumask_populate, then release it if ownership was acquired.",
+  "case_id": "case-001",
+  "category": "Call Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The first argument to bpf_cpumask_populate is produced by casting the integer constant 0x123456 to a cpumask pointer. The verifier tracks it as a scalar, not as verifier-known writable memory of the required cpumask size.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-no-thinking/case-001-legacy.txt",
+    "case_id": "case-001",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-no-thinking",
+    "prompt_bytes": 1470,
+    "prompt_path": "public/case-001/prompt_legacy.md",
+    "prompt_sha256": "a0e1ddcc93f0bbda0f2825039ffd053bcc68794492e83d423c6bece1a756de61",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-no-thinking/case-001-legacy.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "disabled"
+    },
+    "run_id": "0e648e2a-827c-4962-819b-37b34369a1c3",
+    "started_at": "2026-06-05T03:18:00+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "Looking at the verifier log, I can see the failure clearly:\n\n## Verifier Failure Explanation\n\nThe verifier rejects the program at instruction 4, the `bpf_cpumask_populate` call:\n\n```\nR1 type=scalar expected=fp\n```\n\nThe issue is with the first argument `R1`:\n- The program sets `r1 = 0x123456` (the hardcoded invalid pointer)\n- The verifier sees this as `type=scalar` (an arbitrary integer/scalar value)\n- But the `bpf_cpumask_populate` helper expects `type=fp` (a frame pointer, meaning a valid pointer to stack memory or a known-valid object)\n\nThe `bpf_cpumask_populate` helper requires its first argument `(struct cpumask *)` to be a pointer to valid memory where it can write the cpumask. A hardcoded constant `0x123456` is not a valid memory location - it's just an arbitrary integer that the verifier tracks as a scalar.\n\nThe program was apparently trying to test error handling with an \"invalid\" pointer, but the verifier catches this at compile time rather than allowing it to fail at runtime.\n\n## The Fix\n\nThe smallest fix is to provide a valid `struct cpumask` on the stack instead of a hardcoded invalid pointer. We need to allocate stack space for it:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_tracing.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct cpumask mask;\n\tu64 bits;\n\tint ret;\n\n\tret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));\n\tif (!ret)\n\t\treturn 2;\n\n\treturn 0;\n}\n```\n\n## Alternative Interpretation\n\nIf the intent was specifically to test that `bpf_cpumask_populate` rejects invalid pointers (a negative test), this cannot be done this way in eBPF - the verifier prevents passing invalid pointers to helpers. The verifier's job is to ensure all pointers are valid before the program runs, so runtime pointer validation of this kind isn't possible.\n\nIf this was meant to be a negative test case that should fail verification, then no fix is needed (it's working as intended). But if the goal is a program that passes verification, using a valid stack-allocated `struct cpumask` is the correct approach.",
+  "must_mention": [
+    "R1 is a scalar/integer, not memory",
+    "The destination pointer must be verifier-known memory",
+    "Do not cast a constant integer to a pointer"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes the integer value",
+    "Adds a NULL check around the integer-cast pointer",
+    "Suppresses or ignores the return value without fixing the destination pointer"
+  ]
+}

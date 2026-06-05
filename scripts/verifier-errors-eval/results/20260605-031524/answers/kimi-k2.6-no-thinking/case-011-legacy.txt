@@ -1,0 +1,63 @@
+Looking at this verifier failure, I need to analyze what's happening with the reference tracking.
+
+## Verifier Failure Analysis
+
+The key error messages are:
+1. `arg#0 reference type('UNKNOWN ') size cannot be determined: -22`
+2. `Unreleased reference id=3 alloc_insn=14`
+3. `BPF_EXIT instruction in main prog would lead to reference leak`
+
+Let me trace through the references:
+
+- At insn 7: `bpf_ringbuf_reserve_dynptr` creates `fp-16=dynptr_ringbuf(id=2,parent_id=1) refs=1` — reference id=1 created for ptr1
+- At insn 14: `bpf_ringbuf_reserve_dynptr` creates `fp-32=dynptr_ringbuf(id=4,parent_id=3) refs=1,3` — reference id=3 created for ptr2
+
+The issue is in the control flow. When `sample` is NULL (the `if (!sample)` branch):
+- The code discards `ptr1` and `ptr2` properly (at insns that would be at the fall-through path from insn 19)
+
+But when `sample` is NOT NULL (taken branch at insn 19 to pc+9 = insn 29):
+- `bpf_ringbuf_submit_dynptr(&ptr1, 0)` is called, which releases reference id=1 (parent of ptr1)
+- However, `ptr2` is NEVER released! Reference id=3 remains held
+
+The verifier tracks that when the program exits at insn 34, reference id=3 (from ptr2's `bpf_ringbuf_reserve_dynptr`) is still held — this is a reference leak.
+
+Additionally, the error `arg#0 reference type('UNKNOWN ') size cannot be determined: -22` suggests there's also an issue with how `bpf_ringbuf_submit_dynptr` handles the dynptr. Looking more carefully: after `bpf_ringbuf_submit_dynptr(&ptr1, 0)`, the dynptr at fp-16 is consumed, but we need to also handle ptr2.
+
+## The Fix
+
+The program needs to release `ptr2` before returning. Since we submitted `ptr1`, we need to also release `ptr2` (either submit or discard it). The most appropriate action is to discard `ptr2` since we never used it.
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -107,6 +107,8 @@ int entry(void *ctx)
+ 		return 0;
+ 	}
+ 
++	bpf_ringbuf_discard_dynptr(&ptr2, 0);
++
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+ 
+ 	return 0;
+```
+
+Wait — let me reconsider the order. The `bpf_ringbuf_submit_dynptr` and `bpf_ringbuf_discard_dynptr` both consume their dynptrs. The order shouldn't matter as they operate on different ringbuf reservations. However, looking at typical patterns, let me check if there's an issue with the `bpf_dynptr_data` result being used after submit...
+
+Actually, re-reading: the `sample` pointer from `bpf_dynptr_data(&ptr1, ...)` is only valid while the dynptr is valid. After `bpf_ringbuf_submit_dynptr(&ptr1, 0)`, the dynptr is consumed. But we don't use `sample` after that, so that's fine.
+
+The real issue is simply the missing release of `ptr2`. Let me provide the cleanest fix:
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -108,6 +108,7 @@ int entry(void *ctx)
+ 	}
+ 
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
++	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+ 
+ 	return 0;
+ }
+```
+
+This adds `bpf_ringbuf_discard_dynptr(&ptr2, 0)` after submitting `ptr1`, ensuring that the second reserved ringbuf slot is properly released instead of leaking.

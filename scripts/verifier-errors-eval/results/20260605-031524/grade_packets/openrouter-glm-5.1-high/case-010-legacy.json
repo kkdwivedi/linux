@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Change helper_c(val, skb + 1) to helper_c(val, skb).",
+    "Preserve the original context pointer in another variable/register and pass that original pointer to functions that dereference ctx fields."
+  ],
+  "canonical_fix": "Pass the original skb pointer to helper_c, or keep an unmodified copy for context dereferences and perform any needed offset arithmetic only in verifier-allowed ways.",
+  "case_id": "case-010",
+  "category": "Register Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "helper_b passes skb + 1 to helper_c, whose argument is later dereferenced as a context pointer. The verifier rejects dereferencing a modified ctx pointer because the callee no longer receives the original context pointer form.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-glm-5.1-high/case-010-legacy.txt",
+    "case_id": "case-010",
+    "model": "z-ai/glm-5.1",
+    "profile": "openrouter-glm-5.1-high",
+    "prompt_bytes": 2233,
+    "prompt_path": "public/case-010/prompt_legacy.md",
+    "prompt_sha256": "42cb94c19ecff9212d01b745ca76ad135db7dce4e6c15eefc8d6cb8a521dd385",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-glm-5.1-high/case-010-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "54d088cb-f387-42ea-ab77-2bef3d5f69e6",
+    "started_at": "2026-06-05T03:21:26+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "##Verifier Failure Explanation\n\nThe problem is in `helper_b` at this line:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\nThe expression `skb + 1` performs pointer arithmetic on the context pointer (`struct __sk_buff *skb`). In pointer arithmetic, `+1` advances the pointer by `sizeof(struct __sk_buff)` = 192 bytes. The verifier tracks that `R2` is a ctx pointer with offset 192 (`R6=ctx(imm=192)` after `r6 += 192`), and when `helper_c` tries to dereference it (accessing `skb->ifindex`), the verifier rejects it with:\n\n```\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\nThe BPF verifier **prohibits passing a modified (offset-adjusted) context pointer** to a subprogram. The context pointer must be passed unmodified.\n\n## Fix\n\nChange `skb + 1` to `skb` in the call to `helper_c`:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n```\n\nThis is the minimal change \u2014 it removes the illegal pointer arithmetic on the ctx pointer, so `helper_c` receives a valid, unmodified context pointer and can safely dereference `skb->ifindex`.",
+  "must_mention": [
+    "skb + 1 modifies the ctx pointer",
+    "helper_c dereferences the ctx pointer",
+    "The callee needs the original ctx pointer"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check to skb",
+    "Changes helper_c's field access but still passes skb + 1 as ctx",
+    "Treats the error as stack depth or packet bounds"
+  ]
+}

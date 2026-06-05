@@ -1,0 +1,58 @@
+The verifier rejects the call because the 4th argument to `bpf_dynptr_slice()` is used as the size of the stack buffer passed in argument 3.
+
+In the log:
+
+```text
+9:  r1 = ... map_value(map=case.data,...)
+11: r4 = *(u32 *)(r1 +0)   ; R4=scalar(... umax=0xffffffff)
+...
+13: r3 += -32              ; R3=fp-32   // buffer
+16: call bpf_dynptr_slice
+R4 unbounded memory access
+R3 and R4 memory, len pair leads to invalid memory access
+```
+
+`slice_len` is a writable global in `.data`, so the verifier cannot trust its initializer. Even though it is initialized to `sizeof(struct ethhdr)`, the verifier treats the loaded value as an arbitrary `u32` up to `0xffffffff`. Since `buffer` is only `sizeof(struct ethhdr)` bytes on the stack, passing an unbounded length as the buffer size is unsafe.
+
+The smallest robust fix is to bound the variable before using it as the memory length. Use a local copy so the verifier can associate the checked value with the helper argument.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..1111111 100644
+--- a/case.c
++++ b/case.c
+@@ -13,14 +13,19 @@ __u32 slice_len = sizeof(struct ethhdr);
+ SEC("?tc")
+ int entry(struct __sk_buff *skb)
+ {
+ 	struct bpf_dynptr ptr;
+ 	struct ethhdr *hdr;
+ 	char buffer[sizeof(*hdr)] = {};
++	__u32 len;
+
+ 	bpf_dynptr_from_skb(skb, 0, &ptr);
+
+-	hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
++	len = slice_len;
++	if (len > sizeof(buffer))
++		return SK_DROP;
++
++	hdr = bpf_dynptr_slice(&ptr, 0, buffer, len);
+ 	if (!hdr)
+ 		return SK_DROP;
+
+ 	return SK_PASS;
+ }
+```
+
+After the check, the verifier should know `len <= sizeof(buffer)`, so the `(buffer, len)` memory pair passed to `bpf_dynptr_slice()` is bounded and valid.
+
+If the program does not need `slice_len` to be mutable, an even smaller source change would be to pass a constant directly:
+
+```c
+hdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+```
+
+But the bounds-check version preserves the existing global variable behavior.

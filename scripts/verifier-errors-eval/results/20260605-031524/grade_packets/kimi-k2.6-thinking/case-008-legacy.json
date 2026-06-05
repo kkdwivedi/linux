@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Change char buffer[8] to char buffer[9] or larger.",
+    "Change the bpf_dynptr_slice length argument from 9 to sizeof(buffer) or 8."
+  ],
+  "canonical_fix": "Make the fallback buffer at least 9 bytes or reduce the requested slice length to 8 bytes.",
+  "case_id": "case-008",
+  "category": "Call Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The fallback stack buffer is 8 bytes, but bpf_dynptr_slice is asked to use 9 bytes. The memory/length pair therefore describes a read beyond the stack object.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-thinking/case-008-legacy.txt",
+    "case_id": "case-008",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-thinking",
+    "prompt_bytes": 1995,
+    "prompt_path": "public/case-008/prompt_legacy.md",
+    "prompt_sha256": "bb69e9d81c52b441a9ca18ed1387cdaf4d358455af3a7eb36dc706949cff365c",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-thinking/case-008-legacy.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "enabled"
+    },
+    "run_id": "b38c1f15-c8f1-4f03-81b0-f2590a557216",
+    "started_at": "2026-06-05T03:46:04+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "**Explanation**\n\nThe verifier is tracking the size of every stack object.  \nIn this program:\n\n- `char buffer[8]` is an 8\u2011byte stack object (at `fp-24`).\n- `bpf_dynptr_slice(&ptr, 0, buffer, 9)` is called with `len = 9`.\n\nThe helper may copy up to `len` bytes into the supplied `buffer`, so the\nverifier checks that the buffer is at least `len` bytes large.  Here\n`9 > 8`, therefore the memory/length pair (`R3=fp-24`, `R4=9`) describes an\naccess that overflows the stack object.  The verifier rejects it with:\n\n```\ninvalid read from stack R3 off -24+8 size 9\nR3 and R4 memory, len pair leads to invalid memory access\n```\n\n**Fix**\n\nChange the requested slice length to match the actual buffer size (`8`\nbytes).  This is the smallest source\u2011level change and satisfies the\nverifier\u2019s stack bounds check.\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -2010,7 +2010,7 @@ int entry(struct __sk_buff *skb)\n \tif (bpf_dynptr_from_skb(skb, 0, &ptr))\n \t\treturn 1;\n \n-\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 9);\n+\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 8);\n \n \treturn !!data;\n }\n```\n\n(Alternatively you could increase `buffer` to 9 bytes, but changing the\nmismatched literal `9` to `8` is the minimal edit.)",
+  "must_mention": [
+    "Requested length is 9",
+    "Buffer size is 8",
+    "The memory/length pair must fit"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks data for NULL after the call",
+    "Changes the dynptr initialization but leaves 9 against an 8-byte buffer",
+    "Treats the problem as a ringbuf capacity issue"
+  ]
+}

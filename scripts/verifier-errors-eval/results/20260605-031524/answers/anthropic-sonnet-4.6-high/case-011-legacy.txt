@@ -1,0 +1,33 @@
+## Verifier Failure Explanation
+
+The verifier log shows two issues, but the fatal one is:
+
+```
+Unreleased reference id=3 alloc_insn=14
+BPF_EXIT instruction in main prog would lead to reference leak
+```
+
+`ptr2` is reserved from the ring buffer at instruction 14 (`bpf_ringbuf_reserve_dynptr` at line 101). The ring buffer reservation creates a **reference** that must be explicitly released via either `bpf_ringbuf_submit_dynptr` or `bpf_ringbuf_discard_dynptr` on **every** code path.
+
+The code handles `ptr2` in the null branch (line 106: `bpf_ringbuf_discard_dynptr(&ptr2, 0)`), but in the non-null path it only submits `ptr1` and then returns — leaving `ptr2`'s reference (id=3) unreleased. The verifier traces this path (instructions 29–34) and confirms `refs=3` is still live at `exit`.
+
+The first message (`arg#0 reference type('UNKNOWN') size cannot be determined: -22`) is a non-fatal BTF lookup issue for the `void *ctx` argument under `?raw_tp` and doesn't block verification by itself.
+
+## Fix
+
+Add a discard of `ptr2` before the final `return 0;`:
+
+```c
+--- a/case.c
++++ b/case.c
+@@ -27,6 +27,7 @@ int entry(void *ctx)
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+ 
++	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+ 	return 0;
+ }
+```
+
+This ensures `ptr2` is released on every code path:
+- **null path**: `bpf_ringbuf_discard_dynptr(&ptr1, 0)` + `bpf_ringbuf_discard_dynptr(&ptr2, 0)` (already present)
+- **non-null path**: `bpf_ringbuf_submit_dynptr(&ptr1, 0)` + `bpf_ringbuf_discard_dynptr(&ptr2, 0)` (added)

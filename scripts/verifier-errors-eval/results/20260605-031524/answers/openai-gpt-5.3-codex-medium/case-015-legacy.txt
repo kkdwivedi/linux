@@ -1,0 +1,33 @@
+The verifier rejects this because `p`/`r7` is a **packet pointer derived before a call path that can change skb data**:
+
+- `p` comes from `sk->data` (`r7 = pkt(...)`).
+- You bounds-check it once.
+- Then call `helper_a() -> helper_b() -> bpf_skb_pull_data()`.
+
+`bpf_skb_pull_data()` is one of the helpers that may reallocate/linearize packet data, so the verifier invalidates previously derived packet pointers. After the call, `r7` is no longer trusted as `pkt` (shown as `scalar`), so `*(u32 *)(r7 + 0)` fails.
+
+### Smallest likely fix
+
+Reacquire `sk->data`/`sk->data_end` and re-check bounds **after** `helper_a()` (or move the helper call before pointer derivation).  
+A minimal patch:
+
+```diff
+ SEC("tc")
+ int entry(struct __sk_buff *sk)
+ {
+-	int *p = (void *)(long)sk->data;
+-
+-	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+-		return TCX_DROP;
++	int *p;
+ 	helper_a(sk, 0);
++
++	p = (void *)(long)sk->data;
++	if ((void *)(p + 1) > (void *)(long)sk->data_end)
++		return TCX_DROP;
+ 	*p = 42;
+ 	return TCX_PASS;
+ }
+```
+
+This satisfies verifier rules: no packet pointer survives across a potentially data-mutating helper call without revalidation.

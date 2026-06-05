@@ -1,0 +1,67 @@
+{
+  "acceptable_fixes": [
+    "Use bpf_rcu_read_lock(), load task = value->task, check if (!task), call bpf_task_acquire(task) only on the non-NULL path, and unlock appropriately.",
+    "Avoid reading a nullable map kptr field directly and instead pass a task pointer from a trusted source that already satisfies bpf_task_acquire's argument contract."
+  ],
+  "canonical_fix": "Load value->task into a temporary, prove it is non-NULL on the call path, and use the verifier-required trusted/RCU-safe access pattern before calling bpf_task_acquire.",
+  "case_id": "case-009",
+  "category": "Call Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "value->task is loaded from a map value as an RCU/null-capable task pointer. bpf_task_acquire requires an argument that the verifier can prove is non-NULL and trusted/acceptable for that kfunc. Passing the field directly does not satisfy that contract.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-009-diagnostic.txt",
+    "case_id": "case-009",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 9539,
+    "prompt_path": "public/case-009/prompt_diagnostic.md",
+    "prompt_sha256": "b18a80e715b0997c1feba2b4b098abd71869a9fb867ace1b91abe52c1a1cab07",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-009-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "3db297fe-8489-4980-9a71-1651c2579f7d",
+    "started_at": "2026-06-05T03:17:18+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## What the verifier is complaining about\n\nAt the end, `entry()` does:\n\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\n`value->task` is a kptr field. When the verifier loads it:\n\n```\n3: (79) r1 = *(u64 *)(r0 +0)   ; R1=rcu_ptr_or_null_task_struct(id=10)\n```\n\nthe result type is **`rcu_ptr_or_null_task_struct`** \u2014 i.e. it may be NULL. `bpf_task_acquire()` is a kfunc whose first argument must be a *non-NULL* trusted pointer (`KF_TRUSTED_ARGS`). Passing a possibly-NULL pointer violates that contract, so the verifier rejects the call:\n\n```\nPossibly NULL pointer passed to trusted R1\n```\n\nThe kptr loaded from the map is legitimately allowed to be NULL (nothing guaranteed `value->task` was set), and the code never tests it before passing it to the acquire kfunc.\n\n## The fix\n\nLoad the kptr into a local variable, NULL-check it, and only call `bpf_task_acquire()` on the non-NULL path. This is exactly the verifier's suggestion (\"Add a NULL check and call the kfunc only on the non-NULL path\").\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired, *kptr;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n\tkptr = value->task;\n\tif (!kptr)\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(kptr);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\nAfter `if (!kptr) return 0;`, the verifier narrows `kptr` from `rcu_ptr_or_null_task_struct` to a non-NULL `rcu_ptr_task_struct`, which satisfies the trusted/non-NULL requirement of `bpf_task_acquire()`, and verification proceeds.\n\n(Equivalently, you could inline the test as `if (!value->task) return 0;` then `bpf_task_acquire(value->task);`, but storing into a local and checking that is the clearest minimal change.)",
+  "must_mention": [
+    "The first argument may be NULL",
+    "The pointer comes from value->task/map kptr state",
+    "The call must happen only after the verifier can prove the pointer satisfies the kfunc contract"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check on the returned acquired pointer only",
+    "Checks value but not value->task",
+    "Casts value->task to another pointer type without proving trust/non-NULL"
+  ]
+}

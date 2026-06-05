@@ -1,0 +1,39 @@
+The verifier is rejecting this program because **BPF subprogram recursion is forbidden**.
+
+In your `helper_a()` body, there is a direct self-call:
+
+```asm
+l0_%=: call helper_a;
+```
+
+Even though it’s conditionally reached (`if r1 < 4`), verifier does a call-graph check and immediately fails on recursive call edges:
+
+> `recursive call from helper_a() to helper_a()`
+
+---
+
+### Smallest likely fix
+
+Remove recursion by turning it into a bounded local loop in the same subprogram.
+
+#### Patch
+
+```diff
+ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+ 	asm volatile ("					\
+-	r1 += 1;					\
+-	r0 = r1;					\
+-	if r1 < 4 goto l0_%=;				\
+-	exit;						\
+-l0_%=:	call helper_a;					\
++l0_%=:	r1 += 1;					\
++	if r1 < 4 goto l0_%=;				\
++	r0 = r1;					\
+ 	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+This keeps the same intent (increment until reaching 4, then return), but avoids any function recursion, so it should satisfy verifier call-graph rules.

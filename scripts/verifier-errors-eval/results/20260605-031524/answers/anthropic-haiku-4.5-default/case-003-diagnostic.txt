@@ -1,0 +1,36 @@
+## Analysis
+
+The verifier failure occurs because:
+
+1. At instruction 0, `r1` (the context parameter) is stored at `fp-8`, and the verifier tracks it as `ctx()`
+2. At instruction 2, a byte write to `fp-7` happens, which overlaps with the `fp-8` location and causes the verifier to "lose" the precise type information about what's at `fp-8`, marking it as `mmmmmmmm` (mixed/unknown)
+3. At instruction 3, `r0 = *(u64*)(r10 - 8)` loads from that location, but since the verifier can no longer definitively prove it's a pointer (due to the overlapping write), it conservatively treats `r0` as a `scalar()`
+4. At instruction 4, the code tries to dereference `r0 + 8`, which fails because `r0` is now an integer scalar, not a pointer
+
+The root cause is the **overlapping memory write** to `fp-7` that corrupts the verifier's knowledge that `fp-8` contains a pointer.
+
+## Solution
+
+The smallest fix is to avoid the overlapping write. Move the byte write to a location that doesn't overlap with where the pointer is stored:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	*(u64*)(r10 - 8) = r1;				\
+	r0 = 0x23;					\
+	*(u8*)(r10 - 16) = r0;				\
+	r0 = *(u64*)(r10 - 8);				\
+	r0 = *(u64*)(r0 + 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+**Change**: Replace `*(u8*)(r10 - 7)` with `*(u8*)(r10 - 16)` (or any offset that doesn't overlap with the 8-byte region at `fp-8`).
+
+This preserves the verifier's ability to track that `fp-8` contains a valid pointer, allowing the subsequent dereference at instruction 4 to succeed.

@@ -1,0 +1,65 @@
+{
+  "answer_text": "Looking at this eBPF verifier failure, I need to understand what's happening:\n\n## Analysis of the Failure\n\nThe verifier log shows:\n- `liveness analysis exceeded complexity limit (10001 calls)`\n- The log shows repeated analysis of `subprog#7 helper_g` at `depth 7`\n\nThe program structure creates an enormous call graph:\n- `entry()` calls `helper_a()` 50 times\n- `helper_a()` calls `helper_b()` 50 times\n- `helper_b()` calls `helper_c()` 50 times\n- ...and so on down to `helper_g()`\n\nThis creates **50^7 = 78,125,000,000,000** potential call paths, causing the verifier's liveness analysis to exceed its complexity limit of 10,001 calls.\n\nThe key insight is that each subprogram is called **50 times in a row** from its caller. The verifier must analyze the liveness state before and after each call, and because each call site has different stack context (different offsets: 8, 16, 24, ... 80), the verifier treats them as distinct states.\n\n## The Root Cause\n\nThe `CALL_AT` macro creates calls with different stack offsets:\n```c\n#define CALL_AT(fn, off) \"r1 = r10;\" \"r1 += -\" #off \";\" \"call \" #fn \";\"\n```\n\nThe varying offsets (8, 16, 24, ..., 80) mean each call site is analyzed separately. With 50 calls per function \u00d7 7 levels of nesting, this explodes exponentially.\n\n## The Fix\n\nThe smallest fix is to **make all calls from each function use the same stack offset**, so the verifier can reuse analysis results. Instead of 10 different offsets, use a single offset for all calls within each function.\n\nHowever, looking more carefully: the `r1` setup with stack offset is actually setting up an argument that isn't used by the callees (they're `__naked` with no parameters). But the verifier still sees the different `r1` values at each call site.\n\nThe simplest fix: **Use the same offset for all calls** - change `CALLS_10` to use a single offset repeatedly, or better, eliminate the varying offset entirely since these naked functions ignore `r1` anyway.\n\n```patch\n--- a/test.c\n+++ b/test.c\n@@ -1,8 +1,7 @@\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n \n-#define CALL_AT(fn, off) \"r1 = r10;\" \"r1 += -\" #off \";\" \"call \" #fn \";\"\n-#define CALLS_10(fn) \\\n-\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n-\tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n+#define CALL(fn) \"call \" #fn \";\"\n+#define CALLS_10(fn) \\\n+\tCALL(fn) CALL(fn) CALL(fn) CALL(fn) CALL(fn) \\\n+\tCALL(fn) CALL(fn) CALL(fn) CALL(fn) CALL(fn)\n #define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n```\n\nThis removes the `r1 = r10; r1 += -offset;` preamble entirely. Since all helper functions are `__naked` and don't use their arguments, this doesn't change runtime behavior. \n\nMore importantly, **all 50 call sites now have identical register state before the call**, so the verifier can:\n1. Analyze each subprogram once\n2. Cache and reuse the results across all identical call sites\n\nThis reduces the complexity from exponential to linear in the number of unique subprograms (7 subprograms + entry = 8 analyses).",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-no-thinking/case-020-legacy.txt",
+    "case_id": "case-020",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-no-thinking",
+    "prompt_bytes": 6158,
+    "prompt_path": "public/case-020/prompt_legacy.md",
+    "prompt_sha256": "cecfa6936349490d4b7bd2b0131df3ba133333894cfcdcc4438f6f6f0196b689",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-no-thinking/case-020-legacy.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "disabled"
+    },
+    "run_id": "f7624934-a14b-47bb-baa4-e293a25d9ce5",
+    "started_at": "2026-06-05T03:18:11+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00249755,
+    "output_cost_usd": 0.003404,
+    "total_cost_usd": 0.00590155
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 2629,
+    "output_tokens": 851,
+    "raw_usage": {
+      "completion_tokens": 851,
+      "prompt_tokens": 2629,
+      "total_tokens": 3480
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 3480
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+          "content": "Looking at this eBPF verifier failure, I need to understand what's happening:\n\n## Analysis of the Failure\n\nThe verifier log shows:\n- `liveness analysis exceeded complexity limit (10001 calls)`\n- The log shows repeated analysis of `subprog#7 helper_g` at `depth 7`\n\nThe program structure creates an enormous call graph:\n- `entry()` calls `helper_a()` 50 times\n- `helper_a()` calls `helper_b()` 50 times\n- `helper_b()` calls `helper_c()` 50 times\n- ...and so on down to `helper_g()`\n\nThis creates **50^7 = 78,125,000,000,000** potential call paths, causing the verifier's liveness analysis to exceed its complexity limit of 10,001 calls.\n\nThe key insight is that each subprogram is called **50 times in a row** from its caller. The verifier must analyze the liveness state before and after each call, and because each call site has different stack context (different offsets: 8, 16, 24, ... 80), the verifier treats them as distinct states.\n\n## The Root Cause\n\nThe `CALL_AT` macro creates calls with different stack offsets:\n```c\n#define CALL_AT(fn, off) \"r1 = r10;\" \"r1 += -\" #off \";\" \"call \" #fn \";\"\n```\n\nThe varying offsets (8, 16, 24, ..., 80) mean each call site is analyzed separately. With 50 calls per function \u00d7 7 levels of nesting, this explodes exponentially.\n\n## The Fix\n\nThe smallest fix is to **make all calls from each function use the same stack offset**, so the verifier can reuse analysis results. Instead of 10 different offsets, use a single offset for all calls within each function.\n\nHowever, looking more carefully: the `r1` setup with stack offset is actually setting up an argument that isn't used by the callees (they're `__naked` with no parameters). But the verifier still sees the different `r1` values at each call site.\n\nThe simplest fix: **Use the same offset for all calls** - change `CALLS_10` to use a single offset repeatedly, or better, eliminate the varying offset entirely since these naked functions ignore `r1` anyway.\n\n```patch\n--- a/test.c\n+++ b/test.c\n@@ -1,8 +1,7 @@\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n \n-#define CALL_AT(fn, off) \"r1 = r10;\" \"r1 += -\" #off \";\" \"call \" #fn \";\"\n-#define CALLS_10(fn) \\\n-\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n-\tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n+#define CALL(fn) \"call \" #fn \";\"\n+#define CALLS_10(fn) \\\n+\tCALL(fn) CALL(fn) CALL(fn) CALL(fn) CALL(fn) \\\n+\tCALL(fn) CALL(fn) CALL(fn) CALL(fn) CALL(fn)\n #define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n```\n\nThis removes the `r1 = r10; r1 += -offset;` preamble entirely. Since all helper functions are `__naked` and don't use their arguments, this doesn't change runtime behavior. \n\nMore importantly, **all 50 call sites now have identical register state before the call**, so the verifier can:\n1. Analyze each subprogram once\n2. Cache and reuse the results across all identical call sites\n\nThis reduces the complexity from exponential to linear in the number of unique subprograms (7 subprograms + entry = 8 analyses).",
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1780629495,
+    "id": "chatcmpl-6a223ff69aaf5d25d13ef75f",
+    "model": "kimi-k2.6",
+    "object": "chat.completion",
+    "usage": {
+      "completion_tokens": 851,
+      "prompt_tokens": 2629,
+      "total_tokens": 3480
+    }
+  },
+  "reasoning_content": ""
+}

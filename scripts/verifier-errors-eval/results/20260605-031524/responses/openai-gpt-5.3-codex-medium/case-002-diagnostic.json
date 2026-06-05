@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier error is a classic **owned kptr lifetime leak**.\n\n### What failed\n\n`bpf_cpumask_create()` returns an owned `struct bpf_cpumask *` reference.  \nIn `make_object()`:\n\n- If allocation fails: returns `NULL` (no ownership).\n- If sanity check fails: releases and returns `NULL`.\n- On success: returns a **live owned reference** to caller.\n\nThen in `entry()` you do:\n\n```c\ncpumask = make_object();\n__sink(cpumask);\nreturn 0;\n```\n\nNo release happens on the success path, so verifier reports:\n\n- acquired resource at insn 0 (`bpf_cpumask_create`)\n- exits with resource still live (`Unreleased reference id=2`)\n\n### Smallest fix\n\nRelease in `entry()` on non-NULL pointer before exit.\n\n### Patch\n\n```diff\n SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n \tstruct bpf_cpumask *cpumask;\n\n \tcpumask = make_object();\n \t__sink(cpumask);\n+\tif (cpumask)\n+\t\tbpf_cpumask_release(cpumask);\n\n \treturn 0;\n }\n```\n\nThis satisfies verifier resource-lifetime rules: every acquired reference is released on all exit paths.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-medium/case-002-diagnostic.txt",
+    "case_id": "case-002",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-medium",
+    "prompt_bytes": 5048,
+    "prompt_path": "public/case-002/prompt_diagnostic.md",
+    "prompt_sha256": "63788e59d8129296d6b2d78c878578b65f355ef76b449bf180000c418be58a88",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-medium/case-002-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "19eef314-6bf3-4b6e-980d-9776d0331936",
+    "started_at": "2026-06-05T03:16:16+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00273875,
+    "output_cost_usd": 0.007238,
+    "total_cost_usd": 0.00997675
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1565,
+    "output_tokens": 517,
+    "raw_usage": {
+      "input_tokens": 1565,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 517,
+      "output_tokens_details": {
+        "reasoning_tokens": 228
+      },
+      "total_tokens": 2082
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 228,
+    "total_tokens": 2082
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629384,
+    "created_at": 1780629376,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_047b0feacc997f58006a223f80dc9c819e844436d5ef7c34de",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_047b0feacc997f58006a223f813f54819ebf3a1c929f1967be",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier error is a classic **owned kptr lifetime leak**.\n\n### What failed\n\n`bpf_cpumask_create()` returns an owned `struct bpf_cpumask *` reference.  \nIn `make_object()`:\n\n- If allocation fails: returns `NULL` (no ownership).\n- If sanity check fails: releases and returns `NULL`.\n- On success: returns a **live owned reference** to caller.\n\nThen in `entry()` you do:\n\n```c\ncpumask = make_object();\n__sink(cpumask);\nreturn 0;\n```\n\nNo release happens on the success path, so verifier reports:\n\n- acquired resource at insn 0 (`bpf_cpumask_create`)\n- exits with resource still live (`Unreleased reference id=2`)\n\n### Smallest fix\n\nRelease in `entry()` on non-NULL pointer before exit.\n\n### Patch\n\n```diff\n SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n \tstruct bpf_cpumask *cpumask;\n\n \tcpumask = make_object();\n \t__sink(cpumask);\n+\tif (cpumask)\n+\t\tbpf_cpumask_release(cpumask);\n\n \treturn 0;\n }\n```\n\nThis satisfies verifier resource-lifetime rules: every acquired reference is released on all exit paths.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_047b0feacc997f58006a223f84e368819eb885f7ec5decff10",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1565,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 517,
+      "output_tokens_details": {
+        "reasoning_tokens": 228
+      },
+      "total_tokens": 2082
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

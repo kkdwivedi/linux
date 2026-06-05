@@ -1,0 +1,74 @@
+Looking at this verifier failure, I need to analyze what's happening with the `bpf_dynptr_slice` call.
+
+## Verifier Failure Analysis
+
+The error message is:
+```
+invalid read from stack R3 off -24+8 size 9
+R3 and R4 memory, len pair leads to invalid memory access
+```
+
+Let me trace through the code:
+
+1. `buffer` is declared as `char buffer[8] = {};` - an 8-byte stack buffer
+2. At instruction 13-14: `r3 = r10 + (-24)` - R3 points to `buffer` on the stack (at fp-24)
+3. At instruction 16: `r4 = 9` - the length parameter is 9
+4. The call to `bpf_dynptr_slice(&ptr, 0, buffer, 9)` passes `buffer` (8 bytes) with length `9`
+
+The problem is a **buffer size mismatch**: The verifier sees that:
+- `buffer` is only **8 bytes** (allocated at fp-24, spanning fp-24 to fp-16)
+- But we're telling `bpf_dynptr_slice` that the buffer is **9 bytes** (`r4 = 9`)
+
+The verifier checks: "can I read 9 bytes starting from fp-24?" The buffer only has 8 bytes (fp-24 to fp-16), so reading 9 bytes would access fp-15, which is outside the allocated buffer. Hence "invalid read from stack R3 off -24+8 size 9" - the +8 indicates the buffer size is 8, but we're trying to read 9 bytes.
+
+## Understanding `bpf_dynptr_slice`
+
+The `bpf_dynptr_slice` helper takes:
+- `struct bpf_dynptr *ptr` - the dynamic pointer
+- `__u32 offset` - offset into the dynptr data
+- `void *buffer` - a buffer to copy data into (if data isn't directly accessible)
+- `__u32 len` - length of data to slice
+
+The `buffer` and `len` must be consistent: `buffer` must be at least `len` bytes.
+
+## The Fix
+
+The smallest fix is to make the buffer size match the length parameter. Either:
+- Change `buffer` to be 9 bytes: `char buffer[9] = {};`
+- Change the length parameter to 8: `bpf_dynptr_slice(&ptr, 0, buffer, 8);`
+
+Since the original code uses `9` as the slice length, and the buffer is only 8, the most likely intent was that the buffer should be 9 bytes. However, looking more carefully at typical usage patterns, if we're slicing 9 bytes but only have an 8-byte buffer, that's a clear bug.
+
+The minimal fix that preserves the apparent intent (requesting 9 bytes) is to increase the buffer size:
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -1999,7 +1999,7 @@
+ int entry(struct __sk_buff *skb)
+ {
+ 	struct bpf_dynptr ptr;
+-	char buffer[8] = {};
++	char buffer[9] = {};
+ 	__u64 *data;
+ 
+ 	if (bpf_dynptr_from_skb(skb, 0, &ptr))
+```
+
+Alternatively, if the intent was truly to only read 8 bytes (matching the `__u64 *data` pointer type), then changing the length parameter to 8 would be more appropriate:
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -2007,7 +2007,7 @@
+ 	if (bpf_dynptr_from_skb(skb, 0, &ptr))
+ 		return 1;
+ 
+-	data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
++	data = bpf_dynptr_slice(&ptr, 0, buffer, 8);
+ 
+ 	return !!data;
+ }
+```
+
+Given that `data` is typed as `__u64 *` (8 bytes), and the buffer was originally 8 bytes, the most semantically consistent fix is to **change the length parameter to 8**, since a 9-byte read into an 8-byte buffer with 8-byte pointer type seems like a typo.

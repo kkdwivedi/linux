@@ -1,0 +1,16 @@
+The verifier fails because `helper_b` passes a modified context pointer (`skb + 1`) to `helper_c`. In BPF, context pointers must not be arbitrarily modified; they must remain within the original context object. Adding 1 to the pointer advances it by the size of the structure (192 bytes), resulting in an invalid context pointer for dereferencing `skb->ifindex`. The fix is to pass the original `skb` pointer instead.
+
+**Patch:**
+```diff
+--- a/case.c
++++ b/case.c
+@@ -16,7 +16,7 @@
+ __attribute__((noinline))
+ int helper_b(int val, struct __sk_buff *skb)
+ {
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+ }
+
+ __attribute__((noinline))
+```

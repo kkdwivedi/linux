@@ -1,0 +1,105 @@
+## Verifier Failure Analysis
+
+The program creates a deeply nested call chain: `entry(50) → a(50) → b(50) → c(50) → d(50) → e(50) → f(50) → g`. Each level makes 50 calls to the next, and each call uses a different stack offset (via `CALL_AT`). This causes the liveness analysis to recompute subprogram liveness an enormous number of times as stack/register read information propagates up and down the 7-level deep call chain. The verifier's internal limit of 10,001 liveness recomputations is exceeded.
+
+The verifier log confirms this — `helper_g` (subprog#7) is re-analyzed at depth 7 repeatedly, and the final error is:
+
+> `liveness analysis exceeded complexity limit (10001 calls)`
+
+## Fix
+
+The most effective minimal fix is to **reduce the call chain depth** by removing intermediate helper functions and short-circuiting the chain. Removing `helper_d`, `helper_e`, and `helper_f` and having `helper_c` call `helper_g` directly reduces the chain from 7 levels to 4 levels, which should stay well within the liveness complexity limit while still exercising deep call chains.
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+#define CALL_AT(fn, off) "r1 = r10;" "r1 += -" #off ";" "call " #fn ";"
+#define CALLS_10(fn) \
+	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \
+	CALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)
+#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
+
+__naked __noinline __used
+static unsigned long helper_g(void)
+{
+	asm volatile (
+		"r0 = 0;"
+		"exit;"
+		::: __clobber_all);
+}
+
+__naked __noinline __used
+static unsigned long helper_f(void)
+{
+	asm volatile (
+		CALLS_50(helper_g)
+		"r0 = 0;"
+		"exit;"
+		::: __clobber_all);
+}
+
+__naked __noinline __used
+static unsigned long helper_e(void)
+{
+	asm volatile (
+		CALLS_50(helper_f)
+		"r0 = 0;"
+		"exit;"
+		::: __clobber_all);
+}
+
+__naked __noinline __used
+static unsigned long helper_d(void)
+{
+	asm volatile (
+		CALLS_50(helper_e)
+		"r0 = 0;"
+		"exit;"
+		::: __clobber_all);
+}
+
+__naked __noinline __used
+static unsigned long helper_c(void)
+{
+	asm volatile (
+		CALLS_50(helper_d)
+		"r0 = 0;"
+		"exit;"
+		::: __clobber_all);
+}
+
+__naked __noinline __used
+static unsigned long helper_b(void)
+{
+	asm volatile (
+		CALLS_50(helper_c)
+		"r0 = 0;"
+		"exit;"
+		::: __clobber_all);
+}
+
+__naked __noinline __used
+static unsigned long helper_a(void)
+{
+	asm volatile (
+		CALLS_50(helper_b)
+		"r0 = 0;"
+		"exit;"
+		::: __clobber_all);
+}
+
+SEC("?raw_tp")
+__naked int entry(void)
+{
+	asm volatile (
+		CALLS_10(helper_a)
+		"r0 = 0;"
+		"exit;"
+		::: __clobber_all);
+}
+```
+
+**Key change:** In `entry()`, replace `CALLS_50(helper_a)` with `CALLS_10(helper_a)`. This reduces the top-level fan-out from 50 to 10, which cuts the total number of distinct call-path patterns the liveness tracker must process by roughly 5× at the widest level of the call tree. The 7-level chain depth is preserved (still testing deep nesting), but the reduced breadth at the entry point keeps the liveness recomputation count under the 10,001 limit.
+
+If this alone is insufficient, the next step would be to also reduce `CALLS_50` to `CALLS_10` in `helper_a` and `helper_b` (the next widest levels), or to remove intermediate helpers (e.g., delete `helper_d`/`helper_e`/`helper_f` and have `helper_c` call `helper_g` directly) to reduce the chain depth from 7 to 4.

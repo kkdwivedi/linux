@@ -1,0 +1,39 @@
+`bpf_probe_read_kernel()` arg1 (`r1`) must be a **bounded writable memory pointer**.  
+In your program, `r1` becomes:
+
+- `r1 = map_value_ptr`
+- `r3 = *(u32 *)(r0 + 0)` (fully untrusted: `0..0xffffffff`)
+- `r1 += r3`
+
+So at call time, verifier sees `r1` as map-value pointer plus an **unbounded** offset, and rejects with:
+
+> `R1 unbounded memory access`
+
+### Smallest likely fix
+
+Add an upper-bound check on `r3` before `r1 += r3`, so verifier can prove the write stays within the 48-byte map value.
+
+#### Minimal patch
+```diff
+@@ SEC("tracepoint")
+ 	asm volatile ("					\
+ 	r2 = r10;					\
+ 	r2 += -8;					\
+ 	r1 = 0;						\
+ 	*(u64*)(r2 + 0) = r1;				\
+ 	r1 = %[map_a] ll;				\
+ 	call %[bpf_map_lookup_elem];			\
+ 	if r0 == 0 goto l0_%=;				\
+ 	r1 = r0;					\
+ 	r3 = *(u32*)(r0 + 0);				\
++	if r3 > 47 goto l0_%=;				\
+ 	r1 += r3;					\
+ 	r2 = 1;						\
+ 	r3 = 0;						\
+ 	call %[bpf_probe_read_kernel];			\
+ l0_%=:	exit;						\
+ "	:
+```
+
+This is the minimal verifier-oriented change.  
+(If you intended to write only into `data[44]`, then use `if r3 > 43` and add `r1 += 4` before `r1 += r3`.)

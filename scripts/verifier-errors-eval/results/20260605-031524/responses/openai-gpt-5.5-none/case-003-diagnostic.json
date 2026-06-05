@@ -1,0 +1,124 @@
+{
+  "answer_text": "The program stores the context pointer `r1` on the stack:\n\n```asm\n*(u64*)(r10 - 8) = r1;\n```\n\nAt that point the verifier knows stack slot `fp-8..fp-1` contains a spilled `ctx` pointer:\n\n```text\nfp-8=ctx()\n```\n\nBut then the program overwrites one byte inside that 8-byte spilled pointer:\n\n```asm\nr0 = 0x23;\n*(u8*)(r10 - 7) = r0;\n```\n\nThat byte write partially corrupts the stack slot. The verifier can no longer treat the 8 bytes at `r10 - 8` as a valid spilled pointer. The log shows this transition:\n\n```text\n2: (73) *(u8 *)(r10 -7) = r0          ; ... fp-8=mmmmmmmm\n```\n\n`mmmmmmmm` means the slot is now generic/misc stack bytes, not a tracked pointer spill.\n\nSo when the program reloads the 8 bytes:\n\n```asm\nr0 = *(u64*)(r10 - 8);\n```\n\nthe verifier gives `r0` type `scalar()` instead of `ctx()`:\n\n```text\n3: (79) r0 = *(u64 *)(r10 -8)         ; R0=scalar()\n```\n\nThen this dereference fails:\n\n```asm\nr0 = *(u64*)(r0 + 8);\n```\n\nbecause `r0` is now just an unknown scalar integer, not a pointer:\n\n```text\nR0 invalid mem access 'scalar'\n```\n\nThe smallest fix is to avoid partially overwriting the spilled pointer. If the byte store is not essential, remove it. If the test needs to keep a byte store, write to a different stack slot that does not overlap the spilled pointer, e.g. `r10 - 9`.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -7,7 +7,7 @@ __naked void entry(void)\n \tasm volatile (\"\t\t\t\t\t\\\n \t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n \tr0 = 0x23;\t\t\t\t\t\\\n-\t*(u8*)(r10 - 7) = r0;\t\t\t\t\\\n+\t*(u8*)(r10 - 9) = r0;\t\t\t\t\\\n \tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n \tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n```\n\nWith this change, the spilled pointer at `r10 - 8` remains intact, so the verifier should be able to reload it as a `ctx` pointer and allow the subsequent load from `r0 + 8`, assuming offset `8` is a valid context access for this socket program type.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-none/case-003-diagnostic.txt",
+    "case_id": "case-003",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-none",
+    "prompt_bytes": 2939,
+    "prompt_path": "public/case-003/prompt_diagnostic.md",
+    "prompt_sha256": "f0ae7f2740c6566909dcad09724c1c4e67495167ac5f9dff858044543f91e0e9",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-none/case-003-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "none"
+    },
+    "run_id": "ea2de304-2cf3-4ff1-9a05-3802f59cdb15",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.004475,
+    "output_cost_usd": 0.01908,
+    "total_cost_usd": 0.023555
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 895,
+    "output_tokens": 636,
+    "raw_usage": {
+      "input_tokens": 895,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 636,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 1531
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1531
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629336,
+    "created_at": 1780629324,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_01fa2d1ce700db8b006a223f4cd2f8819da628180e477ac0a0",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The program stores the context pointer `r1` on the stack:\n\n```asm\n*(u64*)(r10 - 8) = r1;\n```\n\nAt that point the verifier knows stack slot `fp-8..fp-1` contains a spilled `ctx` pointer:\n\n```text\nfp-8=ctx()\n```\n\nBut then the program overwrites one byte inside that 8-byte spilled pointer:\n\n```asm\nr0 = 0x23;\n*(u8*)(r10 - 7) = r0;\n```\n\nThat byte write partially corrupts the stack slot. The verifier can no longer treat the 8 bytes at `r10 - 8` as a valid spilled pointer. The log shows this transition:\n\n```text\n2: (73) *(u8 *)(r10 -7) = r0          ; ... fp-8=mmmmmmmm\n```\n\n`mmmmmmmm` means the slot is now generic/misc stack bytes, not a tracked pointer spill.\n\nSo when the program reloads the 8 bytes:\n\n```asm\nr0 = *(u64*)(r10 - 8);\n```\n\nthe verifier gives `r0` type `scalar()` instead of `ctx()`:\n\n```text\n3: (79) r0 = *(u64 *)(r10 -8)         ; R0=scalar()\n```\n\nThen this dereference fails:\n\n```asm\nr0 = *(u64*)(r0 + 8);\n```\n\nbecause `r0` is now just an unknown scalar integer, not a pointer:\n\n```text\nR0 invalid mem access 'scalar'\n```\n\nThe smallest fix is to avoid partially overwriting the spilled pointer. If the byte store is not essential, remove it. If the test needs to keep a byte store, write to a different stack slot that does not overlap the spilled pointer, e.g. `r10 - 9`.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -7,7 +7,7 @@ __naked void entry(void)\n \tasm volatile (\"\t\t\t\t\t\\\n \t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n \tr0 = 0x23;\t\t\t\t\t\\\n-\t*(u8*)(r10 - 7) = r0;\t\t\t\t\\\n+\t*(u8*)(r10 - 9) = r0;\t\t\t\t\\\n \tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n \tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n```\n\nWith this change, the spilled pointer at `r10 - 8` remains intact, so the verifier should be able to reload it as a `ctx` pointer and allow the subsequent load from `r0 + 8`, assuming offset `8` is a valid context access for this socket program type.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_01fa2d1ce700db8b006a223f4d7a98819d82016f6ba8fb6b50",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "none",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 895,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 636,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 1531
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

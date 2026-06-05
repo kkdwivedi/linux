@@ -1,0 +1,41 @@
+## Analysis
+
+The verifier failure is a **liveness analysis complexity limit exceeded** error. This occurs when the verifier's liveness analysis phase encounters too many distinct call paths to the same subprogram.
+
+### Root Cause
+
+The code creates a deeply nested call chain:
+- `entry` calls `helper_a` 50 times
+- `helper_a` calls `helper_b` 50 times
+- `helper_b` calls `helper_c` 50 times
+- ... and so on through `helper_g`
+
+This results in 50^7 ≈ 78 billion potential call paths to `helper_g`. The verifier's liveness analysis must track which registers/stack locations are live at each point, and with so many distinct paths reaching the same subprogram with different call contexts, it exceeds the internal complexity limit (10001 recomputations).
+
+The verifier's liveness analysis phase tracks variable liveness across all possible call paths. When it encounters the same function reachable through many different call chains with different argument patterns, it must re-analyze liveness multiple times, causing exponential complexity growth.
+
+## Fix
+
+The smallest fix is to **reduce the call tree depth or breadth**. The simplest approach is to reduce `CALLS_50` to a smaller number that stays under the complexity limit.
+
+### Proposed Patch
+
+```c
+#define CALLS_10(fn) \
+	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \
+	CALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)
+#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
+```
+
+Change to:
+
+```c
+#define CALLS_10(fn) \
+	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \
+	CALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)
+#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn)
+```
+
+This reduces from 50 calls per function to 20 calls per function, which lowers the call path combinations from 50^7 to 20^7 (≈1.28 million), staying well under the liveness analysis complexity budget.
+
+Alternatively, reduce the call chain depth by removing one or more helper levels (e.g., remove `helper_b` and have `helper_a` directly call `helper_c`).

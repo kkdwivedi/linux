@@ -1,0 +1,44 @@
+## Explanation
+
+The verifier failure is here:
+
+```
+24: (85) call pc+2
+dereference of modified ctx ptr R2 off=192 disallowed
+Caller passes invalid args into func#3 ('helper_c')
+```
+
+In `helper_b` the code calls:
+
+```c
+helper_c(val, skb + 1);
+```
+
+`skb` is the context pointer (`ctx()`). The expression `skb + 1` advances it by `sizeof(struct __sk_buff)` (192 bytes), producing `R2=ctx(imm=192)` — a *modified* context pointer.
+
+`helper_c` is a **global** function (the others are `static`/`noinline` but visible as global subprograms here), so the verifier validates it independently and requires its `struct __sk_buff *` argument to be a *valid, unmodified* context pointer. A ctx pointer with a non-zero offset cannot be safely dereferenced inside the callee (the callee will do `skb->ifindex`), so the verifier rejects passing the modified pointer.
+
+## Fix
+
+Pass the unmodified `skb` pointer instead of `skb + 1`:
+
+```c
+__attribute__((noinline))
+int helper_b(int val, struct __sk_buff *skb)
+{
+	return helper_a(skb) + helper_c(val, skb);
+}
+```
+
+### Patch
+
+```diff
+ __attribute__((noinline))
+ int helper_b(int val, struct __sk_buff *skb)
+ {
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+ }
+```
+
+This removes the +192 offset, so `R2` is a clean `ctx()` pointer when calling `helper_c`, satisfying the requirement that a global subprogram receive a valid (unmodified) context pointer. The `helper_c` body's `skb->ifindex` dereference then becomes legal.

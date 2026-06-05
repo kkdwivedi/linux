@@ -1,0 +1,28 @@
+## Explanation
+
+The verifier builds a static call graph for bpf2bpf (subprogram) calls and requires it to be **finite and acyclic**, so it can bound the maximum stack depth and guarantee termination of its own analysis. 
+
+`helper_a()` calls itself (`call helper_a` → `call pc-5`), creating a self-cycle in the call graph. The verifier detects this and rejects the program with *"Recursive subprogram call"* — this happens before any instruction simulation (note `processed 0 insns`), purely as a structural check.
+
+Self-recursion is never allowed, even when it is logically bounded (`r1 < 4`). The fix is to express the bounded repetition as an in-function loop instead of a recursive call.
+
+## Fix
+
+Replace the recursive `call helper_a` with a backward jump to the top of the function, turning the recursion into an equivalent bounded loop. The verifier can bound-check a loop (the counter `r1` strictly increases and the body exits once `r1 >= 4`).
+
+```c
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l0_%=:	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l0_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+Here the original tail-recursive `call helper_a; exit;` is replaced by a `goto l0_%=` back-edge (the `if r1 < 4 goto l0_%=` already provides it). The loop terminates because `r1` is monotonically incremented and the loop condition becomes false once `r1 >= 4`, giving the verifier a finite, acyclic call graph and a provably bounded loop.
+
+This is the smallest change that preserves the program's behavior (incrementing `r1` and setting `r0 = r1` until `r1` reaches 4) while removing the recursive subprogram cycle.

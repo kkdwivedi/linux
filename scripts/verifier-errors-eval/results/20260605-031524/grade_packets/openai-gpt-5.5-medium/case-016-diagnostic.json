@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Before the r6 != 0 exit path, if r0 is non-NULL, release it with bpf_sk_release(r0).",
+    "Move the mark branch before acquiring the socket when possible so no reference exists on that exit path.",
+    "Restructure cleanup with a common release path for all exits after lookup."
+  ],
+  "canonical_fix": "On every path after bpf_sk_lookup_tcp returns a non-NULL reference, call bpf_sk_release before exiting unless ownership is transferred.",
+  "case_id": "case-016",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "hard",
+  "expected_explanation": "bpf_sk_lookup_tcp can return an owned socket reference. One branch exits based on packet mark/r6 after the lookup without releasing the reference if it was acquired.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-medium/case-016-diagnostic.txt",
+    "case_id": "case-016",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-medium",
+    "prompt_bytes": 5484,
+    "prompt_path": "public/case-016/prompt_diagnostic.md",
+    "prompt_sha256": "26bd47d73322ec44031e7eab349344e578529fd97883aba22a22f0b6717c829d",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-medium/case-016-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "9cc589b2-541e-4e60-b01a-5a0bd00a8515",
+    "started_at": "2026-06-05T03:15:42+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier failure is a reference leak.\n\n`bpf_sk_lookup_tcp()` returns a referenced socket pointer (`sock_or_null`) when successful. The verifier tracks that as an owned reference:\n\n```text\n19: call bpf_sk_lookup_tcp#84 ; R0=sock_or_null(id=2) refs=2\n```\n\nImmediately after that, the program branches on `r6`:\n\n```asm\nif r6 == 0 goto l1_%=;\nexit;\n```\n\nOn the `r6 != 0` path, execution reaches `exit` without checking `r0` and without calling `bpf_sk_release()`. Since `r0` could be a non-NULL socket reference, the verifier rejects the program:\n\n```text\nUnreleased reference id=2 alloc_insn=19\n```\n\nThe existing `l1_%=` block already does the correct cleanup:\n\n```asm\nl1_%=: if r0 == 0 goto l2_%=;\nr1 = r0;\ncall bpf_sk_release;\nl2_%=: exit;\n```\n\nSo the smallest fix is to route the `r6 != 0` path through that cleanup block instead of exiting directly.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -22,7 +22,7 @@ __naked void entry(void)\n \tr5 = 0;\t\t\t\t\t\t\\\n \tcall %[bpf_sk_lookup_tcp];\t\t\t\\\n \tif r6 == 0 goto l1_%=;\t\t\t\t\\\n-\texit;\t\t\t\t\t\t\\\n+\tgoto l1_%=;\t\t\t\t\t\\\n l1_%=:\tif r0 == 0 goto l2_%=;\t\t\t\t\\\n \tr1 = r0;\t\t\t\t\t\\\n \tcall %[bpf_sk_release];\t\t\t\t\\\n```\n\nEquivalently, the conditional and early `exit` could be removed entirely, since both paths need the same cleanup after `bpf_sk_lookup_tcp()`. The key requirement is that every path after the lookup either proves `r0 == 0` or releases the non-NULL socket with `bpf_sk_release()` before exiting.",
+  "must_mention": [
+    "An owned socket reference is acquired",
+    "The mark/r6 branch exits with the reference live",
+    "Release is needed on that branch"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only releases in the r6 == 0 branch",
+    "Releases before checking that lookup returned non-NULL in a way rejected by the verifier",
+    "Adds packet bounds checks but no reference cleanup"
+  ]
+}

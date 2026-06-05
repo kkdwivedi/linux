@@ -1,0 +1,65 @@
+The verifier is rejecting `helper_a()` because it is being verified as a global BPF subprogram, not only in the context of the single call from `entry()`.
+
+At the start of `helper_a()` the verifier state is:
+
+```text
+R1=mem_or_null(id=1,sz=4)
+```
+
+So the argument `s` is known to point to 4 bytes of memory **or be NULL**. The code copies it to `r6`:
+
+```text
+7: r6 = r1   ; R6=mem_or_null(id=1,sz=4)
+```
+
+Then dereferences it without a NULL check:
+
+```text
+10: r2 = *(u32 *)(r6 +0)
+```
+
+Because `R6` is still `mem_or_null`, the verifier reports:
+
+```text
+R6 invalid mem access 'mem_or_null'
+```
+
+Even though `entry()` passes `&s`, the verifier does not use that call-site fact when validating a non-static/global subprogram.
+
+## Smallest likely fix
+
+If `helper_a()` does not need global BPF linkage, make it `static`. Then the verifier can analyze it as a local subprogram with the actual call context, where `&s` is known non-NULL.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -6,7 +6,7 @@ struct Item {
+ 	int x;
+ };
+ 
+-__noinline int helper_a(const struct Item *s)
++static __noinline int helper_a(const struct Item *s)
+ {
+ 	return bpf_get_prandom_u32() < s->x;
+ }
+```
+
+## Alternative if `helper_a()` must remain global
+
+Add an explicit NULL check:
+
+```c
+__noinline int helper_a(const struct Item *s)
+{
+	if (!s)
+		return 0;
+
+	return bpf_get_prandom_u32() < s->x;
+}
+```
+
+That directly refines `s` from `mem_or_null` to non-NULL memory before `s->x` is loaded.

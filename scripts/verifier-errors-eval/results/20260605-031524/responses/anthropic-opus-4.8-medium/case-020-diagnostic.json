@@ -1,0 +1,92 @@
+{
+  "answer_text": "## What the verifier is complaining about\n\nThe error is **not** about instruction count or state explosion \u2014 it's a specific limit:\n\n```\nliveness analysis exceeded complexity limit (10001 calls)\nVerification failed: Verifier Limit: Limit exceeded\n```\n\nThis program builds a *call tree*, not a call chain:\n\n- `entry` calls `helper_a` **50** times\n- `helper_a` calls `helper_b` **50** times\n- \u2026 down through `helper_g`\n\nThere are 7 call edges from `entry` down to `helper_g`, each with a fan-out of 50.\nSo the number of distinct call *paths* that reach `helper_g` is roughly:\n\n```\n50^7 \u2248 7.8 \u00d7 10^11\n```\n\nWhen the verifier finishes analyzing a callee it has to propagate stack/register\n**liveness** information back up into the caller frame, and it does this once per\ncall path. The kernel caps the number of these liveness recomputations at\n**10001**. With a fan-out of 50 over 7 levels, that cap is blown almost\nimmediately \u2014 hence the repeated\n\n```\nsubprog#7: analyzing (depth 7)...\n```\nlines followed by the limit error. This is purely a combinatorial-blowup problem\nin the call graph; the actual instructions are trivial (`r0 = 0; exit`).\n\n## Smallest fix\n\nReduce the *fan-out* (or depth) so the number of call paths reaching the deepest\nsubprogram stays under the 10001 liveness-recomputation budget.\n\nWith 7 nested levels you need a branching factor `b` such that `b^7 < 10001`:\n\n- `b = 4` \u2192 `4^7 = 16384` \u274c (still over)\n- `b = 3` \u2192 `3^7 = 2187` \u2705\n\nSo replacing the `CALLS_50` fan-out with a fan-out of 3 is sufficient and is the\nsmallest structural change:\n\n```c\n/* fan-out of 3 instead of 50 keeps liveness recomputations under the limit */\n#define CALLS_3(fn) \\\n\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)\n```\n\nand change every `CALLS_50(...)` to `CALLS_3(...)`, e.g.:\n\n```c\nstatic unsigned long helper_f(void)\n{\n\tasm volatile (\n\t\tCALLS_3(helper_g)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n/* ... same substitution in helper_e, helper_d, helper_c, helper_b, helper_a, entry ... */\n```\n\n(You can delete the now-unused `CALLS_10`/`CALLS_50` macros.)\n\n### Why this works\n- The verification logic and instruction shape are unchanged; only the number of\n  call paths is reduced.\n- `3^7 = 2187` liveness recomputations is comfortably below the `10001` limit, so\n  the liveness analysis completes instead of aborting with \u201cLimit exceeded\u201d.\n\nEquivalent alternatives that achieve the same goal:\n- Keep the larger fan-out but **remove several `helper_*` levels** so the tree is\n  shallower (reduce the exponent rather than the base), or\n- Use any branching factor/depth combination whose product of fan-outs is `< 10001`.\n\nThe key idea the verifier\u2019s suggestion is pointing at \u2014 *\u201cReduce the number of\ndistinct call paths\u201d* \u2014 is exactly what shrinking the fan-out accomplishes.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-020-diagnostic.txt",
+    "case_id": "case-020",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 4110,
+    "prompt_path": "public/case-020/prompt_diagnostic.md",
+    "prompt_sha256": "cb7344658f86bd080c64c73a9c8ee3095a7de5b045356c00872dce60afb5bfb8",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-020-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "b23835c9-649b-4c4c-ad1c-1ac682f21655",
+    "started_at": "2026-06-05T03:17:27+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.01072,
+    "output_cost_usd": 0.08455,
+    "total_cost_usd": 0.09527
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 2144,
+    "output_tokens": 3382,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 2144,
+      "output_tokens": 3382,
+      "output_tokens_details": {
+        "thinking_tokens": 2231
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 5526
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "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",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## What the verifier is complaining about\n\nThe error is **not** about instruction count or state explosion \u2014 it's a specific limit:\n\n```\nliveness analysis exceeded complexity limit (10001 calls)\nVerification failed: Verifier Limit: Limit exceeded\n```\n\nThis program builds a *call tree*, not a call chain:\n\n- `entry` calls `helper_a` **50** times\n- `helper_a` calls `helper_b` **50** times\n- \u2026 down through `helper_g`\n\nThere are 7 call edges from `entry` down to `helper_g`, each with a fan-out of 50.\nSo the number of distinct call *paths* that reach `helper_g` is roughly:\n\n```\n50^7 \u2248 7.8 \u00d7 10^11\n```\n\nWhen the verifier finishes analyzing a callee it has to propagate stack/register\n**liveness** information back up into the caller frame, and it does this once per\ncall path. The kernel caps the number of these liveness recomputations at\n**10001**. With a fan-out of 50 over 7 levels, that cap is blown almost\nimmediately \u2014 hence the repeated\n\n```\nsubprog#7: analyzing (depth 7)...\n```\nlines followed by the limit error. This is purely a combinatorial-blowup problem\nin the call graph; the actual instructions are trivial (`r0 = 0; exit`).\n\n## Smallest fix\n\nReduce the *fan-out* (or depth) so the number of call paths reaching the deepest\nsubprogram stays under the 10001 liveness-recomputation budget.\n\nWith 7 nested levels you need a branching factor `b` such that `b^7 < 10001`:\n\n- `b = 4` \u2192 `4^7 = 16384` \u274c (still over)\n- `b = 3` \u2192 `3^7 = 2187` \u2705\n\nSo replacing the `CALLS_50` fan-out with a fan-out of 3 is sufficient and is the\nsmallest structural change:\n\n```c\n/* fan-out of 3 instead of 50 keeps liveness recomputations under the limit */\n#define CALLS_3(fn) \\\n\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)\n```\n\nand change every `CALLS_50(...)` to `CALLS_3(...)`, e.g.:\n\n```c\nstatic unsigned long helper_f(void)\n{\n\tasm volatile (\n\t\tCALLS_3(helper_g)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n/* ... same substitution in helper_e, helper_d, helper_c, helper_b, helper_a, entry ... */\n```\n\n(You can delete the now-unused `CALLS_10`/`CALLS_50` macros.)\n\n### Why this works\n- The verification logic and instruction shape are unchanged; only the number of\n  call paths is reduced.\n- `3^7 = 2187` liveness recomputations is comfortably below the `10001` limit, so\n  the liveness analysis completes instead of aborting with \u201cLimit exceeded\u201d.\n\nEquivalent alternatives that achieve the same goal:\n- Keep the larger fan-out but **remove several `helper_*` levels** so the tree is\n  shallower (reduce the exponent rather than the base), or\n- Use any branching factor/depth combination whose product of fan-outs is `< 10001`.\n\nThe key idea the verifier\u2019s suggestion is pointing at \u2014 *\u201cReduce the number of\ndistinct call paths\u201d* \u2014 is exactly what shrinking the fan-out accomplishes.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01RVFcxroGRHPt3J2rNGyW2v",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 2144,
+      "output_tokens": 3382,
+      "output_tokens_details": {
+        "thinking_tokens": 2231
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

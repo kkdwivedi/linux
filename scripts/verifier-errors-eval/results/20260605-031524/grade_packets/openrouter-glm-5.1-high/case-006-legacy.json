@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Replace bpf_ktime_get_coarse_ns with bpf_ktime_get_ns if that satisfies the program's requirements and is allowed.",
+    "Change the program type/section to one where the helper is allowed."
+  ],
+  "canonical_fix": "Use a helper allowed for this program type, such as an allowed time helper with suitable semantics, or move the logic to a program type/attach point where bpf_ktime_get_coarse_ns is permitted.",
+  "case_id": "case-006",
+  "category": "Policy",
+  "difficulty": "easy",
+  "expected_explanation": "The program type used by this case is not allowed to call bpf_ktime_get_coarse_ns. This is a helper policy/program-type compatibility failure, not a register or memory proof failure.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-glm-5.1-high/case-006-legacy.txt",
+    "case_id": "case-006",
+    "model": "z-ai/glm-5.1",
+    "profile": "openrouter-glm-5.1-high",
+    "prompt_bytes": 1056,
+    "prompt_path": "public/case-006/prompt_legacy.md",
+    "prompt_sha256": "120f6abe2c1570fcf1f340a5df8b99d8138acdc6e56cef9bda9d3f882cdbea64",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-glm-5.1-high/case-006-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "9db3215d-82cb-492a-bf7f-541b3c71634d",
+    "started_at": "2026-06-05T03:21:20+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Verifier Failure Explanation\n\nThe error message is clear:\n\n```\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\nThe program is declared as `SEC(\"kprobe\")`, which corresponds to `BPF_PROG_TYPE_KPROBE`. The helper `bpf_ktime_get_coarse_ns` is **not available** for kprobe-type programs. In the kernel, this helper is only exposed through `tracing_func_proto()` (used by `raw_tp`/`tp` programs), not through `kprobe_prog_func_proto()`.\n\nThe kprobe program type does, however, have access to `bpf_ktime_get_ns`.\n\n## Fix\n\nReplace `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns`, which is available for kprobe programs:\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"kprobe\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_ns];\t\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_ns)\n\t: __clobber_all);\n}\n```\n\nThis is the smallest change: swap the helper name in both the `call` instruction and the `__imm` operand. `bpf_ktime_get_ns` is in `kprobe_prog_func_proto()` and will pass verification for `SEC(\"kprobe\")` programs.",
+  "must_mention": [
+    "Helper is forbidden for this program type",
+    "The fix is to use an allowed helper or compatible program type"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds register initialization around the helper call",
+    "Treats it as a GPL license issue",
+    "Suggests a bounds or NULL check"
+  ]
+}

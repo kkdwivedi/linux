@@ -1,0 +1,36 @@
+{
+  "grade": {
+    "graded_at": "2026-06-05T04:55:02+00:00",
+    "graded_by": "local-codex",
+    "missing": [],
+    "problems": [
+      "Identifies socket reference leak",
+      "but concrete patch can become a nullable release-argument failure."
+    ],
+    "repair_summary": "Manual audit: early release path calls bpf_sk_release without first proving r0 is non-NULL.",
+    "score": 2,
+    "strengths": [],
+    "success": false,
+    "verdict": "Manual audit: early release path calls bpf_sk_release without first proving r0 is non-NULL."
+  },
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-016-diagnostic.txt",
+    "case_id": "case-016",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 5484,
+    "prompt_path": "public/case-016/prompt_diagnostic.md",
+    "prompt_sha256": "26bd47d73322ec44031e7eab349344e578529fd97883aba22a22f0b6717c829d",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-016-diagnostic.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "141405d3-4ef1-4fb1-8d40-ed0b41d1bca2",
+    "started_at": "2026-06-05T03:21:06+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  }
+}

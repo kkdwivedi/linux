@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Remove the byte store to fp-7 before reloading the pointer.",
+    "Store the scalar into a different stack slot that does not overlap the pointer spill.",
+    "Reload/use the original context pointer instead of the corrupted spill."
+  ],
+  "canonical_fix": "Do not partially overwrite the stack slot that contains the spilled pointer. Use a separate stack slot/register for the scalar byte, or reload the original pointer from a preserved uncorrupted source before dereferencing.",
+  "case_id": "case-003",
+  "category": "Register Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The program spills a pointer to the stack, partially overwrites one byte of the spill with a scalar, reloads the corrupted stack slot, and then dereferences the result. The verifier no longer treats the reloaded value as a pointer.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-v3.2/case-003-diagnostic.txt",
+    "case_id": "case-003",
+    "model": "deepseek/deepseek-v3.2",
+    "profile": "openrouter-deepseek-v3.2",
+    "prompt_bytes": 2939,
+    "prompt_path": "public/case-003/prompt_diagnostic.md",
+    "prompt_sha256": "f0ae7f2740c6566909dcad09724c1c4e67495167ac5f9dff858044543f91e0e9",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-v3.2/case-003-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "9fcdd630-2fd2-4f6a-8ee4-87ff9cadc4fb",
+    "started_at": "2026-06-05T03:19:50+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier fails because the byte store at `fp-7` corrupts the pointer stored at `fp-8`. When the pointer is later loaded, it becomes an unknown scalar instead of a valid pointer, causing an invalid dereference.\n\nThe smallest fix is to adjust stack offsets so the pointer and byte stores do not overlap. Change the pointer store to `fp-16` and the byte store to `fp-8`, then load the pointer from `fp-16`.\n\n```diff\n--- a/original.c\n+++ b/fixed.c\n@@ -4,11 +4,11 @@\n SEC(\"socket\")\n __naked void entry(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n-\t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n+\t*(u64*)(r10 - 16) = r1;\t\t\t\\\n \tr0 = 0x23;\t\t\t\t\t\\\n-\t*(u8*)(r10 - 7) = r0;\t\t\t\t\\\n-\tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n+\t*(u8*)(r10 - 8) = r0;\t\t\t\t\\\n+\tr0 = *(u64*)(r10 - 16);\t\t\t\\\n \tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t::: __clobber_all);\n```\n\nThis preserves the pointer type when loaded, allowing safe dereference.",
+  "must_mention": [
+    "The pointer spill is corrupted by a partial write",
+    "The reload becomes scalar/unknown",
+    "Dereferencing the scalar is invalid"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a bounds check after the pointer has already become scalar",
+    "Changes only the final load offset",
+    "Claims the issue is packet or map bounds"
+  ]
+}

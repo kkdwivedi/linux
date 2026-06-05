@@ -1,0 +1,109 @@
+{
+  "answer_text": "Looking at the verifier log, I can see the issue:\n\nThe error message \"sleepable global function helper_a() called in IRQ-disabled region\" indicates that the verifier is rejecting the call to `helper_a()` because it's being called while interrupts are disabled (between `bpf_local_irq_save()` and `bpf_local_irq_restore()`), but `helper_a()` is marked as a sleepable function.\n\nThe problem is that `helper_a()` contains a call to `bpf_copy_from_user()`, which is a sleepable helper function. When a function contains sleepable helpers, the verifier marks the entire function as sleepable, meaning it cannot be called in atomic contexts like IRQ-disabled regions.\n\nThe smallest fix is to avoid calling `helper_a()` while interrupts are disabled. We can do this by reordering the operations:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nint __noinline helper_a(int i)\n{\n\tchar data[8];\n\n\tif (!i)\n\t\tbpf_copy_from_user(data, sizeof(data), NULL);\n\treturn i;\n}\n\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\thelper_a(0);\n\tbpf_local_irq_save(&flags);\n\tbpf_local_irq_restore(&flags);\n\treturn 0;\n}\n```\n\nThe fix moves the call to `helper_a(0)` outside the IRQ-disabled region, calling it before `bpf_local_irq_save()` instead of after. This way, the sleepable function is called in a context where sleeping is allowed, while still maintaining the IRQ protection for any code that might need it (though in this simple example, there's no actual code between the save/restore calls).",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-012-legacy.txt",
+    "case_id": "case-012",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 1526,
+    "prompt_path": "public/case-012/prompt_legacy.md",
+    "prompt_sha256": "3c7396a0a94e22b4ffa05f47bf695c68faeca27ec07a26da548d621cb3473cdb",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-012-legacy.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "da6120e1-0e69-43a2-b3a0-6e34c43815a9",
+    "started_at": "2026-06-05T03:21:02+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00012694,
+    "output_cost_usd": 0.0006498000000000001,
+    "total_cost_usd": 0.00077674
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 577,
+    "output_tokens": 361,
+    "raw_usage": {
+      "completion_tokens": 361,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.00077674,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0006498,
+        "upstream_inference_cost": 0.00077674,
+        "upstream_inference_prompt_cost": 0.00012694
+      },
+      "is_byok": false,
+      "prompt_tokens": 577,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 226,
+        "video_tokens": 0
+      },
+      "total_tokens": 938
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 938
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Looking at the verifier log, I can see the issue:\n\nThe error message \"sleepable global function helper_a() called in IRQ-disabled region\" indicates that the verifier is rejecting the call to `helper_a()` because it's being called while interrupts are disabled (between `bpf_local_irq_save()` and `bpf_local_irq_restore()`), but `helper_a()` is marked as a sleepable function.\n\nThe problem is that `helper_a()` contains a call to `bpf_copy_from_user()`, which is a sleepable helper function. When a function contains sleepable helpers, the verifier marks the entire function as sleepable, meaning it cannot be called in atomic contexts like IRQ-disabled regions.\n\nThe smallest fix is to avoid calling `helper_a()` while interrupts are disabled. We can do this by reordering the operations:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nint __noinline helper_a(int i)\n{\n\tchar data[8];\n\n\tif (!i)\n\t\tbpf_copy_from_user(data, sizeof(data), NULL);\n\treturn i;\n}\n\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\thelper_a(0);\n\tbpf_local_irq_save(&flags);\n\tbpf_local_irq_restore(&flags);\n\treturn 0;\n}\n```\n\nThe fix moves the call to `helper_a(0)` outside the IRQ-disabled region, calling it before `bpf_local_irq_save()` instead of after. This way, the sleepable function is called in a context where sleeping is allowed, while still maintaining the IRQ protection for any code that might need it (though in this simple example, there's no actual code between the save/restore calls).",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "stop"
+      }
+    ],
+    "created": 1780629662,
+    "id": "gen-1780629662-r9XQKEfjG2w1z7KzehV4",
+    "model": "qwen/qwen3-coder-480b-a35b-07-25",
+    "object": "chat.completion",
+    "provider": "Google",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 361,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.00077674,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0006498,
+        "upstream_inference_cost": 0.00077674,
+        "upstream_inference_prompt_cost": 0.00012694
+      },
+      "is_byok": false,
+      "prompt_tokens": 577,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 226,
+        "video_tokens": 0
+      },
+      "total_tokens": 938
+    }
+  },
+  "reasoning_content": ""
+}

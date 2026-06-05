@@ -1,0 +1,27 @@
+The verifier error occurs because the `bpf_ktime_get_coarse_ns` helper is not allowed for kprobe program types. The helper call violates the BPF program type's security policy.
+
+The smallest fix is to remove the disallowed helper call since its result is immediately overwritten by `r0 = 0` and never used. This simplifies the program while maintaining its behavior.
+
+Fixed source:
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("kprobe")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r0 = 0;						\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+Changes made:
+1. Removed the `call %[bpf_ktime_get_coarse_ns]` instruction since it's disallowed and unused
+2. Removed the input operand section (`: __imm(...)`) as it's no longer needed
+3. Kept the clobber section (`::: __clobber_all`) to preserve register safety
+
+The resulting program simply returns 0, which is valid for kprobe programs and avoids any policy violations.

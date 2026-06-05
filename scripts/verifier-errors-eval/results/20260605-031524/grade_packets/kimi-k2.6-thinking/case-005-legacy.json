@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Call bpf_preempt_enable() before bpf_copy_from_user and avoid re-entering the critical section unnecessarily.",
+    "Use a non-sleepable helper if one is semantically appropriate."
+  ],
+  "canonical_fix": "Move bpf_copy_from_user outside the bpf_preempt_disable/bpf_preempt_enable region, or re-enable preemption before calling it.",
+  "case_id": "case-005",
+  "category": "Execution Context Safety",
+  "difficulty": "easy",
+  "expected_explanation": "bpf_copy_from_user is sleepable, but the program calls it while preemption is disabled. The verifier rejects sleepable operations inside a non-preemptible region.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-thinking/case-005-legacy.txt",
+    "case_id": "case-005",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-thinking",
+    "prompt_bytes": 1399,
+    "prompt_path": "public/case-005/prompt_legacy.md",
+    "prompt_sha256": "09ecaba7e5e77a1dc6657b7ce0f5a2f8e64d1673f8b7b61af5daff8054d00e3f",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-thinking/case-005-legacy.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "enabled"
+    },
+    "run_id": "35718d76-351b-4974-8cf5-cc13cadc77f6",
+    "started_at": "2026-06-05T03:42:05+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "**Explanation**\n\nThe verifier rejects the program because `bpf_copy_from_user` is a *sleepable* helper, and the eBPF verifier forbids calling sleepable helpers while preemption is disabled.\n\nIn the source:\n\n```c\nbpf_preempt_disable();\nbpf_copy_from_user(&data, sizeof(data), NULL);\nbpf_preempt_enable();\n```\n\n`bpf_preempt_disable()` puts the program into a non\u2011preemptible region. Immediately after that, `bpf_copy_from_user()` is invoked. Since copying from user space may fault and sleep, the verifier emits:\n\n```\nsleepable helper bpf_copy_from_user#148 in non-preemptible region\n```\n\nand aborts verification.\n\nThe first line of the log (`arg#0 reference type('UNKNOWN ') size cannot be determined: -22`) is a non\u2011fatal warning about the unresolved BTF type for the `fentry.s` target function\u2019s context, but it is **not** the fatal error. Even if that were resolved, the preempt\u2011region violation would still cause the load to fail.\n\n**Fix**\n\nRemove the `bpf_preempt_disable()` / `bpf_preempt_enable()` pair so that the sleepable helper runs in a preemptible context (which is allowed in a sleepable `fentry.s` program). This is the smallest source change that satisfies the verifier.\n\n**Patch**\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -109,9 +109,7 @@ int entry(void *ctx)\n {\n \tu32 data;\n \n-\tbpf_preempt_disable();\n \tbpf_copy_from_user(&data, sizeof(data), NULL);\n-\tbpf_preempt_enable();\n \treturn 0;\n }\n```\n\nWith these two calls removed, the program no longer enters a non\u2011preemptible region before the sleepable helper, so the verifier will allow `bpf_copy_from_user`.",
+  "must_mention": [
+    "The helper may sleep",
+    "Preemption is disabled at the call site",
+    "The critical section must not contain sleepable operations"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks the NULL source pointer",
+    "Removes bpf_preempt_enable and leaves preemption disabled",
+    "Moves the helper deeper into the disabled region"
+  ]
+}

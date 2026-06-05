@@ -1,0 +1,57 @@
+## What the verifier is complaining about
+
+The key line is at the end:
+
+```
+Unreleased reference id=3 alloc_insn=14
+BPF_EXIT instruction in main prog would lead to reference leak
+```
+
+`bpf_ringbuf_reserve_dynptr()` is an acquire function: each successful call creates a "reference" that the verifier tracks and that **must** be released on every path that reaches `exit` (via `bpf_ringbuf_submit_dynptr()` or `bpf_ringbuf_discard_dynptr()`).
+
+In this program two dynptrs are reserved:
+
+- `ptr1` → reference id=1/2 (alloc at insn 7)
+- `ptr2` → reference id=3 (alloc at insn 14)
+
+The error/`!sample` path correctly discards both `ptr1` and `ptr2`. But the **success path** only does:
+
+```c
+bpf_ringbuf_submit_dynptr(&ptr1, 0);
+return 0;
+```
+
+It releases `ptr1` but never releases `ptr2`. So on the fall-through path to `exit` (insns 29–34), reference id=3 (`ptr2`) is still held → reference leak.
+
+(The `arg#0 reference type('UNKNOWN ') ... -22` line at the very top is just an unrelated/benign log artifact from BTF arg resolution, not the cause of rejection.)
+
+## Smallest fix
+
+Release `ptr2` on the success path too. Add a discard (or submit) of `ptr2` before returning from the success branch:
+
+```c
+	sample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));
+	if (!sample) {
+		bpf_ringbuf_discard_dynptr(&ptr1, 0);
+		bpf_ringbuf_discard_dynptr(&ptr2, 0);
+		return 0;
+	}
+
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_discard_dynptr(&ptr2, 0);   /* <-- add this */
+
+	return 0;
+```
+
+### Patch
+
+```diff
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
++	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+ 
+ 	return 0;
+```
+
+This guarantees that on **every** path that reaches `exit`, both acquired dynptr references are released, satisfying the verifier's reference-tracking requirement.
+
+(Either `bpf_ringbuf_discard_dynptr(&ptr2, 0)` or `bpf_ringbuf_submit_dynptr(&ptr2, 0)` works to clear the reference; discard is the natural choice since `ptr2` was never used.)

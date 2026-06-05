@@ -1,0 +1,29 @@
+The rejection is caused by this sequence:
+
+1. `bpf_preempt_disable()` enters a **non-preemptible** region.
+2. `bpf_copy_from_user()` is a **sleepable helper**.
+3. Verifier rule: sleepable helpers cannot be called while preemption is disabled.
+
+That matches the log exactly:
+
+> `sleepable helper bpf_copy_from_user#148 in non-preemptible region`
+
+So the smallest fix is to stop calling `bpf_copy_from_user()` inside the preempt-disabled section (or just remove the preempt section entirely).
+
+### Minimal patch
+
+```diff
+@@
+ SEC("?fentry.s/sys_getpgid")
+ int entry(void *ctx)
+ {
+ 	u32 data;
+ 
+-	bpf_preempt_disable();
+ 	bpf_copy_from_user(&data, sizeof(data), NULL);
+-	bpf_preempt_enable();
+ 	return 0;
+ }
+```
+
+This should satisfy the verifier because no sleepable helper is executed in a non-preemptible region anymore.

@@ -1,0 +1,21 @@
+The verifier error occurs because the program calls the sleepable helper `bpf_copy_from_user` within a non-preemptible region created by `bpf_preempt_disable` and `bpf_preempt_enable`. Sleepable helpers are not allowed in such regions, even though the program itself is marked as sleepable (indicated by the `.s` in the section name). The fix is to remove the non-preemptible region, allowing the sleepable helper to be called in a preemptible context.
+
+Here is the minimal patch:
+
+```diff
+--- original.c
++++ fixed.c
+@@ -6,9 +6,7 @@
+ SEC("?fentry.s/sys_getpgid")
+ int entry(void *ctx)
+ {
+ 	u32 data;
+ 
+-	bpf_preempt_disable();
+ 	bpf_copy_from_user(&data, sizeof(data), NULL);
+-	bpf_preempt_enable();
+ 	return 0;
+ }
+```
+
+This change eliminates the non-preemptible region, which should satisfy the verifier's requirement that sleepable helpers only be called in preemptible contexts. Note that the program may still have other issues (e.g., passing `NULL` as the user pointer), but those are separate from the reported error.

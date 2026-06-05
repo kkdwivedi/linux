@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Use bpf_cpumask_create(), check for NULL, call bpf_cpumask_populate on the returned cpumask pointer, and release it before returning.",
+    "Replace the integer-cast pointer with another verifier-known memory object accepted by the kfunc contract."
+  ],
+  "canonical_fix": "Allocate or otherwise use verifier-known cpumask memory and pass that pointer to bpf_cpumask_populate, then release it if ownership was acquired.",
+  "case_id": "case-001",
+  "category": "Call Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The first argument to bpf_cpumask_populate is produced by casting the integer constant 0x123456 to a cpumask pointer. The verifier tracks it as a scalar, not as verifier-known writable memory of the required cpumask size.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-opus-4.8-high/case-001-diagnostic.txt",
+    "case_id": "case-001",
+    "model": "anthropic/claude-opus-4.8",
+    "profile": "openrouter-claude-opus-4.8-high",
+    "prompt_bytes": 3387,
+    "prompt_path": "public/case-001/prompt_diagnostic.md",
+    "prompt_sha256": "70fa73da88be6c0d0c8fc97fe892aca7a31514097f240a7d4ded815530dce3b0",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-opus-4.8-high/case-001-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "662b5977-b536-44db-bca9-35cfce9e2a03",
+    "started_at": "2026-06-05T03:18:16+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation\n\nThe verifier rejects the call because of its *type-safety contract* on kfunc arguments. The first parameter of `bpf_cpumask_populate()` is\n\n```c\nint bpf_cpumask_populate(struct cpumask *cpumask, void *src, size_t src__sz);\n```\n\nand the verifier requires that the `struct cpumask *` argument point to **verifier-known memory of the right type/size** (a real, tracked cpumask object \u2014 16 bytes). In the program, `invalid` is just an integer literal cast to a pointer:\n\n```c\nstruct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;\n```\n\nWhen the program loads `r1 = 1193046` (0x123456) and calls the kfunc, R1 is a plain scalar, not a pointer to known memory. Hence:\n\n```\nR1 type=scalar expected=fp\nCall Type Safety: Invalid call argument\n```\n\nThere is no way to make a `0x123456`-style fabricated pointer satisfy this contract; you must pass a genuinely allocated/tracked cpumask.\n\n## Fix\n\nAllocate a real cpumask with `bpf_cpumask_create()` (which returns verifier-tracked, trusted memory), use it as the destination, and release it. This is the smallest change that yields a pointer of the expected type for R1.\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_tracing.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\n/* kfunc prototypes */\nstruct bpf_cpumask *bpf_cpumask_create(void) __ksym;\nvoid bpf_cpumask_release(struct bpf_cpumask *cpumask) __ksym;\nint bpf_cpumask_populate(struct cpumask *cpumask, void *src, size_t src__sz) __ksym;\n\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *mask;\n\tu64 bits;\n\tint ret;\n\n\tmask = bpf_cpumask_create();\n\tif (!mask)\n\t\treturn 0;\n\n\tret = bpf_cpumask_populate((struct cpumask *)mask, &bits, sizeof(bits));\n\n\tbpf_cpumask_release(mask);\n\n\tif (!ret)\n\t\treturn 2;\n\n\treturn 0;\n}\n```\n\n### Why this satisfies the verifier\n- `bpf_cpumask_create()` returns a pointer to a verifier-tracked allocated object of the proper type (a `struct bpf_cpumask`/`cpumask`), so R1 is now \"verifier-known memory\" of the expected size, not a scalar.\n- The null check after `create` is mandatory (the helper may return NULL).\n- `bpf_cpumask_release()` is required so the acquired reference is not leaked (otherwise the verifier would complain about an unreleased reference).\n\n(If the prototypes are already provided by a shared selftest header such as `cpumask_common.h`, just include that instead of redeclaring them.)",
+  "must_mention": [
+    "R1 is a scalar/integer, not memory",
+    "The destination pointer must be verifier-known memory",
+    "Do not cast a constant integer to a pointer"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes the integer value",
+    "Adds a NULL check around the integer-cast pointer",
+    "Suppresses or ignores the return value without fixing the destination pointer"
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Replace bpf_ktime_get_coarse_ns with bpf_ktime_get_ns if that satisfies the program's requirements and is allowed.",
+    "Change the program type/section to one where the helper is allowed."
+  ],
+  "canonical_fix": "Use a helper allowed for this program type, such as an allowed time helper with suitable semantics, or move the logic to a program type/attach point where bpf_ktime_get_coarse_ns is permitted.",
+  "case_id": "case-006",
+  "category": "Policy",
+  "difficulty": "easy",
+  "expected_explanation": "The program type used by this case is not allowed to call bpf_ktime_get_coarse_ns. This is a helper policy/program-type compatibility failure, not a register or memory proof failure.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-opus-4.8-high/case-006-legacy.txt",
+    "case_id": "case-006",
+    "model": "anthropic/claude-opus-4.8",
+    "profile": "openrouter-claude-opus-4.8-high",
+    "prompt_bytes": 1056,
+    "prompt_path": "public/case-006/prompt_legacy.md",
+    "prompt_sha256": "120f6abe2c1570fcf1f340a5df8b99d8138acdc6e56cef9bda9d3f882cdbea64",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-opus-4.8-high/case-006-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "a9b719bd-d2d0-4800-b6f7-6ad1748fff8c",
+    "started_at": "2026-06-05T03:18:19+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Explanation\n\nThe verifier rejected the program with:\n\n```\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\nThis is not a register/state-tracking error \u2014 it's a **helper-availability** check. The helper `bpf_ktime_get_coarse_ns()` is **not exposed to tracing program types** like `kprobe`.\n\nThe reason is contextual safety: kprobe (and other tracing) programs can run in NMI context, where the \"coarse\" time source isn't safe to read. So `bpf_tracing_func_proto()` (the func-proto resolver for `BPF_PROG_TYPE_KPROBE`) does not return a proto for `bpf_ktime_get_coarse_ns`, and the verifier rejects the call immediately at the first instruction.\n\nBy contrast, the generic `bpf_base_func_proto()` (used by socket/network program types) *does* allow `bpf_ktime_get_coarse_ns` (gated only by `bpf_capable()`).\n\n## Fix\n\nThe smallest source-level change is to attach the program to a type that is permitted to call this helper \u2014 e.g. a socket filter or network type \u2014 instead of `kprobe`:\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"socket\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_coarse_ns];\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_coarse_ns)\n\t: __clobber_all);\n}\n```\n\nOnly the `SEC(\"kprobe\")` \u2192 `SEC(\"socket\")` line changes. With a socket-type program the helper resolves via `bpf_base_func_proto()`, the call is accepted, and the rest of the program (`r0 = 0; exit;`) verifies trivially.\n\n(Other acceptable section choices that allow this helper include `SEC(\"tc\")`/`SEC(\"cgroup_skb\")`, etc. \u2014 any non-tracing type whose func-proto resolver falls back to `bpf_base_func_proto`.)\n\nIf instead the intent of this test is to *demonstrate* that kprobe programs cannot use the helper, then the program isn't meant to pass and should be moved to the failure/`__failure __msg(...)` test harness; but as a pass-the-verifier repair, switching the program type is the minimal fix.",
+  "must_mention": [
+    "Helper is forbidden for this program type",
+    "The fix is to use an allowed helper or compatible program type"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds register initialization around the helper call",
+    "Treats it as a GPL license issue",
+    "Suggests a bounds or NULL check"
+  ]
+}

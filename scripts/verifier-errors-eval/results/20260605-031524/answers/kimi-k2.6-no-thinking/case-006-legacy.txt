@@ -1,0 +1,57 @@
+I'll analyze this verifier failure and propose a fix.
+
+## Verifier Failure Explanation
+
+The verifier rejects the program with the error:
+```
+program of this type cannot use helper bpf_ktime_get_coarse_ns#160
+```
+
+The issue is that `bpf_ktime_get_coarse_ns` (helper #160) is **not available for `kprobe` programs**. This helper was introduced later and has restricted program type availability. Looking at the kernel's helper availability, `bpf_ktime_get_coarse_ns` is typically available for:
+- `BPF_PROG_TYPE_CGROUP_SKB`
+- `BPF_PROG_TYPE_CGROUP_SOCK`
+- `BPF_PROG_TYPE_CGROUP_SOCK_ADDR`
+- `BPF_PROG_TYPE_SOCK_OPS`
+- `BPF_PROG_TYPE_SK_SKB`
+- `BPF_PROG_TYPE_SK_MSG`
+- etc.
+
+But **NOT** for `BPF_PROG_TYPE_KPROBE`.
+
+However, `bpf_ktime_get_ns` (the older, finer-grained timing helper) **is** available for kprobe programs. This is a common compatibility issue when eBPF code is ported between different program types.
+
+## The Fix
+
+Replace `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns`, which is the traditional helper available for kprobe programs.
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("kprobe")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_ns];			\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+```
+
+## Changes Made
+
+| Aspect | Before | After |
+|--------|--------|-------|
+| Helper call | `bpf_ktime_get_coarse_ns` | `bpf_ktime_get_ns` |
+| Constraint operand | `__imm(bpf_ktime_get_coarse_ns)` | `__imm(bpf_ktime_get_ns)` |
+
+## Why This Works
+
+- `bpf_ktime_get_ns` has been available since early eBPF versions and is supported across virtually all program types including kprobes
+- The only semantic difference is that `bpf_ktime_get_ns` provides nanosecond precision (typically using the kernel's high-resolution timer), while `bpf_ktime_get_coarse_ns` uses a coarser but faster timestamp source. For most kprobe use cases, this difference is acceptable
+- The calling convention is identical (both return `u64` in `r0` with no arguments), so no other assembly changes are needed

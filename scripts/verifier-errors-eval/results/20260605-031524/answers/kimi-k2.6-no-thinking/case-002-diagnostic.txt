@@ -1,0 +1,118 @@
+Looking at the verifier log, I can analyze the failure:
+
+## Verifier Failure Explanation
+
+The issue is a **reference leak** on a specific control flow path. Let me trace through the execution:
+
+1. At instruction 0: `bpf_cpumask_create()` acquires a reference-counted object (id=2)
+2. At instruction 2: If `cpumask` is NULL, we return NULL (but this path isn't the problem)
+3. At instruction 8-11: We check `bpf_cpumask_empty(cast(cpumask))`
+   - If **true** (empty, w0 != 0), we skip to instruction 19 — **but we never release the cpumask!**
+   - If **false** (not empty), we go to instruction 12+ where `bpf_cpumask_release(cpumask)` is called
+
+The problem is in the `make_object()` function: when `bpf_cpumask_empty()` returns **true** (meaning the cpumask IS empty), the code falls through to `return cpumask;` without releasing it. But wait — looking more carefully at the verifier log:
+
+- Instruction 11: `if w0 != 0x0 goto pc+7` — if w0 is non-zero (true, meaning empty), jump to 19
+- At 19: we store to stack and exit
+
+Actually, re-reading: `bpf_cpumask_empty()` returns true (non-zero) when empty. The condition `if (!bpf_cpumask_empty(cast(cpumask)))` means "if NOT empty". So:
+- If empty (w0 != 0): branch to 19, **return cpumask without release** — this is the intended success path
+- If not empty (w0 == 0): fall through, **release and return NULL**
+
+But wait — the verifier says the resource leaks. Looking at instruction 19: we store `r6` to stack, then exit. The cpumask was never released!
+
+The issue is that `make_object()` **returns** the cpumask to the caller, but the caller (`entry`) never releases it either! The `__sink(cpumask)` doesn't consume the reference.
+
+Actually, re-reading more carefully: The error says "Unreleased reference id=2" at the program exit. The `entry` function:
+- Calls `make_object()` which returns a cpumask with a reference
+- Calls `__sink(cpumask)` which doesn't release it
+- Returns 0, exiting the program
+
+The reference is never released! The `__sink()` function is likely just preventing the variable from being optimized out, not actually consuming/releasing the reference.
+
+## The Fix
+
+We need to release the cpumask in `entry` after we're done with it. The simplest fix is to call `bpf_cpumask_release(cpumask)` before returning, or if `__sink` is meant to consume it, we need to actually release it.
+
+Looking at the pattern, `__sink` is likely a no-op helper just to use the variable. We need to explicitly release:
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -38,6 +38,7 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ 	struct bpf_cpumask *cpumask;
+ 
+ 	cpumask = make_object();
++	bpf_cpumask_release(cpumask);
+ 	__sink(cpumask);
+ 
+ 	return 0;
+```
+
+Wait — but `make_object()` can return NULL. We need to check for that.
+
+Actually, looking more carefully at `bpf_cpumask_release` — it should handle NULL (most bpf release functions do). But to be safe and match the pattern:
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -38,6 +38,8 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ 	struct bpf_cpumask *cpumask;
+ 
+ 	cpumask = make_object();
++	if (cpumask)
++		bpf_cpumask_release(cpumask);
+ 	__sink(cpumask);
+ 
+ 	return 0;
+```
+
+But actually, `bpf_cpumask_release` typically accepts NULL safely (it's a common pattern in BPF). Let me check if the simpler version works...
+
+Given the verifier tracks NULLness and the original code has paths with NULL, the safest minimal fix that matches BPF patterns:
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -38,6 +38,7 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ 	struct bpf_cpumask *cpumask;
+ 
+ 	cpumask = make_object();
++	bpf_cpumask_release(cpumask);
+ 	__sink(cpumask);
+ 
+ 	return 0;
+```
+
+If `bpf_cpumask_release` doesn't accept NULL, we'd need:
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -38,6 +38,8 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ 	struct bpf_cpumask *cpumask;
+ 
+ 	cpumask = make_object();
++	if (cpumask)
++		bpf_cpumask_release(cpumask);
+ 	__sink(cpumask);
+ 
+ 	return 0;
+```
+
+Given typical BPF helper behavior where `release` helpers accept NULL (like `kfree`, `bpf_cpumask_release` should), the **smallest fix** is:
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -38,6 +38,7 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ 	struct bpf_cpumask *cpumask;
+ 
+ 	cpumask = make_object();
++	bpf_cpumask_release(cpumask);
+ 	__sink(cpumask);
+ 
+ 	return 0;
+```
+
+This releases the reference acquired by `bpf_cpumask_create()`, satisfying the verifier's resource lifetime safety check.

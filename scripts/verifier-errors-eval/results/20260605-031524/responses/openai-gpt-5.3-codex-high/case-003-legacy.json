@@ -1,0 +1,130 @@
+{
+  "answer_text": "`r1` starts as a `ctx` pointer.  \nYou spill it to stack at `fp-8`:\n\n- `*(u64 *)(r10 - 8) = r1`  \u2192 verifier tracks `fp-8` as a spilled pointer\n\nThen you do:\n\n- `*(u8 *)(r10 - 7) = r0`\n\nThis **overlaps** that same 8-byte spill slot (`-8..-1`), so verifier invalidates pointer type info for the whole slot (`fp-8=mmmmmmmm`).  \nWhen you reload:\n\n- `r0 = *(u64 *)(r10 - 8)`\n\n`r0` becomes just a scalar, not a pointer. So next dereference fails:\n\n- `*(u64 *)(r0 + 8)` \u2192 invalid mem access `'scalar'`.\n\n### Smallest likely fix\nStore that byte in a **non-overlapping** stack byte.\n\n#### Patch\n```diff\n@@\n-       *(u8*)(r10 - 7) = r0;               \\\n+       *(u8*)(r10 - 9) = r0;               \\\n```\n\nComplete snippet:\n\n```c\nSEC(\"socket\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n\tr0 = 0x23;\t\t\t\t\t\\\n\t*(u8*)(r10 - 9) = r0;\t\t\t\t\\\n\tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n\tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\nThis preserves the spilled pointer metadata, so `r0` remains a pointer after reload.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-003-legacy.txt",
+    "case_id": "case-003",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 1266,
+    "prompt_path": "public/case-003/prompt_legacy.md",
+    "prompt_sha256": "ff79e3ce2090bf446fcac0650e4037fac5ac92314018b0ce73b4c838bf23c7cf",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-003-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "c611fb46-c4ac-48eb-a721-474de77f5b08",
+    "started_at": "2026-06-05T03:16:44+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00095725,
+    "output_cost_usd": 0.034972,
+    "total_cost_usd": 0.03592925
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 547,
+    "output_tokens": 2498,
+    "raw_usage": {
+      "input_tokens": 547,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 2498,
+      "output_tokens_details": {
+        "reasoning_tokens": 2114
+      },
+      "total_tokens": 3045
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 2114,
+    "total_tokens": 3045
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629444,
+    "created_at": 1780629404,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0869c14b282f08a3006a223f9c2b7081a2a4f5d61422ccd21b",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0869c14b282f08a3006a223f9c94b481a2abc9885e4cc84af1",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "`r1` starts as a `ctx` pointer.  \nYou spill it to stack at `fp-8`:\n\n- `*(u64 *)(r10 - 8) = r1`  \u2192 verifier tracks `fp-8` as a spilled pointer\n\nThen you do:\n\n- `*(u8 *)(r10 - 7) = r0`\n\nThis **overlaps** that same 8-byte spill slot (`-8..-1`), so verifier invalidates pointer type info for the whole slot (`fp-8=mmmmmmmm`).  \nWhen you reload:\n\n- `r0 = *(u64 *)(r10 - 8)`\n\n`r0` becomes just a scalar, not a pointer. So next dereference fails:\n\n- `*(u64 *)(r0 + 8)` \u2192 invalid mem access `'scalar'`.\n\n### Smallest likely fix\nStore that byte in a **non-overlapping** stack byte.\n\n#### Patch\n```diff\n@@\n-       *(u8*)(r10 - 7) = r0;               \\\n+       *(u8*)(r10 - 9) = r0;               \\\n```\n\nComplete snippet:\n\n```c\nSEC(\"socket\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n\tr0 = 0x23;\t\t\t\t\t\\\n\t*(u8*)(r10 - 9) = r0;\t\t\t\t\\\n\tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n\tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\nThis preserves the spilled pointer metadata, so `r0` remains a pointer after reload.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0869c14b282f08a3006a223fbf7a5481a2aa311aaa1186a254",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 547,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 2498,
+      "output_tokens_details": {
+        "reasoning_tokens": 2114
+      },
+      "total_tokens": 3045
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

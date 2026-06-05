@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Replace bpf_ktime_get_coarse_ns with bpf_ktime_get_ns if that satisfies the program's requirements and is allowed.",
+    "Change the program type/section to one where the helper is allowed."
+  ],
+  "canonical_fix": "Use a helper allowed for this program type, such as an allowed time helper with suitable semantics, or move the logic to a program type/attach point where bpf_ktime_get_coarse_ns is permitted.",
+  "case_id": "case-006",
+  "category": "Policy",
+  "difficulty": "easy",
+  "expected_explanation": "The program type used by this case is not allowed to call bpf_ktime_get_coarse_ns. This is a helper policy/program-type compatibility failure, not a register or memory proof failure.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-006-diagnostic.txt",
+    "case_id": "case-006",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 1849,
+    "prompt_path": "public/case-006/prompt_diagnostic.md",
+    "prompt_sha256": "0c351f7275500308d5dd7e77f65459b6d00560f51ba8d1d768a521650bb1de73",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-006-diagnostic.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "8b843a82-2733-4913-b912-c93eeda3c464",
+    "started_at": "2026-06-05T03:20:56+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "### Explanation of the Verifier Failure\n\nThe verifier log indicates that the eBPF program of type `kprobe` is not allowed to use the helper function `bpf_ktime_get_coarse_ns`. This is a **policy restriction** based on the program type. Specifically:\n\n- The `kprobe` program type has a restricted set of allowed helper functions.\n- `bpf_ktime_get_coarse_ns` is not in the allowed list for `kprobe` programs.\n\nThe error message:\n```\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\nconfirms that the helper is disallowed for this program type.\n\n### Proposed Fix\n\nTo resolve this, we need to either:\n1. Use a helper function that **is allowed** in `kprobe` programs, or\n2. Change the program type to one that allows `bpf_ktime_get_coarse_ns`.\n\nThe **smallest source-level fix** that preserves the intent (to get a timestamp) is to replace `bpf_ktime_get_coarse_ns` with a similar helper that **is allowed** in `kprobe` programs. The most suitable alternative is `bpf_ktime_get_ns`, which is generally available in many program types, including `kprobe`.\n\n### Patch\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -22,7 +22,7 @@ __naked void entry(void)\n {\n        asm volatile (\"                                 \\\n        call %[bpf_ktime_get_coarse_ns];                \\\n-       r0 = 0;                                         \\\n+       r0 = 0;                                         \\\n        exit;                                           \\\n \"      :\n        : __imm(bpf_ktime_get_coarse_ns)\n        : __clobber_all);\n }\n```\n\n**Correction:** The actual fix should change the helper function. Since we're using inline assembly, we must change the helper ID passed to the `call` instruction. However, in this case, the helper is specified via a macro `__imm(bpf_ktime_get_coarse_ns)`, which likely maps to the helper ID.\n\nTo fix this, we should replace the helper with one that is allowed, such as `bpf_ktime_get_ns`. Assuming a similar macro exists for it (`__imm(bpf_ktime_get_ns)`), the fix is:\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -22,10 +22,10 @@ __naked void entry(void)\n {\n        asm volatile (\"                                 \\\n        call %[bpf_ktime_get_coarse_ns];                \\\n-       r0 = 0;                                         \\\n+       r0 = 0;                                         \\\n        exit;                                           \\\n \"      :\n-       : __imm(bpf_ktime_get_coarse_ns)\n+       : __imm(bpf_ktime_get_ns)\n        : __clobber_all);\n }\n```\n\n### Why This Works\n\n- `bpf_ktime_get_ns` is a widely supported helper in `kprobe` programs.\n- It provides a high-resolution timestamp (similar to `bpf_ktime_get_coarse_ns` but more precise).\n- The change is minimal and preserves the program's intent.\n\nThis should allow the program to pass verification.",
+  "must_mention": [
+    "Helper is forbidden for this program type",
+    "The fix is to use an allowed helper or compatible program type"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds register initialization around the helper call",
+    "Treats it as a GPL license issue",
+    "Suggests a bounds or NULL check"
+  ]
+}

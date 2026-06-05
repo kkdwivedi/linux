@@ -1,0 +1,118 @@
+{
+  "answer_text": "## Explanation\n\nThe BPF verifier enforces that `bpf_local_irq_save`/`bpf_local_irq_restore` pairs must be used in strict **LIFO (last-in, first-out)** order, just like a stack. The code saves `flags1` then `flags2`, but tries to restore `flags1` first \u2014 that's out of order. The verifier expects `flags2` (the most recently saved, id=2) to be restored before `flags1` (id=1).\n\n## Fix\n\nSwap the two `bpf_local_irq_restore` calls so they happen in reverse order relative to the saves:\n\n```c\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n-\tbpf_local_irq_restore(&flags1);\n-\tbpf_local_irq_restore(&flags2);\n+\tbpf_local_irq_restore(&flags2);\n+\tbpf_local_irq_restore(&flags1);\n```\n\nThe corrected source:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);   // restore most-recently-saved first\n\tbpf_local_irq_restore(&flags1);\n\treturn 0;\n}\n```\n\nThis satisfies the verifier's requirement that IRQ flag restores mirror their saves in reverse (stack) order.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-sonnet-4.6-medium/case-017-diagnostic.txt",
+    "case_id": "case-017",
+    "model": "anthropic/claude-sonnet-4.6",
+    "profile": "openrouter-claude-sonnet-4.6-medium",
+    "prompt_bytes": 2781,
+    "prompt_path": "public/case-017/prompt_diagnostic.md",
+    "prompt_sha256": "675d45e8a367c50d949964d5e150f18c1e043733cbcf9e98094409311c602ad9",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-sonnet-4.6-medium/case-017-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "ab5033f4-c8b2-46fc-a72f-de1bad69a084",
+    "started_at": "2026-06-05T03:18:51+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.003339,
+    "output_cost_usd": 0.00792,
+    "total_cost_usd": 0.011259
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1113,
+    "output_tokens": 528,
+    "raw_usage": {
+      "completion_tokens": 528,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 66
+      },
+      "cost": 0.011259,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.00792,
+        "upstream_inference_cost": 0.011259,
+        "upstream_inference_prompt_cost": 0.003339
+      },
+      "is_byok": false,
+      "prompt_tokens": 1113,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1641
+    },
+    "reasoning_content_chars": 262,
+    "reasoning_tokens": 66,
+    "total_tokens": 1641
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation\n\nThe BPF verifier enforces that `bpf_local_irq_save`/`bpf_local_irq_restore` pairs must be used in strict **LIFO (last-in, first-out)** order, just like a stack. The code saves `flags1` then `flags2`, but tries to restore `flags1` first \u2014 that's out of order. The verifier expects `flags2` (the most recently saved, id=2) to be restored before `flags1` (id=1).\n\n## Fix\n\nSwap the two `bpf_local_irq_restore` calls so they happen in reverse order relative to the saves:\n\n```c\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n-\tbpf_local_irq_restore(&flags1);\n-\tbpf_local_irq_restore(&flags2);\n+\tbpf_local_irq_restore(&flags2);\n+\tbpf_local_irq_restore(&flags1);\n```\n\nThe corrected source:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);   // restore most-recently-saved first\n\tbpf_local_irq_restore(&flags1);\n\treturn 0;\n}\n```\n\nThis satisfies the verifier's requirement that IRQ flag restores mirror their saves in reverse (stack) order.",
+          "reasoning": "The verifier error is clear: IRQ flags must be restored in LIFO (last-in, first-out) order. The code saves `flags1` first, then `flags2`, but restores `flags1` first (which is wrong). The fix is to restore in reverse order: restore `flags2` first, then `flags1`.",
+          "reasoning_details": [
+            {
+              "format": "anthropic-claude-v1",
+              "index": 0,
+              "signature": "EtEDCmcIDhACGAIqQLSqOhh4WHGhI3Bbz3WKjkub8Yf9+Rpk0mcdlm9+aU3DTCrZfwzPrWZE5onz8h+AYXGok5sUfwG+2UjtNcbZ4W0yEWNsYXVkZS1zb25uZXQtNC02OABCCHRoaW5raW5nEgxC5hSxSiPZNLRc5r4aDL/VSd8v1OcyJNsarSIw6YAEE2swndjsWhePFK7NBoL3NFNm+OypF3s+LkgcR1QOp67ofjx5trpcPsD7Zd/SKpcCyyghX8B0vf9U17a0whEO28Q7t2715rGFZyEEdNaXQoNBrZfMTQ9Ua+/jQGCnhgokL4kUSUM6MihHEb3e270TJMYkGjTQyGO8s3UHklJdkOi7DRc20DOBPbcrMSFiw1N/snRB+CZmY0+jgqc5AwkdPOgZvKxPCGBhixzhWsJnheuloH/hOt8QJV+ojCDrjtyVuO4L0gLxV3VJNUjfcTt/6zEg0P/JEGNCmzRAJHCYHc3D0fOqzWXpqa+18iDAfyYomd/phXJewCjueFreVKM8VlVVWP7+/3DHZjo87Ev3TffPHt5OJWrPdbnEU+VNCr5D4BTIx8aCCZRHYgeVCINzSP0VkqC4St2k9+dk7FHXTgVjMjSMert/GAE=",
+              "text": "The verifier error is clear: IRQ flags must be restored in LIFO (last-in, first-out) order. The code saves `flags1` first, then `flags2`, but restores `flags1` first (which is wrong). The fix is to restore in reverse order: restore `flags2` first, then `flags1`.",
+              "type": "reasoning.text"
+            }
+          ],
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629531,
+    "id": "gen-1780629531-Sbqf4ios4YLLbt3r87BS",
+    "model": "anthropic/claude-4.6-sonnet-20260217",
+    "object": "chat.completion",
+    "provider": "Google",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 528,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 66
+      },
+      "cost": 0.011259,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.00792,
+        "upstream_inference_cost": 0.011259,
+        "upstream_inference_prompt_cost": 0.003339
+      },
+      "is_byok": false,
+      "prompt_tokens": 1113,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1641
+    }
+  },
+  "reasoning_content": "The verifier error is clear: IRQ flags must be restored in LIFO (last-in, first-out) order. The code saves `flags1` first, then `flags2`, but restores `flags1` first (which is wrong). The fix is to restore in reverse order: restore `flags2` first, then `flags1`."
+}

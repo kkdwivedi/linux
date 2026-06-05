@@ -1,0 +1,37 @@
+The verifier is rejecting the `r6 != 0` path after `bpf_sk_lookup_tcp()`.
+
+`bpf_sk_lookup_tcp()` returns a `sock_or_null` and, if non-NULL, owns a reference that must be released with `bpf_sk_release()` before any exit. The log shows that reference:
+
+```text
+19: call bpf_sk_lookup_tcp#84    ; R0=sock_or_null(id=2) refs=2
+20: if r6 == 0x0 goto pc+1       ; ... refs=2
+21: exit
+Unreleased reference id=2 alloc_insn=19
+```
+
+`r6` was loaded from packet data, so the verifier must consider both `r6 == 0` and `r6 != 0`. On the `r6 == 0` path, the program goes to `l1`, checks `r0`, and releases the socket. But on the `r6 != 0` path, it exits immediately while the lookup reference may still be live.
+
+The smallest fix is to route that path through the existing cleanup block instead of exiting directly.
+
+Patch:
+
+```diff
+@@
+ 	call %[bpf_sk_lookup_tcp];			\
+ 	if r6 == 0 goto l1_%=;				\
+-	exit;						\
++	goto l1_%=;					\
+ l1_%=:	if r0 == 0 goto l2_%=;				\
+ 	r1 = r0;					\
+ 	call %[bpf_sk_release];				\
+```
+
+After this change, both `r6 == 0` and `r6 != 0` paths reach:
+
+```asm
+if r0 == 0 goto l2;
+r1 = r0;
+call bpf_sk_release;
+```
+
+So a non-NULL socket is released before exit, while a NULL return exits safely without trying to release it.

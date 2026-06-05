@@ -1,0 +1,34 @@
+## What the verifier is complaining about
+
+`bpf_local_irq_save()` enters an **IRQ-disabled region**. Inside that region the program is not allowed to do anything that could sleep.
+
+`helper_a()` is a **global** (non-`static`) `__noinline` function, so the verifier treats it as an independent subprogram and verifies it in isolation. Because its body can reach a sleepable helper (`bpf_copy_from_user()`), the verifier marks the whole subprogram as "sleepable". Calling a sleepable global function while IRQs are disabled is therefore rejected:
+
+```
+sleepable global function helper_a() called in IRQ-disabled region
+```
+
+The call at line 499 sits between `bpf_local_irq_save()` (line 498) and `bpf_local_irq_restore()` (line 500), i.e. inside the critical section (depth 1), which is exactly what triggers the rejection.
+
+Note that just making `helper_a()` `static` would not help: the verifier would then inline-verify its body in the IRQ-disabled context, reach `bpf_copy_from_user()` (which is itself sleepable), and reject that call for the same reason. The real problem is that a potentially-sleeping call happens inside the IRQ-disabled region.
+
+## Smallest fix
+
+Move the `helper_a()` call outside the IRQ-disabled critical section (exactly what the verifier suggests). In a `syscall` (sleepable) program that call is perfectly fine once IRQs are re-enabled.
+
+```c
+SEC("?syscall")
+int entry(void *ctx)
+{
+	unsigned long flags;
+
+	bpf_local_irq_save(&flags);
+	bpf_local_irq_restore(&flags);
+	helper_a(0);
+	return 0;
+}
+```
+
+(or equivalently place `helper_a(0);` before `bpf_local_irq_save()`).
+
+This keeps the possibly-sleeping call out of the IRQ-disabled window, so the "operation may sleep" / "sleepable global function in IRQ-disabled region" check no longer fires, and the program verifies.

@@ -1,0 +1,32 @@
+## Verifier Failure Analysis
+
+The verifier is rejecting this program for two reasons:
+
+1. **"arg#0 reference type('UNKNOWN') size cannot be determined: -22"** - The `bpf_local_irq_save()` helper expects a pointer to a known-sized type, but the verifier cannot determine the size of what `&flags` points to in the generated code context.
+
+2. **"sleepable global function helper_a() called in IRQ-disabled region"** - The function `helper_a()` is marked `__noinline` and contains `bpf_copy_from_user()`, which is a sleepable operation. However, it's being called after `bpf_local_irq_save()`, which disables interrupts. The verifier tracks IRQ-disabled regions and prevents sleepable helpers from being called within them.
+
+## Root Cause
+
+The core issue is the mismatch between:
+- Calling a sleepable function (`bpf_copy_from_user`) inside an IRQ-disabled section (between `bpf_local_irq_save` and `bpf_local_irq_restore`)
+- This violates kernel rules because you cannot sleep when IRQs are disabled
+
+## Smallest Fix
+
+Move the `helper_a(0)` call **outside** the IRQ-disabled region:
+
+```c
+SEC("?syscall")
+int entry(void *ctx)
+{
+	unsigned long flags;
+
+	helper_a(0);
+	bpf_local_irq_save(&flags);
+	bpf_local_irq_restore(&flags);
+	return 0;
+}
+```
+
+**Why this works:** By moving `helper_a(0)` before `bpf_local_irq_save()`, the sleepable function is no longer called within an IRQ-disabled region, satisfying the verifier's constraint that sleepable operations cannot execute with interrupts disabled.

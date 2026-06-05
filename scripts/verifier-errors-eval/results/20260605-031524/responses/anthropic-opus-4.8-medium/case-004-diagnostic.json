@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nWhen the verifier validates a global (non-static) `__noinline` function in isolation, it does not know anything about the actual arguments callers will pass. For a pointer-to-memory argument it assumes the most general type: `PTR_TO_MEM_OR_NULL` (shown as `mem_or_null` in the log).\n\nThat means at the start of `helper_a`, `R1` (the `s` pointer) may legally be NULL. The code immediately dereferences it (`s->x` \u2192 `r2 = *(u32 *)(r6 + 0)`), and the verifier rejects this because there is a path where `s == NULL`:\n\n```\n10: (61) r2 = *(u32 *)(r6 +0)\nR6 invalid mem access 'mem_or_null'\n```\n\nThe fact that the *caller* always passes a valid stack pointer (`&s`) is irrelevant \u2014 global functions are verified independently of their callers.\n\n## Fix\n\nAdd an explicit NULL check inside `helper_a` and only dereference on the non-NULL path. This narrows `R1`/`R6` from `mem_or_null` to `mem`, satisfying the verifier.\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nAfter the `if (!s) return 0;`, the verifier knows that on the remaining path `s` is non-NULL `PTR_TO_MEM` of size 4, so `s->x` is a provably-safe read.\n\n(Alternatively, making the helper `static` would let the verifier inline/propagate the concrete pointer type from the caller, but adding the NULL check is the smallest, most direct source fix.)",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-004-diagnostic.txt",
+    "case_id": "case-004",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 3165,
+    "prompt_path": "public/case-004/prompt_diagnostic.md",
+    "prompt_sha256": "33497e233ec114611aeef413d62f647129d0e9e5486ab3c21781e79670499395",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-004-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "fd0898ef-539b-4a9a-9aa4-a63142fb806a",
+    "started_at": "2026-06-05T03:17:11+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00689,
+    "output_cost_usd": 0.015775,
+    "total_cost_usd": 0.022665
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1378,
+    "output_tokens": 631,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1378,
+      "output_tokens": 631,
+      "output_tokens_details": {
+        "thinking_tokens": 63
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 2009
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EuUCCmMIDhgCKkAowvc3Os6+JmWgf61s1ed/KK/di08Hp9pu9PZUrUn/JU4rFhfj/G3VzdnCvwH1v4/09hSyQL5AlV9W/bXjQkNUMg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDEwR20IIS+Vc85Jg1xoMcSMmVArkstevzYC9IjDrP8ZM0Z/tDTc15l1TYxGDasBwMM5nW32n2fnVMUixuCTUTaqO4SH49lTfhBlLuBoqrwGvewvXBRNIuzPjKPKm8qXYM+d04/NwSIRyYSKdBLvmUyRtW+lInt2es2mM5AkvTy3gYW04IewGJuHiDA+bB1MTkVnrmt9694iRirUuBS1SRs+PXHEGp4FhbA3YZcRCC8/4gwc02ul7uMXqivikwAueX8aPqnLamqaT2ksMKqUEzxcGHKz6MnWB/Lh18IVcdJiAoSbDgNUf83Xz564m02vNDhRNO5nb0ami4vIJ4eimGAE=",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nWhen the verifier validates a global (non-static) `__noinline` function in isolation, it does not know anything about the actual arguments callers will pass. For a pointer-to-memory argument it assumes the most general type: `PTR_TO_MEM_OR_NULL` (shown as `mem_or_null` in the log).\n\nThat means at the start of `helper_a`, `R1` (the `s` pointer) may legally be NULL. The code immediately dereferences it (`s->x` \u2192 `r2 = *(u32 *)(r6 + 0)`), and the verifier rejects this because there is a path where `s == NULL`:\n\n```\n10: (61) r2 = *(u32 *)(r6 +0)\nR6 invalid mem access 'mem_or_null'\n```\n\nThe fact that the *caller* always passes a valid stack pointer (`&s`) is irrelevant \u2014 global functions are verified independently of their callers.\n\n## Fix\n\nAdd an explicit NULL check inside `helper_a` and only dereference on the non-NULL path. This narrows `R1`/`R6` from `mem_or_null` to `mem`, satisfying the verifier.\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nAfter the `if (!s) return 0;`, the verifier knows that on the remaining path `s` is non-NULL `PTR_TO_MEM` of size 4, so `s->x` is a provably-safe read.\n\n(Alternatively, making the helper `static` would let the verifier inline/propagate the concrete pointer type from the caller, but adding the NULL check is the smallest, most direct source fix.)",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01QAqQWYU1hhWX4neiHFq6A7",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1378,
+      "output_tokens": 631,
+      "output_tokens_details": {
+        "thinking_tokens": 63
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

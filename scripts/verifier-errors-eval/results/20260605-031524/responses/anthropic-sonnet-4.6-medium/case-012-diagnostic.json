@@ -1,0 +1,87 @@
+{
+  "answer_text": "The verifier rejects calling `helper_a()` inside an IRQ-disabled region because `helper_a` is a sleepable global function (it calls `bpf_copy_from_user`, which can sleep), and sleeping is not allowed with IRQs disabled.\n\nThe fix is to move the `helper_a(0)` call outside the IRQ-disabled critical section:\n\n```c\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\thelper_a(0);\n\tbpf_local_irq_save(&flags);\n\tbpf_local_irq_restore(&flags);\n\treturn 0;\n}\n```",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-medium/case-012-diagnostic.txt",
+    "case_id": "case-012",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-medium",
+    "prompt_bytes": 3392,
+    "prompt_path": "public/case-012/prompt_diagnostic.md",
+    "prompt_sha256": "cb0bb7bae71f637618353d539dc3320ce61e3ed2b36b833f42dc45015a35e430",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-medium/case-012-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "e540ee62-1ea4-478e-805f-2976eaf1f1bb",
+    "started_at": "2026-06-05T04:04:22+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.003558,
+    "output_cost_usd": 0.002445,
+    "total_cost_usd": 0.006003
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1186,
+    "output_tokens": 163,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1186,
+      "output_tokens": 163,
+      "output_tokens_details": {
+        "thinking_tokens": 0
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1349
+  },
+  "raw_response": {
+    "content": [
+      {
+        "text": "The verifier rejects calling `helper_a()` inside an IRQ-disabled region because `helper_a` is a sleepable global function (it calls `bpf_copy_from_user`, which can sleep), and sleeping is not allowed with IRQs disabled.\n\nThe fix is to move the `helper_a(0)` call outside the IRQ-disabled critical section:\n\n```c\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\thelper_a(0);\n\tbpf_local_irq_save(&flags);\n\tbpf_local_irq_restore(&flags);\n\treturn 0;\n}\n```",
+        "type": "text"
+      }
+    ],
+    "id": "msg_018zyDHMkQjbgmbFgXXdpdv2",
+    "model": "claude-sonnet-4-6",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1186,
+      "output_tokens": 163,
+      "output_tokens_details": {
+        "thinking_tokens": 0
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

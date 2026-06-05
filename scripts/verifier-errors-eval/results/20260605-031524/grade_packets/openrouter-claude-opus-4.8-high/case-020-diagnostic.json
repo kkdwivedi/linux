@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Reduce CALLS_50 fan-out or the number of helper layers.",
+    "Pass a stable non-FP-derived argument pattern when possible.",
+    "Replace the generated call tree with a simpler bounded loop or less duplicated call structure."
+  ],
+  "canonical_fix": "Reduce the number of distinct call paths or argument patterns reaching the subprograms, for example by reducing fan-out/depth, consolidating calls, or avoiding many distinct FP-offset arguments.",
+  "case_id": "case-020",
+  "category": "Verifier Limit",
+  "difficulty": "hard",
+  "expected_explanation": "The program creates an enormous number of distinct bpf2bpf call paths and frame-pointer-derived argument patterns. Liveness analysis exceeds its complexity limit while recomputing subprogram liveness across those paths.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-opus-4.8-high/case-020-diagnostic.txt",
+    "case_id": "case-020",
+    "model": "anthropic/claude-opus-4.8",
+    "profile": "openrouter-claude-opus-4.8-high",
+    "prompt_bytes": 4110,
+    "prompt_path": "public/case-020/prompt_diagnostic.md",
+    "prompt_sha256": "cb7344658f86bd080c64c73a9c8ee3095a7de5b045356c00872dce60afb5bfb8",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-opus-4.8-high/case-020-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "9bf1d8c4-1970-4a4a-a5ce-9d9889e738ae",
+    "started_at": "2026-06-05T03:18:34+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## What the verifier is complaining about\n\nThis program builds a *call tree*, not a linear chain. Read the structure:\n\n```\nentry        calls helper_a   50 times\nhelper_a     calls helper_b   50 times\nhelper_b     calls helper_c   50 times\nhelper_c     calls helper_d   50 times\nhelper_d     calls helper_e   50 times\nhelper_e     calls helper_f   50 times\nhelper_f     calls helper_g   50 times   (leaf, just `r0=0; exit`)\n```\n\nThere are 7 \"calling\" levels, each with a fan\u2011out of 50. The verifier analyzes a\ncallee separately for every distinct call path that reaches it, and after\nfinishing a callee it must **propagate (recompute) liveness** of stack/register\nreads back up each path. The number of call paths reaching `helper_g` is on the\norder of\n\n```\n50^7 \u2248 7.8 \u00d7 10^11\n```\n\nThe verifier has a guard that caps how many times it will recompute subprogram\nliveness (the message says the limit is **10001 calls**). The log shows it\nre\u2011analyzing `subprog#7 helper_g` over and over until it trips that guard:\n\n```\nliveness analysis exceeded complexity limit (10001 calls)\nVerification failed: Verifier Limit: Limit exceeded\n```\n\nSo this is not a logic bug in the program \u2014 it is pure combinatorial blow\u2011up of\ncall paths. The \"Suggestion\" in the log is exactly right: *reduce the number of\ndistinct call paths reaching these subprograms.*\n\n## The fix\n\nTo pass, the product of the per\u2011level fan\u2011outs along the chain must stay under\nthe liveness\u2011recompute budget (~10\u2074). Every extra nesting level multiplies the\ncost by the fan\u2011out (50), so the cheapest way to recover the most headroom is to\n**shorten the chain and/or shrink the fan\u2011out**. Either:\n\n- reduce the fan\u2011out (`CALLS_50` \u2192 a small macro), and/or\n- remove most of the nested helper levels.\n\nFor example, keep a tiny fan\u2011out and only a couple of levels so the path count\nstays small:\n\n```c\n/* small fan-out instead of 50 calls per level */\n#define CALLS_5(fn) \\\n\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40)\n```\n\nand collapse the helper chain to just a few levels, e.g. keep only\n`helper_g`, `helper_f`, `helper_a` (entry \u2192 helper_a \u2192 helper_f \u2192 helper_g):\n\n```c\n__naked __noinline __used\nstatic unsigned long helper_g(void)\n{\n\tasm volatile (\"r0 = 0; exit;\" ::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_f(void)\n{\n\tasm volatile (CALLS_5(helper_g) \"r0 = 0; exit;\" ::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_a(void)\n{\n\tasm volatile (CALLS_5(helper_f) \"r0 = 0; exit;\" ::: __clobber_all);\n}\n\nSEC(\"?raw_tp\")\n__naked int entry(void)\n{\n\tasm volatile (CALLS_5(helper_a) \"r0 = 0; exit;\" ::: __clobber_all);\n}\n```\n\nHere `helper_g` is reached on `5^3 = 125` paths \u2014 far below the limit \u2014 and the\nprogram verifies.\n\n### Why this is the right kind of edit\nThe verifier rejection has nothing to do with instruction semantics; every\nsubprogram is trivially correct (`r0 = 0; exit`). The only thing that must\nchange is the *shape* of the call tree so that\n`\u03a3 (paths to each subprog)` stays under the liveness\u2011analysis recompute cap.\nCutting nesting depth helps multiplicatively (each removed level divides the\ncost by the fan\u2011out), while reducing the fan\u2011out helps at every level, so doing\nboth gives ample margin with the smallest change to the program\u2019s logic (none).\n\nIf the intent of the test is specifically to *exercise* the limit (i.e. it is\nmeant to be a `__failure`/limit test), then the correct \"repair\" is instead to\nmark it as an expected\u2011failure case rather than expecting it to load \u2014 but based\non the plain `SEC(\"?raw_tp\")` program with no failure annotations shown, the\nexpectation is that it loads, so the path\u2011count reduction above is the fix.",
+  "must_mention": [
+    "The failure is verifier liveness complexity, not runtime recursion",
+    "Many call paths or distinct FP offsets drive the limit",
+    "The fix is to simplify the call/argument pattern"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only increases a runtime loop bound",
+    "Adds packet or memory bounds checks",
+    "Suggests releasing a resource"
+  ]
+}

@@ -1,0 +1,48 @@
+# Analysis
+
+The verifier is rejecting the program because `slice_len` is a global variable that the verifier cannot prove is bounded at compile time. When `bpf_dynptr_slice` is called with `slice_len` as the length parameter (R4), the verifier sees it as an unbounded scalar, which is unsafe for memory access operations.
+
+The error messages are:
+- `R4 unbounded memory access, use 'var &= const' or 'if (var < const)'`
+- `R3 and R4 memory, len pair leads to invalid memory access`
+
+This happens because:
+1. `slice_len` is a global `__u32` variable read at runtime (instruction 11: `r4 = *(u32 *)(r1 +0)`)
+2. The verifier cannot statically determine its value
+3. `bpf_dynptr_slice` requires the length parameter to be provably bounded
+
+# Solution
+
+Replace the unbounded global variable with a bounded constant. The simplest fix is to use a constant directly instead of `slice_len`:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 4096);
+} ringbuf SEC(".maps");
+
+SEC("?tc")
+int entry(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+	struct ethhdr *hdr;
+	char buffer[sizeof(*hdr)] = {};
+
+	bpf_dynptr_from_skb(skb, 0, &ptr);
+
+	hdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(struct ethhdr));
+	if (!hdr)
+		return SK_DROP;
+
+	return SK_PASS;
+}
+```
+
+**Change**: Replace `slice_len` parameter with the constant `sizeof(struct ethhdr)` directly on line 17.
+
+**Why this works**: The verifier can see that `sizeof(struct ethhdr)` is a compile-time constant, which is a bounded value. This satisfies the verifier's requirement that the length operand to `bpf_dynptr_slice` must be provably bounded.

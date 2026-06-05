@@ -1,0 +1,31 @@
+## Explanation
+
+The verifier rejects the program because of a size mismatch between the stack buffer and the requested slice length:
+
+- `buffer` is declared as `char buffer[8]` — only **8 bytes** on the stack.
+- `bpf_dynptr_slice` is called with length **9**.
+
+The verifier computes that reading 9 bytes starting at `fp-24` would access `fp-24+8` (i.e., one byte past the end of the buffer), which is not valid/readable stack memory. Hence the error:
+
+```
+invalid read from stack R3 off -24+8 size 9
+```
+
+## Fix
+
+The smallest fix is to enlarge the buffer so it covers the full requested length:
+
+```diff
+-	char buffer[8] = {};
++	char buffer[9] = {};
+```
+
+This ensures the stack allocation is at least 9 bytes, satisfying the verifier's requirement that the memory/length pair `(R3, R4)` points to a fully readable region.
+
+Alternatively, you could reduce the requested length to match the buffer:
+```diff
+-	data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
++	data = bpf_dynptr_slice(&ptr, 0, buffer, 8);
+```
+
+Either change resolves the mismatch; the buffer-size increase is the more intentional fix if 9 bytes were actually needed.

@@ -1,0 +1,48 @@
+Looking at the verifier log, the issue is a reference leak. The verifier is tracking two dynamic pointer references:
+
+1. `ptr1` (reference id=2, allocated at instruction 7)
+2. `ptr2` (reference id=4, allocated at instruction 14)
+
+The code properly handles `ptr1` - it either submits it (instruction 32) or discards it (instruction 24). However, `ptr2` is only discarded in the error path but never submitted in the success path.
+
+In the success path, after submitting `ptr1`, the function returns without ever calling `bpf_ringbuf_submit_dynptr()` or `bpf_ringbuf_discard_dynptr()` on `ptr2`, leaving reference id=3 (corresponding to `ptr2`) unreleased.
+
+The fix is to submit or discard `ptr2` before returning in the success path.
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+struct sample {
+	__u64 value;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 4096);
+} ringbuf SEC(".maps");
+
+SEC("?raw_tp")
+int entry(void *ctx)
+{
+	struct bpf_dynptr ptr1, ptr2;
+	struct sample *sample;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);
+
+	sample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));
+	if (!sample) {
+		bpf_ringbuf_discard_dynptr(&ptr1, 0);
+		bpf_ringbuf_discard_dynptr(&ptr2, 0);
+		return 0;
+	}
+
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+
+	return 0;
+}
+```
+
+The key change is adding `bpf_ringbuf_discard_dynptr(&ptr2, 0);` at line 27, right after submitting `ptr1`. This ensures that both dynamic pointers are properly released before the function returns, eliminating the reference leak.

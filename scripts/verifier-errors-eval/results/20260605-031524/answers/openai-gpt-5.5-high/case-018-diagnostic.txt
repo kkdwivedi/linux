@@ -1,0 +1,66 @@
+The verifier failure is due to lock release order.
+
+The program acquires locks in this order:
+
+```c
+lock_a
+lock_b
+```
+
+But on the successful path it releases them in this order:
+
+```c
+unlock(lock_a);
+unlock(lock_b);
+```
+
+That violates the verifier’s resource lifetime rule for `bpf_res_spin_lock`: nested locks must be released in last-in, first-out order. Since `lock_b` is the most recently acquired lock, it must be released before `lock_a`.
+
+The failing verifier instruction is:
+
+```text
+10: call bpf_res_spin_unlock
+bpf_res_spin_unlock cannot be out of order
+```
+
+At that point, the verifier believes both `lock_a` and `lock_b` are held, with `lock_b` on top of the active lock stack. The program tries to unlock `lock_a`, which is not the most recent lock, so verification fails.
+
+The smallest fix is to swap the unlock order on the successful path.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -12,7 +12,7 @@ int entry(struct __sk_buff *ctx)
+ 		bpf_res_spin_unlock(&lock_a);
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+ 	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+Resulting program:
+
+```c
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```
+
+This preserves the failure path for `lock_b`, where only `lock_a` needs to be released, and fixes the success path so locks are released in reverse acquisition order.

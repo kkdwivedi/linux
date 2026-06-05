@@ -1,0 +1,35 @@
+## Explanation of the Verifier Failure
+
+The verifier failure happens because `helper_a` → `helper_b` → `bpf_skb_pull_data` can **reallocate the packet buffer**. After that call, any previously obtained packet data pointer (`p` / `r7`) is invalidated — the verifier correctly demotes `r7` from `pkt(r=4,imm=4)` to plain `scalar`. When the code then tries to write through `r7` (`*p = 42`), the verifier rejects it:
+
+```
+R7 invalid mem access 'scalar'
+```
+
+Even though the bounds check on `p` was done before the call, `bpf_skb_pull_data` is specifically designed to potentially move the packet data in memory, so any pre-call packet pointer is considered stale afterward.
+
+## Fix
+
+Reload `sk->data` and repeat the bounds check **after** the call to `helper_a`:
+
+```c
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	int *p = (void *)(long)sk->data;
+
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	helper_a(sk, 0);
+
+	/* bpf_skb_pull_data may have moved packet data; reload and recheck. */
+	p = (void *)(long)sk->data;
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+After the call to `helper_a`, the packet pointer must be freshly read from `sk->data` and the bounds check must be repeated. Only then does the verifier know that the pointer is valid with at least 4 bytes of range, allowing the store `*p = 42` to succeed.

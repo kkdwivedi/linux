@@ -1,0 +1,25 @@
+## Explanation of the Verifier Failure
+
+The verifier is rejecting the `bpf_dynptr_slice` call because of a buffer size mismatch:
+
+1. **Buffer declaration**: `char buffer[8] = {};` allocates 8 bytes on the stack
+2. **Function call**: `bpf_dynptr_slice(&ptr, 0, buffer, 9)` requests a 9-byte slice
+3. **Verifier error**: The buffer pointer (R3 at fp-24) with length 9 (R4) exceeds the allocated 8-byte buffer, resulting in an "invalid read from stack" error
+
+The verifier enforces memory safety by ensuring that when you pass a memory pointer and length pair to a BPF helper, the length cannot exceed the actual allocated size of that memory region.
+
+## Root Cause
+
+The fourth argument to `bpf_dynptr_slice` specifies the size of the auxiliary buffer for the slice operation. This size (9) exceeds the actual buffer size (8), violating the memory safety contract.
+
+## Fix
+
+Increase the buffer size from 8 to 9 bytes to match the requested slice size:
+
+```c
+char buffer[9] = {};
+```
+
+This ensures the buffer has sufficient space (9 bytes) to accommodate the `bpf_dynptr_slice` call with size 9.
+
+**Why this works**: The verifier will now see that R3 (buffer pointer at fp-24) with R4 (length 9) points to a valid 9-byte region on the stack, satisfying the memory safety requirement.

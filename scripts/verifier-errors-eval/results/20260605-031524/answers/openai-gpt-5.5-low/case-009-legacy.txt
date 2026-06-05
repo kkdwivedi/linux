@@ -1,0 +1,80 @@
+The verifier failure is at:
+
+```c
+acquired = bpf_task_acquire(value->task);
+```
+
+Verifier log:
+
+```text
+3: (79) r1 = *(u64 *)(r0 +0)          ; R1=rcu_ptr_or_null_task_struct(id=10)
+4: (85) call bpf_task_acquire#63762
+Possibly NULL pointer passed to trusted R1
+```
+
+`value` is a map value returned from `bpf_map_lookup_elem()`. Its `task` field is a kptr. When the verifier loads `value->task`, it treats it as a possibly-NULL RCU/kptr value:
+
+```text
+rcu_ptr_or_null_task_struct
+```
+
+`bpf_task_acquire()` cannot be called with a possibly NULL pointer. Even though this program previously inserted the map entry and exchanged in a task pointer, the verifier does not assume the map field is still non-NULL: map contents are mutable and kptr loads are conservatively nullable.
+
+The smallest source fix is to load `value->task` into a temporary, check it for NULL, and only then call `bpf_task_acquire()`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..1111111 100644
+--- a/case.c
++++ b/case.c
+@@ -67,6 +67,7 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+ 	struct task_struct *acquired;
+ 	struct map_value *value;
++	struct task_struct *stored;
+ 
+ 	value = helper_a(task);
+ 	if (!value)
+@@ -74,7 +75,11 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ 
+-	acquired = bpf_task_acquire(value->task);
++	stored = value->task;
++	if (!stored)
++		return 0;
++
++	acquired = bpf_task_acquire(stored);
+ 	if (!acquired)
+ 		return 0;
+ 
+```
+
+Equivalent final function:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct task_struct *acquired;
+	struct task_struct *stored;
+	struct map_value *value;
+
+	value = helper_a(task);
+	if (!value)
+		return 0;
+
+	stored = value->task;
+	if (!stored)
+		return 0;
+
+	acquired = bpf_task_acquire(stored);
+	if (!acquired)
+		return 0;
+
+	bpf_task_release(acquired);
+	return 0;
+}
+```
+
+This should satisfy the verifier because the explicit `if (!stored)` check refines the register state from `rcu_ptr_or_null_task_struct` to a non-NULL task pointer before the `bpf_task_acquire()` call.

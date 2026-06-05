@@ -1,0 +1,58 @@
+The program is failing before normal instruction-state verification:
+
+```text
+liveness analysis exceeded complexity limit (10001 calls)
+processed 0 insns ...
+```
+
+This means the verifier’s pre-verification liveness/callback analysis is recursing through too many subprogram call paths.
+
+The source intentionally creates a very wide call tree:
+
+- `entry` calls `helper_a` 50 times.
+- `helper_a` calls `helper_b` 50 times.
+- `helper_b` calls `helper_c` 50 times.
+- ...
+- `helper_f` calls `helper_g` 50 times.
+- `helper_g` exits.
+
+So although there are only 8 subprograms, the verifier walks many repeated call edges while doing liveness analysis. The log shows it repeatedly analyzing `helper_g` at depth 7, then eventually hitting:
+
+```text
+liveness analysis exceeded complexity limit (10001 calls)
+```
+
+The failure is not caused by invalid stack access or bad register state. The `r1 = r10; r1 += -off; call helper;` arguments are irrelevant to these helpers because they do not read their arguments. The verifier is simply exceeding its liveness-analysis call complexity budget due to the number of repeated static calls.
+
+The smallest source-level fix is to reduce the branching factor so the total number of liveness-analysis calls stays below the verifier limit. Since the current fanout is 50 at each level and the failure limit is 10001 calls, reducing the repeated calls per helper from 50 to 10 should be enough and keeps the structure of the test intact.
+
+A minimal patch is to make `CALLS_50(fn)` expand to only `CALLS_10(fn)`:
+
+```diff
+diff --git a/test.c b/test.c
+index 0000000..1111111 100644
+--- a/test.c
++++ b/test.c
+@@ -6,7 +6,7 @@
+ 	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \
+ 	CALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)
+-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
++#define CALLS_50(fn) CALLS_10(fn)
+```
+
+Alternatively, rename the macro to avoid the misleading name, but that is not required for verifier success.
+
+Why this should pass:
+
+- The call depth remains the same: `entry -> helper_a -> ... -> helper_g`, depth 7.
+- Each subprogram still contains multiple static calls.
+- The total number of repeated liveness-analysis call traversals drops dramatically.
+- No verifier-visible semantics that depend on register or stack values are changed, since all helpers ignore their arguments and return `0`.
+
+If the selftest specifically wants a large but passing case, another conservative choice would be to reduce the fanout to 5 or 10 explicitly, e.g.:
+
+```c
+#define CALLS_50(fn) CALLS_10(fn)
+```
+
+is the smallest edit and likely sufficient.

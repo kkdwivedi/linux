@@ -1,0 +1,68 @@
+{
+  "acceptable_fixes": [
+    "Remove the byte store to fp-7 before reloading the pointer.",
+    "Store the scalar into a different stack slot that does not overlap the pointer spill.",
+    "Reload/use the original context pointer instead of the corrupted spill."
+  ],
+  "canonical_fix": "Do not partially overwrite the stack slot that contains the spilled pointer. Use a separate stack slot/register for the scalar byte, or reload the original pointer from a preserved uncorrupted source before dereferencing.",
+  "case_id": "case-003",
+  "category": "Register Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The program spills a pointer to the stack, partially overwrites one byte of the spill with a scalar, reloads the corrupted stack slot, and then dereferences the result. The verifier no longer treats the reloaded value as a pointer.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-003-legacy.txt",
+    "case_id": "case-003",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 1266,
+    "prompt_path": "public/case-003/prompt_legacy.md",
+    "prompt_sha256": "ff79e3ce2090bf446fcac0650e4037fac5ac92314018b0ce73b4c838bf23c7cf",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-003-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "5bfec039-8056-4340-a3d8-03897a92a02f",
+    "started_at": "2026-06-05T03:17:28+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Root cause\n\nThe program spills the context pointer (`r1` = `ctx`) into the 8\u2011byte stack slot at `fp-8`:\n\n```\n*(u64*)(r10 - 8) = r1;     // fp-8 .. fp-1 now hold a spilled ctx pointer\n```\n\nThen it stores a single byte **inside that same 8\u2011byte slot**:\n\n```\nr0 = 0x23;\n*(u8*)(r10 - 7) = r0;      // writes into byte fp-7, i.e. part of the spilled pointer\n```\n\nA spilled register is only tracked as a pointer while its whole 8\u2011byte slot is left untouched. Overwriting any byte of it invalidates the spill, so the verifier downgrades `fp-8` to a scalar (`fp-8=mmmmmmmm`). When the value is read back:\n\n```\nr0 = *(u64*)(r10 - 8);     // R0 = scalar(), not ctx\nr0 = *(u64*)(r0 + 8);      // dereference of a scalar -> rejected\n```\n\nHence:\n\n```\nR0 invalid mem access 'scalar'\n```\n\nThis is exactly the verifier\u2019s intended behavior: a partial write to a spilled pointer kills the pointer information.\n\n## Fix\n\nTo make the program verify, don\u2019t clobber the spilled pointer \u2014 put the byte store in a stack slot that does **not** overlap `fp-8 .. fp-1` (for example `fp-16`). That keeps `fp-8` a valid `ctx` spill, so the reload yields a pointer again.\n\nNote that the final dereference also has to be a *legal* context access. A `u64` read at `ctx + 8` is not a valid `__sk_buff` access, so change it to a valid field/size (e.g. read `len` as `u32` at offset 0).\n\n```c\nSEC(\"socket\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n\tr0 = 0x23;\t\t\t\t\t\\\n\t*(u8*)(r10 - 16) = r0;\t\t\t\t\\\n\tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n\tr0 = *(u32*)(r0 + 0);\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\n### Why this passes\n- `*(u8*)(r10 - 16)` writes to a separate stack slot, leaving the 8\u2011byte spill at `fp-8` intact, so `r0 = *(u64*)(r10 - 8)` reloads a proper `ctx()` pointer instead of a scalar \u2014 eliminating the \u201cinvalid mem access 'scalar'\u201d error.\n- Reading `*(u32*)(r0 + 0)` is a valid `__sk_buff` context access, so the subsequent dereference is accepted.\n\nThe essential, minimal change is the first one (move the byte store off `fp-7` so it no longer overlaps the spilled pointer); the dereference adjustment is needed only because the original `u64` ctx read at offset 8 would not be a legal context access once the pointer is preserved.",
+  "must_mention": [
+    "The pointer spill is corrupted by a partial write",
+    "The reload becomes scalar/unknown",
+    "Dereferencing the scalar is invalid"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a bounds check after the pointer has already become scalar",
+    "Changes only the final load offset",
+    "Claims the issue is packet or map bounds"
+  ]
+}

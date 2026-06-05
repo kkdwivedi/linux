@@ -1,0 +1,49 @@
+## What the verifier is complaining about
+
+`bpf_sk_lookup_tcp()` returns a **referenced** object (`sock_or_null`, ref id=2). Every path that ends in `exit` must first release that reference with `bpf_sk_release()`.
+
+Look at the control flow after the lookup:
+
+```
+19: call bpf_sk_lookup_tcp   ; R0 = sock_or_null, refs=2
+20: if r6 == 0 goto l1       ; r6 != 0 -> fall through
+21: exit                     ; <-- leaks the reference!
+```
+
+When `r6 != 0`, execution falls through to insn 21 (`exit`) **without** ever reaching the `bpf_sk_release()` in the `l1`/`l2` block. The verifier therefore reports:
+
+```
+Unreleased reference id=2 alloc_insn=19
+BPF_EXIT instruction in main prog would lead to reference leak
+```
+
+The `r6 != 0` exit path simply never frees the socket the helper acquired.
+
+## The fix
+
+That early-exit path must release the reference too (guarding against the `NULL` case, since `r0` may be `sock_or_null`). The smallest correct change is to make the `r6 != 0` path go through the same release logic instead of exiting directly.
+
+Replace:
+
+```c
+	if r6 == 0 goto l1_%=;				\
+	exit;						\
+l1_%=:	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+```
+
+with:
+
+```c
+	if r6 == 0 goto l1_%=;				\
+l1_%=:	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+```
+
+i.e. just delete the unconditional `exit;` that followed the `if r6 == 0` test. Now **both** the `r6 == 0` and `r6 != 0` paths fall into the `l1` block, which checks `r0` for NULL and calls `bpf_sk_release()` before exiting. (The `if r6 == 0 goto l1` line becomes a no-op jump to the next instruction, but it preserves the original branch structure that the test presumably wants to exercise; it can also be removed entirely.)
+
+After this change every `exit` is reachable only after the reference has been released (or the pointer was NULL), so the reference-leak error disappears.

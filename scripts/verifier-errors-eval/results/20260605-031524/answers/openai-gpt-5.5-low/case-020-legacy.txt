@@ -1,0 +1,40 @@
+The program is not rejected because `helper_g()` itself is invalid. `helper_g()` is trivial:
+
+```text
+1064: r0 = 0
+1065: exit
+```
+
+The failure is due to verifier liveness-analysis complexity:
+
+```text
+liveness analysis exceeded complexity limit (10001 calls)
+processed 0 insns ...
+```
+
+This test creates a very wide and deep static subprogram call graph:
+
+```text
+entry -> helper_a -> helper_b -> helper_c -> helper_d -> helper_e -> helper_f -> helper_g
+```
+
+and every level calls the next helper 50 times. During liveness analysis the verifier recursively analyzes callees through many call paths. Even though each callee is simple, the number of call-path visits explodes combinatorially. The log shows the verifier repeatedly re-analyzing `helper_g` at depth 7 until it hits the hard liveness complexity limit of 10001 calls.
+
+So the smallest source-level repair is to reduce the fanout enough that the recursive liveness walk stays below the limit. Reducing the per-level fanout from 50 to 3 should be safely below the 10001-call cap for a depth-7 chain.
+
+A minimal patch would be:
+
+```diff
+diff --git a/test.c b/test.c
+index 0000000..0000000 100644
+--- a/test.c
++++ b/test.c
+@@ -6,7 +6,8 @@
+ 	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \
+ 	CALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)
+-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
++#define CALLS_3(fn) CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)
++#define CALLS_50(fn) CALLS_3(fn)
+```
+
+This keeps the same structure of the test — a deep chain of subprogram calls with stack-pointer arguments — but avoids generating enough call-path combinations to exceed the verifier’s liveness-analysis complexity limit.

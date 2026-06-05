@@ -1,0 +1,36 @@
+{
+  "grade": {
+    "graded_at": "2026-06-05T04:55:01+00:00",
+    "graded_by": "local-codex",
+    "missing": [],
+    "problems": [
+      "Identifies stack-depth issue",
+      "but proposed source patch is invalid C/BPF source."
+    ],
+    "repair_summary": "Manual audit: concrete patch changes helper_b buffer size but leaves __sink(buf[MAX_STACK - 1]) out of bounds.",
+    "score": 2,
+    "strengths": [],
+    "success": false,
+    "verdict": "Manual audit: concrete patch changes helper_b buffer size but leaves __sink(buf[MAX_STACK - 1]) out of bounds."
+  },
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-013-diagnostic.txt",
+    "case_id": "case-013",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 2658,
+    "prompt_path": "public/case-013/prompt_diagnostic.md",
+    "prompt_sha256": "044070894a5a67f43ab32448001b1bd67c0db88fee4087d1bb67f71a9273513d",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-013-diagnostic.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "3ceeaf15-a7eb-4172-930b-b56d57e12492",
+    "started_at": "2026-06-05T03:21:03+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  }
+}

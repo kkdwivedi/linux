@@ -1,0 +1,28 @@
+## Explanation
+
+The BPF verifier enforces an **acyclic call graph** for `bpf2bpf` (static subprogram) calls. It must bound stack depth and analysis statically, so any cycle (including self-recursion) is unconditionally rejected — regardless of how bounded the recursion actually is at runtime.
+
+In `helper_a`, the label `l0_%=` at the end issues a `call helper_a`, which is a recursive bpf2bpf call. The verifier detects this cycle immediately and halts.
+
+## Fix
+
+Replace the recursive `call helper_a` with a **backward jump** (a loop). This turns the recursion into an iterative loop that the verifier can analyze with its bounded-loop machinery:
+
+```diff
+ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+ 	asm volatile ("					\
++loop_%=:					\
+ 	r1 += 1;					\
+ 	r0 = r1;					\
+-	if r1 < 4 goto l0_%=;				\
++	if r1 < 4 goto loop_%=;				\
+ 	exit;						\
+-l0_%=:	call helper_a;					\
+-	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+**Why this works:** A backward jump creates a loop, not a call-graph edge. The verifier handles bounded loops via state merging — since `r1` is incremented by 1 each iteration and compared against the constant `4`, the verifier can prove termination. The semantics are identical (r1 walks from its initial value up to 4), but there is no longer any recursive subprogram call.

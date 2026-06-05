@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Change char buffer[8] to char buffer[9] or larger.",
+    "Change the bpf_dynptr_slice length argument from 9 to sizeof(buffer) or 8."
+  ],
+  "canonical_fix": "Make the fallback buffer at least 9 bytes or reduce the requested slice length to 8 bytes.",
+  "case_id": "case-008",
+  "category": "Call Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The fallback stack buffer is 8 bytes, but bpf_dynptr_slice is asked to use 9 bytes. The memory/length pair therefore describes a read beyond the stack object.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-medium/case-008-legacy.txt",
+    "case_id": "case-008",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-medium",
+    "prompt_bytes": 1995,
+    "prompt_path": "public/case-008/prompt_legacy.md",
+    "prompt_sha256": "bb69e9d81c52b441a9ca18ed1387cdaf4d358455af3a7eb36dc706949cff365c",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-medium/case-008-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "a9071973-6a86-45ea-b599-a73b8dc3cace",
+    "started_at": "2026-06-05T03:15:37+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "The verifier failure is caused by a mismatch between the scratch buffer size and the length passed to `bpf_dynptr_slice()`.\n\n`buffer` is only 8 bytes:\n\n```c\nchar buffer[8] = {};\n```\n\nbut the helper is called with length `9`:\n\n```c\ndata = bpf_dynptr_slice(&ptr, 0, buffer, 9);\n```\n\nFrom the log:\n\n```text\nR3=fp-24\nR4=9\ncall bpf_dynptr_slice\ninvalid read from stack R3 off -24+8 size 9\nR3 and R4 memory, len pair leads to invalid memory access\n```\n\nThe verifier sees that `R3` points to the stack buffer at `fp-24`, but only 8 bytes were initialized/available there. The requested length is 9, so the helper would need access to byte `fp-16`, which is beyond the 8-byte buffer and overlaps the dynptr stack area. Therefore the verifier rejects the program.\n\nThe smallest fix, preserving the requested 9-byte slice size, is to make the scratch buffer 9 bytes.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -7,7 +7,7 @@ SEC(\"?cgroup_skb/egress\")\n int entry(struct __sk_buff *skb)\n {\n \tstruct bpf_dynptr ptr;\n-\tchar buffer[8] = {};\n+\tchar buffer[9] = {};\n \t__u64 *data;\n \n \tif (bpf_dynptr_from_skb(skb, 0, &ptr))\n```\n\nAlternatively, if only an 8-byte slice is intended, change the helper call to use `sizeof(buffer)` or `8`:\n\n```c\ndata = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));\n```\n\nBut if the intended slice length is 9, increasing the buffer to 9 bytes is the direct verifier fix.",
+  "must_mention": [
+    "Requested length is 9",
+    "Buffer size is 8",
+    "The memory/length pair must fit"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks data for NULL after the call",
+    "Changes the dynptr initialization but leaves 9 against an 8-byte buffer",
+    "Treats the problem as a ringbuf capacity issue"
+  ]
+}

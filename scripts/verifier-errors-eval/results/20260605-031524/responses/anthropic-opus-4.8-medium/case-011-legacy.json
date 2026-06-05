@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nThe verifier tracks acquired references. Two ringbuf dynptrs are reserved:\n- `ptr1` \u2192 reference id=1 (dynptr id=2)\n- `ptr2` \u2192 reference id=3 (dynptr id=4)\n\nEach `bpf_ringbuf_reserve_dynptr` acquires a reference that *must* be released on every path by a matching `submit`/`discard`.\n\nIn the `if (!sample)` (failure) branch, **both** `ptr1` and `ptr2` are discarded \u2014 that path is fine.\n\nBut in the success path (`sample != NULL`), only `ptr1` is submitted:\n\n```c\nbpf_ringbuf_submit_dynptr(&ptr1, 0);\nreturn 0;\n```\n\n`ptr2` is never released here, so when `exit` is reached the verifier still holds `refs=3`:\n\n```\nUnreleased reference id=3 alloc_insn=14\nBPF_EXIT instruction in main prog would lead to reference leak\n```\n\n(The first log line `arg#0 reference type('UNKNOWN ')...` is a separate informational message from probing; the actual fatal error is the unreleased reference.)\n\n## Fix\n\nRelease `ptr2` on the success path too. The smallest fix is to submit (or discard) `ptr2` before the final `return`:\n\n```c\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_submit_dynptr(&ptr2, 0);\n\n\treturn 0;\n```\n\nThis ensures every acquired ringbuf dynptr reference is released on all program paths, eliminating the reference leak.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-011-legacy.txt",
+    "case_id": "case-011",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 3372,
+    "prompt_path": "public/case-011/prompt_legacy.md",
+    "prompt_sha256": "762b0c608dbde5c1090172be3b10e7e17988b9698301148bebea627aedc1c8f8",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-011-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "9473cdc4-cb80-476f-952d-f569996e6009",
+    "started_at": "2026-06-05T03:17:19+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00996,
+    "output_cost_usd": 0.015925,
+    "total_cost_usd": 0.025885000000000002
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1992,
+    "output_tokens": 637,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1992,
+      "output_tokens": 637,
+      "output_tokens_details": {
+        "thinking_tokens": 96
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 2629
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EqQDCmMIDhgCKkCGpcw5fnnGy7TlXDUdyx/TL2uPdSPeZKI6E4gBJWYFVKvlsRwmPj7vH2CkhG5nKiqlju+AUBdwE9M0RHBZsG1oMg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDDtONfVdpj3CEMd3OxoMOcpv7lnEh3IU+lOcIjCMgepV/psmnW7F2UpnHiZtXxVn08MDm43TXzGDvAwVzhP2J6ZXCqHd3o33mzN/u6cq7gFVSeaSYbnvOP3Uj4O1621ZJo/t88mS8fEczGGGr51O7zk7jnYX9fgABAyh9dss9CCx4Ftk69cnkWVJNPCzeNoaU6Vl/H+//P6xW9nHNy+YbWcxIdKa3VU04QwkYRY/Fni8FM+/nMuP5uaMbFBEsfivOUiNw0CPsShA+Scm/xxvNK4kfjnHkuqedG+iszSmtHMpa3XUVH6T/CZRGwkXW2PNMbQtwNy9JZuyo/t7f2BvI9jeJnKxcCryV/8h6S1CEV4afAmOcxKoy/DTTIzLnAAdhBWu3HvVxzndF927lq3SBd7SJgguKTrDftBU2QO/GAE=",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nThe verifier tracks acquired references. Two ringbuf dynptrs are reserved:\n- `ptr1` \u2192 reference id=1 (dynptr id=2)\n- `ptr2` \u2192 reference id=3 (dynptr id=4)\n\nEach `bpf_ringbuf_reserve_dynptr` acquires a reference that *must* be released on every path by a matching `submit`/`discard`.\n\nIn the `if (!sample)` (failure) branch, **both** `ptr1` and `ptr2` are discarded \u2014 that path is fine.\n\nBut in the success path (`sample != NULL`), only `ptr1` is submitted:\n\n```c\nbpf_ringbuf_submit_dynptr(&ptr1, 0);\nreturn 0;\n```\n\n`ptr2` is never released here, so when `exit` is reached the verifier still holds `refs=3`:\n\n```\nUnreleased reference id=3 alloc_insn=14\nBPF_EXIT instruction in main prog would lead to reference leak\n```\n\n(The first log line `arg#0 reference type('UNKNOWN ')...` is a separate informational message from probing; the actual fatal error is the unreleased reference.)\n\n## Fix\n\nRelease `ptr2` on the success path too. The smallest fix is to submit (or discard) `ptr2` before the final `return`:\n\n```c\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_submit_dynptr(&ptr2, 0);\n\n\treturn 0;\n```\n\nThis ensures every acquired ringbuf dynptr reference is released on all program paths, eliminating the reference leak.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_016eBcqBuWQJdrPh1Wtw4JmK",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1992,
+      "output_tokens": 637,
+      "output_tokens_details": {
+        "thinking_tokens": 96
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

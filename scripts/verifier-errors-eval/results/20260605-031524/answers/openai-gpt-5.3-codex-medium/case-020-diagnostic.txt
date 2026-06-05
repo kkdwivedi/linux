@@ -1,0 +1,32 @@
+The failure is **not** a type-safety bug in `helper_g`; it’s a verifier complexity blow-up.
+
+### Why it fails
+
+Your program builds a deep call tree:
+
+- `entry -> helper_a -> helper_b -> ... -> helper_g`
+- and at each level you do `CALLS_50(...)` (50 callsites)
+
+So the verifier’s liveness pass keeps re-analyzing subprogs across a huge number of call paths/callsite contexts, and hits:
+
+- `liveness analysis exceeded complexity limit (10001 calls)`
+
+That matches the repeated log lines:
+`subprog#7 helper_g ... analyzing (depth 7)...` many times.
+
+---
+
+### Smallest likely fix
+
+Reduce call fan-out per level so liveness doesn’t explode.
+
+A minimal one-line edit is to make `CALLS_50` expand to fewer calls (e.g. 10 instead of 50):
+
+```diff
+-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
++#define CALLS_50(fn) CALLS_10(fn)
+```
+
+This preserves structure and behavior (still repeated subprog calls), but dramatically cuts verifier liveness work.
+
+If your environment still hits limits, reduce further (e.g. define a `CALLS_2` and use that), but the above is the smallest targeted change likely to pass.

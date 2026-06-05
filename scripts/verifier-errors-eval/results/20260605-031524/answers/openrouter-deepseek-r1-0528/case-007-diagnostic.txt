@@ -1,0 +1,23 @@
+The verifier error occurs because `slice_len` is a global variable that the verifier cannot track as a constant. When passed as the length argument to `bpf_dynptr_slice`, it appears as an unbounded value (0-4GB), causing the verifier to reject the memory access to the 14-byte stack buffer.
+
+The fix replaces the variable length with the compile-time constant `sizeof(buffer)`, which matches the buffer size and allows the verifier to validate the access.
+
+Patch:
+```diff
+--- a.c
++++ b.c
+@@ -12,7 +12,7 @@
+ 
+ 	bpf_dynptr_from_skb(skb, 0, &ptr);
+ 
+-	hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
++	hdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+ 	if (!hdr)
+ 		return SK_DROP;
+```
+
+Explanation:
+1. `buffer` is 14 bytes (size of `struct ethhdr`)
+2. `sizeof(buffer)` is a constant 14, known to verifier
+3. Replacing `slice_len` with `sizeof(buffer)` ensures length is bounded
+4. Verifier can now validate the 14-byte stack access is safe

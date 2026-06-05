@@ -1,0 +1,109 @@
+{
+  "answer_text": "Looking at the verifier log, I can see the issue:\n\n1. The program reads `sk->data` into register R7 (line 2)\n2. It performs a bounds check to ensure `p + 1` is within `data_end` (lines 3-5)\n3. It calls `helper_a(sk, 0)` which eventually calls `bpf_skb_pull_data()`\n4. After the function call, it tries to write to `*p` (line 10: `*(u32 *)(r7 +0) = r1`)\n\nThe problem is that **after calling `bpf_skb_pull_data()`**, the pointer `p` (stored in R7) becomes invalid. The `bpf_skb_pull_data()` helper can potentially modify the packet data pointer, making any previously stored pointers stale and unsafe to use.\n\nThe verifier detects this and marks R7 as having an invalid memory access (\"R7 invalid mem access 'scalar'\").\n\nThe fix is to revalidate the pointer after the helper call by reloading it from `sk->data`. Here's the minimal patch:\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\n__noinline long helper_b(struct __sk_buff *sk, __u32 len)\n{\n\treturn bpf_skb_pull_data(sk, len);\n}\n\n__noinline long helper_a(struct __sk_buff *sk, __u32 len)\n{\n\treturn helper_b(sk, len);\n}\n\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p = (void *)(long)sk->data;\n\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\thelper_a(sk, 0);\n\tp = (void *)(long)sk->data;  // Reload pointer after helper call\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nThe key change is adding `p = (void *)(long)sk->data;` after the `helper_a()` call. This reloads the pointer from the context, ensuring it's valid after the `bpf_skb_pull_data()` operation that may have modified the packet data layout.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-015-legacy.txt",
+    "case_id": "case-015",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 1984,
+    "prompt_path": "public/case-015/prompt_legacy.md",
+    "prompt_sha256": "dc0fc1e91b61bdf915966f9cbe5ae652d8b1776a8af859d12e6cd23d52604af2",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-015-legacy.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "a13d5bce-f8aa-4c8b-be82-107dbe809461",
+    "started_at": "2026-06-05T03:21:04+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00018436,
+    "output_cost_usd": 0.0008298000000000001,
+    "total_cost_usd": 0.00101416
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 838,
+    "output_tokens": 461,
+    "raw_usage": {
+      "completion_tokens": 461,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.00074672,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0006915,
+        "upstream_inference_cost": 0.00074672,
+        "upstream_inference_prompt_cost": 5.522e-05
+      },
+      "is_byok": false,
+      "prompt_tokens": 838,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 768,
+        "video_tokens": 0
+      },
+      "total_tokens": 1299
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1299
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Looking at the verifier log, I can see the issue:\n\n1. The program reads `sk->data` into register R7 (line 2)\n2. It performs a bounds check to ensure `p + 1` is within `data_end` (lines 3-5)\n3. It calls `helper_a(sk, 0)` which eventually calls `bpf_skb_pull_data()`\n4. After the function call, it tries to write to `*p` (line 10: `*(u32 *)(r7 +0) = r1`)\n\nThe problem is that **after calling `bpf_skb_pull_data()`**, the pointer `p` (stored in R7) becomes invalid. The `bpf_skb_pull_data()` helper can potentially modify the packet data pointer, making any previously stored pointers stale and unsafe to use.\n\nThe verifier detects this and marks R7 as having an invalid memory access (\"R7 invalid mem access 'scalar'\").\n\nThe fix is to revalidate the pointer after the helper call by reloading it from `sk->data`. Here's the minimal patch:\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\n__noinline long helper_b(struct __sk_buff *sk, __u32 len)\n{\n\treturn bpf_skb_pull_data(sk, len);\n}\n\n__noinline long helper_a(struct __sk_buff *sk, __u32 len)\n{\n\treturn helper_b(sk, len);\n}\n\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p = (void *)(long)sk->data;\n\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\thelper_a(sk, 0);\n\tp = (void *)(long)sk->data;  // Reload pointer after helper call\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nThe key change is adding `p = (void *)(long)sk->data;` after the `helper_a()` call. This reloads the pointer from the context, ensuring it's valid after the `bpf_skb_pull_data()` operation that may have modified the packet data layout.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "stop"
+      }
+    ],
+    "created": 1780629664,
+    "id": "gen-1780629664-X6GlhRhVgjeJCPrxBbvW",
+    "model": "qwen/qwen3-coder-480b-a35b-07-25",
+    "object": "chat.completion",
+    "provider": "Venice",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 461,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.00074672,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0006915,
+        "upstream_inference_cost": 0.00074672,
+        "upstream_inference_prompt_cost": 5.522e-05
+      },
+      "is_byok": false,
+      "prompt_tokens": 838,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 768,
+        "video_tokens": 0
+      },
+      "total_tokens": 1299
+    }
+  },
+  "reasoning_content": ""
+}

@@ -1,0 +1,46 @@
+The failure is because `p` is a packet-data pointer derived from `sk->data` and validated against `sk->data_end`, but then the program calls:
+
+```c
+helper_a(sk, 0);
+```
+
+`helper_a()` calls `helper_b()`, which calls `bpf_skb_pull_data()`. The verifier treats `bpf_skb_pull_data()` as a helper that may move or reallocate packet data. Therefore, all previously derived packet pointers are invalidated after the call, even if the length argument is `0`.
+
+So after this call, the verifier no longer considers `p` / `r7` to be a valid packet pointer:
+
+```text
+invalidated: R7: packet data may have moved; previous value was pkt at offset 0
+...
+R7 invalid mem access 'scalar'
+```
+
+The earlier bounds check does not help anymore because it happened before the helper call.
+
+The smallest fix is to reload `sk->data` and `sk->data_end` after `helper_a(sk, 0)` and redo the bounds check before dereferencing `p`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..1111111 100644
+--- a/case.c
++++ b/case.c
+@@ -14,11 +14,13 @@ __noinline long helper_a(struct __sk_buff *sk, __u32 len)
+ SEC("tc")
+ int entry(struct __sk_buff *sk)
+ {
+-	int *p = (void *)(long)sk->data;
++	int *p;
+ 
++	helper_a(sk, 0);
++
++	p = (void *)(long)sk->data;
+ 	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+ 		return TCX_DROP;
+-	helper_a(sk, 0);
+ 	*p = 42;
+ 	return TCX_PASS;
+ }
+```
+
+This satisfies the verifier because the pointer used for `*p = 42` is now derived and bounds-checked after the potentially packet-moving helper call.

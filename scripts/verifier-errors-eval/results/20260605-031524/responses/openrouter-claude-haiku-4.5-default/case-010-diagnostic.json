@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Explanation of the Verifier Failure\n\nThe verifier is rejecting the program because of an invalid pointer arithmetic operation on a context pointer (`struct __sk_buff *skb`).\n\n**The problem:**\n\nIn `helper_b()`, the code does:\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\nThe expression `skb + 1` performs pointer arithmetic, which the verifier translates to `r6 += 192` (since `sizeof(struct __sk_buff)` is 192 bytes). However, context pointers like `__sk_buff` have special restrictions in the BPF verifier:\n\n1. They must be dereferenced in their **original form** without offset modifications\n2. You cannot pass a modified context pointer to a helper function\n3. The verifier tracks that `R2` was modified from its original state and rejects the call to `helper_c()`\n\n**Why this fails:**\n- Line 21: `r6 += 192` modifies the context pointer\n- Line 23: `r2 = r6` copies the modified pointer\n- Line 24: The call to `helper_c()` receives a context pointer with offset 192, which is disallowed\n\n## The Fix\n\nThe simplest fix is to **remove the pointer arithmetic** on the context pointer. Since `skb + 1` doesn't make semantic sense for a network packet buffer anyway, the intended behavior is likely just to pass `skb` directly:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n```\n\n**Why this works:**\n- Removes the invalid pointer arithmetic on the context pointer\n- Passes the original, unmodified `skb` pointer to `helper_c()`\n- Satisfies the verifier's requirement that context pointers be used in their original form\n\nThis is a one-line change that removes the `+ 1` from the `helper_c()` call.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-010-diagnostic.txt",
+    "case_id": "case-010",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 3922,
+    "prompt_path": "public/case-010/prompt_diagnostic.md",
+    "prompt_sha256": "c9975b0bd7d86b4edddce6166024784483798109ab83deeb5185dbddd366cae7",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-010-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "d4e19246-50c6-4bda-9d54-9c01f5a576c5",
+    "started_at": "2026-06-05T03:19:01+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.001442,
+    "output_cost_usd": 0.00245,
+    "total_cost_usd": 0.0038919999999999996
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1442,
+    "output_tokens": 490,
+    "raw_usage": {
+      "completion_tokens": 490,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.003892,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.00245,
+        "upstream_inference_cost": 0.003892,
+        "upstream_inference_prompt_cost": 0.001442
+      },
+      "is_byok": false,
+      "prompt_tokens": 1442,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1932
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1932
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation of the Verifier Failure\n\nThe verifier is rejecting the program because of an invalid pointer arithmetic operation on a context pointer (`struct __sk_buff *skb`).\n\n**The problem:**\n\nIn `helper_b()`, the code does:\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\nThe expression `skb + 1` performs pointer arithmetic, which the verifier translates to `r6 += 192` (since `sizeof(struct __sk_buff)` is 192 bytes). However, context pointers like `__sk_buff` have special restrictions in the BPF verifier:\n\n1. They must be dereferenced in their **original form** without offset modifications\n2. You cannot pass a modified context pointer to a helper function\n3. The verifier tracks that `R2` was modified from its original state and rejects the call to `helper_c()`\n\n**Why this fails:**\n- Line 21: `r6 += 192` modifies the context pointer\n- Line 23: `r2 = r6` copies the modified pointer\n- Line 24: The call to `helper_c()` receives a context pointer with offset 192, which is disallowed\n\n## The Fix\n\nThe simplest fix is to **remove the pointer arithmetic** on the context pointer. Since `skb + 1` doesn't make semantic sense for a network packet buffer anyway, the intended behavior is likely just to pass `skb` directly:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n```\n\n**Why this works:**\n- Removes the invalid pointer arithmetic on the context pointer\n- Passes the original, unmodified `skb` pointer to `helper_c()`\n- Satisfies the verifier's requirement that context pointers be used in their original form\n\nThis is a one-line change that removes the `+ 1` from the `helper_c()` call.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629541,
+    "id": "gen-1780629541-c3VErCv8GHPwpADEotCQ",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 490,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.003892,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.00245,
+        "upstream_inference_cost": 0.003892,
+        "upstream_inference_prompt_cost": 0.001442
+      },
+      "is_byok": false,
+      "prompt_tokens": 1442,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1932
+    }
+  },
+  "reasoning_content": ""
+}

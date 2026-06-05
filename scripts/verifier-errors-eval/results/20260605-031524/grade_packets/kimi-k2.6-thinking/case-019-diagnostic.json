@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Rewrite the recursion as a bounded loop in the same function.",
+    "Manually unroll the small fixed number of iterations.",
+    "Split helpers so calls form a directed acyclic graph."
+  ],
+  "canonical_fix": "Remove the recursive bpf2bpf call and express the repeated work as a verifier-bounded loop or as an acyclic/unrolled call sequence.",
+  "case_id": "case-019",
+  "category": "Program Structure",
+  "difficulty": "hard",
+  "expected_explanation": "helper_a contains a bpf2bpf call to itself, creating a recursive subprogram call graph. The verifier requires an acyclic finite call graph even if the source-level branch appears bounded.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-thinking/case-019-diagnostic.txt",
+    "case_id": "case-019",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-thinking",
+    "prompt_bytes": 2020,
+    "prompt_path": "public/case-019/prompt_diagnostic.md",
+    "prompt_sha256": "bc762d4843d61b1404dac4a4f4cffddeb5a6c6e29d1ad0933b5631140c8504bd",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-thinking/case-019-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "enabled"
+    },
+    "run_id": "10009bae-68c5-43b6-90bf-b28f3e8db910",
+    "started_at": "2026-06-05T04:04:42+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "**Explanation**\n\nThe BPF verifier requires the subprogram call graph to be a *directed acyclic graph* (DAG).  \n`helper_a` contains a direct `call helper_a`, which creates a cycle. Because the\nverifier cannot bound stack depth or guarantee termination in the presence of\nrecursion, it rejects any recursive bpf2bpf call immediately.\n\nThe original code uses tail recursion to execute the same body at most four\ntimes (`r1` goes from `0` to `4`).  The smallest fix is to turn that tail\nrecursion into a **bounded backward jump** (a loop).  This keeps the call graph\nacyclic (`entry \u2192 helper_a`) while preserving the original semantics: `r1` is\nincremented up to four times and `r0` is updated on each iteration.  Because the\ncaller initializes `r1 = 0`, the verifier can easily prove the loop bound.\n\n---\n\n**Patch**\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -17,13 +17,10 @@ SEC(\"tracepoint\")\n static __naked __noinline __attribute__((used))\n void helper_a(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n-\tr1 += 1;\t\t\t\t\t\\\n+l0_%=:\tr1 += 1;\t\t\t\t\t\\\n \tr0 = r1;\t\t\t\t\t\\\n \tif r1 < 4 goto l0_%=;\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n-l0_%=:\tcall helper_a;\t\t\t\t\t\\\n-\texit;\t\t\t\t\t\t\\\n \"\t::: __clobber_all);\n }\n```\n\n**What changed**\n\n- Moved the local label `l0_%=:` to the top of the asm block, right before\n  `r1 += 1;`.\n- Removed the recursive `call helper_a;` and the following `exit;`.\n- The existing conditional `if r1 < 4 goto l0_%=;` now jumps *backward*,\n  forming a bounded loop instead of a recursive call.\n\nThe program now has a finite, non-recursive call graph and should pass\nverification.",
+  "must_mention": [
+    "The bpf2bpf call graph is recursive",
+    "Verifier requires no recursive subprogram calls",
+    "A bounded loop or acyclic rewrite is needed"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes the branch bound from 4 to another number",
+    "Adds a runtime recursion depth counter but keeps the self-call",
+    "Treats the failure as stack memory bounds"
+  ]
+}

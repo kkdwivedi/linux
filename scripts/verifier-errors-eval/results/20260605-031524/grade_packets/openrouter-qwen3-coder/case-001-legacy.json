@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Use bpf_cpumask_create(), check for NULL, call bpf_cpumask_populate on the returned cpumask pointer, and release it before returning.",
+    "Replace the integer-cast pointer with another verifier-known memory object accepted by the kfunc contract."
+  ],
+  "canonical_fix": "Allocate or otherwise use verifier-known cpumask memory and pass that pointer to bpf_cpumask_populate, then release it if ownership was acquired.",
+  "case_id": "case-001",
+  "category": "Call Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The first argument to bpf_cpumask_populate is produced by casting the integer constant 0x123456 to a cpumask pointer. The verifier tracks it as a scalar, not as verifier-known writable memory of the required cpumask size.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-001-legacy.txt",
+    "case_id": "case-001",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 1470,
+    "prompt_path": "public/case-001/prompt_legacy.md",
+    "prompt_sha256": "a0e1ddcc93f0bbda0f2825039ffd053bcc68794492e83d423c6bece1a756de61",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-001-legacy.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "8a1ab7da-5fae-4335-aae4-463042559c67",
+    "started_at": "2026-06-05T03:20:48+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "Looking at the verifier log, the issue is clear:\n\n**Verifier Failure Explanation:**\nThe verifier expects the first argument (R1) to `bpf_cpumask_populate` to be a valid pointer type, but it's receiving a scalar value (0x123456). The error message \"R1 type=scalar expected=fp\" indicates that R1 should be a frame pointer (valid memory address) rather than a raw scalar value.\n\nThe problem is in this line:\n```c\nstruct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;\n```\n\nThis creates a pointer from a raw integer value, which the verifier rejects as unsafe. The verifier requires all pointers to be properly derived from valid memory locations.\n\n**Fix:**\nThe smallest fix is to use `bpf_cpumask_create()` to properly allocate a cpumask instead of casting an arbitrary integer to a pointer.\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_tracing.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *valid_mask;\n\tu64 bits = 0;\n\tint ret;\n\n\tvalid_mask = bpf_cpumask_create();\n\tif (!valid_mask)\n\t\treturn 0;\n\n\tret = bpf_cpumask_populate((struct cpumask *)valid_mask, &bits, sizeof(bits));\n\tif (!ret)\n\t\treturn 2;\n\n\treturn 0;\n}\n```\n\nThe key changes:\n1. Replace the invalid pointer cast with `bpf_cpumask_create()` which returns a properly allocated cpumask\n2. Initialize `bits` to 0 to avoid using uninitialized memory\n3. Add a null check for the created mask\n4. Use the valid pointer instead of the fake one\n\nThis satisfies the verifier because `bpf_cpumask_create()` returns a valid pointer that the verifier can track and validate.",
+  "must_mention": [
+    "R1 is a scalar/integer, not memory",
+    "The destination pointer must be verifier-known memory",
+    "Do not cast a constant integer to a pointer"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes the integer value",
+    "Adds a NULL check around the integer-cast pointer",
+    "Suppresses or ignores the return value without fixing the destination pointer"
+  ]
+}

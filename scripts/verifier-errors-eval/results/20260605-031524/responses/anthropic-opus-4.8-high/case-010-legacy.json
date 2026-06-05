@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nThe verifier failure is here:\n\n```\n24: (85) call pc+2\ndereference of modified ctx ptr R2 off=192 disallowed\nCaller passes invalid args into func#3 ('helper_c')\n```\n\nIn `helper_b` the code calls:\n\n```c\nhelper_c(val, skb + 1);\n```\n\n`skb` is the context pointer (`ctx()`). The expression `skb + 1` advances it by `sizeof(struct __sk_buff)` (192 bytes), producing `R2=ctx(imm=192)` \u2014 a *modified* context pointer.\n\n`helper_c` is a **global** function (the others are `static`/`noinline` but visible as global subprograms here), so the verifier validates it independently and requires its `struct __sk_buff *` argument to be a *valid, unmodified* context pointer. A ctx pointer with a non-zero offset cannot be safely dereferenced inside the callee (the callee will do `skb->ifindex`), so the verifier rejects passing the modified pointer.\n\n## Fix\n\nPass the unmodified `skb` pointer instead of `skb + 1`:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n```\n\n### Patch\n\n```diff\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n```\n\nThis removes the +192 offset, so `R2` is a clean `ctx()` pointer when calling `helper_c`, satisfying the requirement that a global subprogram receive a valid (unmodified) context pointer. The `helper_c` body's `skb->ifindex` dereference then becomes legal.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-010-legacy.txt",
+    "case_id": "case-010",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 2233,
+    "prompt_path": "public/case-010/prompt_legacy.md",
+    "prompt_sha256": "42cb94c19ecff9212d01b745ca76ad135db7dce4e6c15eefc8d6cb8a521dd385",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-010-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "144bd8d1-6f11-46a0-9c9c-7dda3ef12ee5",
+    "started_at": "2026-06-05T03:17:36+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.006035,
+    "output_cost_usd": 0.018875,
+    "total_cost_usd": 0.02491
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1207,
+    "output_tokens": 755,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1207,
+      "output_tokens": 755,
+      "output_tokens_details": {
+        "thinking_tokens": 122
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1962
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EoEECmMIDhgCKkDtydcaIc9QY0tTOEKCzjLj/wSNMYKzryUwO3mTAMRFaFTo8z58LN+3ayFVEveRnfe+TSZxXu9nMUo1/bexapGfMg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDDOWAhu8z7LZ5+TPwxoMx9h8AHQZoKaE8uYbIjBdc/76I+Kwiuu8fMW31CcOF20tyZqCUFz0/NygEWYn6Gn7PWNMyVaqSa1SqNHfL1kqywK6g8ld0jyiqWHNPlr3ZEJOn0a2JitnhX+ooGhH2qDEt4Q8rtMJz4FEYkQcTBozdwdW93Zr3q8G0A4JX1j9CDxdeuYgf1AlQ2qt/kaUxHSHeS2gN5+o17nKT2N9HIOjRm83T0qCNJhbaOj6AbQVILQy+Yr+gdgqrovRzCv8r1O70GJMggXpfk6zDjIkb1TkqaJbMet7OmT5bbZP9tHibiNrj6RXOUXCk13eT3BbCqoBphK4H7nES2DNJguPf5++ZhZB5vtcggNrBoS+x+SS6hoUTZwZoMxnGCVelmBdqcawS24zDAPXGl3NJMxzGtuY9n2XAW9a9l8QFG7k2t1l5tFlDcTNRPEfmjKmZAffWYDpgQjbKqqydMG4Hw2kB75zsyKg9w3YSc28vkcwuZ4aS6aPyZTeHp5YWUWAw6cT4aizJukv6njkNdAex9BMGAE=",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nThe verifier failure is here:\n\n```\n24: (85) call pc+2\ndereference of modified ctx ptr R2 off=192 disallowed\nCaller passes invalid args into func#3 ('helper_c')\n```\n\nIn `helper_b` the code calls:\n\n```c\nhelper_c(val, skb + 1);\n```\n\n`skb` is the context pointer (`ctx()`). The expression `skb + 1` advances it by `sizeof(struct __sk_buff)` (192 bytes), producing `R2=ctx(imm=192)` \u2014 a *modified* context pointer.\n\n`helper_c` is a **global** function (the others are `static`/`noinline` but visible as global subprograms here), so the verifier validates it independently and requires its `struct __sk_buff *` argument to be a *valid, unmodified* context pointer. A ctx pointer with a non-zero offset cannot be safely dereferenced inside the callee (the callee will do `skb->ifindex`), so the verifier rejects passing the modified pointer.\n\n## Fix\n\nPass the unmodified `skb` pointer instead of `skb + 1`:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n```\n\n### Patch\n\n```diff\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n```\n\nThis removes the +192 offset, so `R2` is a clean `ctx()` pointer when calling `helper_c`, satisfying the requirement that a global subprogram receive a valid (unmodified) context pointer. The `helper_c` body's `skb->ifindex` dereference then becomes legal.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_0169THaGL3GfwDkQHUdBRKj5",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1207,
+      "output_tokens": 755,
+      "output_tokens_details": {
+        "thinking_tokens": 122
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

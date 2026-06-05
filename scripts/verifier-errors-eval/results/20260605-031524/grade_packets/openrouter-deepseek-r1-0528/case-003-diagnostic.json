@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Remove the byte store to fp-7 before reloading the pointer.",
+    "Store the scalar into a different stack slot that does not overlap the pointer spill.",
+    "Reload/use the original context pointer instead of the corrupted spill."
+  ],
+  "canonical_fix": "Do not partially overwrite the stack slot that contains the spilled pointer. Use a separate stack slot/register for the scalar byte, or reload the original pointer from a preserved uncorrupted source before dereferencing.",
+  "case_id": "case-003",
+  "category": "Register Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The program spills a pointer to the stack, partially overwrites one byte of the spill with a scalar, reloads the corrupted stack slot, and then dereferences the result. The verifier no longer treats the reloaded value as a pointer.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-r1-0528/case-003-diagnostic.txt",
+    "case_id": "case-003",
+    "model": "deepseek/deepseek-r1-0528",
+    "profile": "openrouter-deepseek-r1-0528",
+    "prompt_bytes": 2939,
+    "prompt_path": "public/case-003/prompt_diagnostic.md",
+    "prompt_sha256": "f0ae7f2740c6566909dcad09724c1c4e67495167ac5f9dff858044543f91e0e9",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-r1-0528/case-003-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "cc770b1d-c401-4561-982a-a26f113d42c8",
+    "started_at": "2026-06-05T03:19:08+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier failure occurs because storing a byte at `r10 - 7` overwrites part of the context pointer stored at `r10 - 8`, causing the verifier to mark the stack slot as an invalid scalar type. When later loading from this slot and dereferencing it (`*(u64*)(r0 + 8)`), the verifier rejects because `r0` is no longer a valid pointer.\n\n### Fix\nMove the byte store to a separate stack location (`r10 - 16`) to avoid corrupting the context pointer:\n\n```patch\n--- a.c\n+++ b.c\n@@ -5,7 +5,7 @@\n {\n \tasm volatile (\"\t\t\t\t\t\\\n \t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n \tr0 = 0x23;\t\t\t\t\t\\\n-\t*(u8*)(r10 - 7) = r0;\t\t\t\t\\\n+\t*(u8*)(r10 - 16) = r0;\t\t\t\t\\\n \tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n \tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n```\n\n### Explanation\n- **Original issue**: Storing a byte at `r10 - 7` partially overwrites the 8-byte context pointer at `r10 - 8`, making the pointer invalid.\n- **Fix**: Storing the byte at `r10 - 16` uses a new stack slot, preserving the context pointer's integrity.\n- **Why it works**: The context pointer remains unmodified at `r10 - 8`, so when reloaded, the verifier still recognizes it as a valid pointer for dereferencing.\n\nThis change maintains the program's functionality while satisfying the verifier's type safety requirements.",
+  "must_mention": [
+    "The pointer spill is corrupted by a partial write",
+    "The reload becomes scalar/unknown",
+    "Dereferencing the scalar is invalid"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a bounds check after the pointer has already become scalar",
+    "Changes only the final load offset",
+    "Claims the issue is packet or map bounds"
+  ]
+}

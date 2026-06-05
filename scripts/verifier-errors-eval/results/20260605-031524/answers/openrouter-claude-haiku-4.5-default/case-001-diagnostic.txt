@@ -1,0 +1,44 @@
+## Explanation of the Verifier Failure
+
+The verifier rejects this program because `bpf_cpumask_populate()` is a kfunc that requires its first argument to be a pointer to verifier-known memory (stack, map, or context), but the code passes an integer scalar cast to a pointer:
+
+```c
+struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
+```
+
+The instruction `(b7) r1 = 1193046` (which is `0x123456` in decimal) loads a raw integer into R1. The verifier cannot verify memory safety for arbitrary integer pointers—it needs to track actual memory regions it knows about.
+
+The kfunc expects 16 bytes of memory for `struct cpumask`, but R1 is just a scalar value, not a reference to verifiable memory.
+
+## Fix
+
+The simplest fix is to allocate the cpumask on the stack and pass a pointer to that stack memory:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct cpumask mask = {};
+	u64 bits;
+	int ret;
+
+	ret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));
+	if (!ret)
+		return 2;
+
+	return 0;
+}
+```
+
+**Key changes:**
+1. Replace `struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;` with `struct cpumask mask = {};` to allocate actual stack memory
+2. Pass `&mask` instead of `(struct cpumask *)invalid` to `bpf_cpumask_populate()`
+
+This provides verifier-known stack memory that satisfies the kfunc's type safety contract. The verifier can now track that R1 points to valid stack memory of the correct size.

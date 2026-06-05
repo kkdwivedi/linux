@@ -1,0 +1,44 @@
+## Explanation
+
+The verifier error "Unreleased reference id=3 alloc_insn=14" means that `ptr2` (reserved at instruction 14) is never submitted or discarded in the **success path** (when `sample != NULL`). 
+
+In the null-check branch (`!sample`), both `ptr1` and `ptr2` are properly discarded. But in the success path, only `ptr1` is submitted via `bpf_ringbuf_submit_dynptr(&ptr1, 0)`, leaving `ptr2` unreleased — a reference leak.
+
+## Fix
+
+Add a `bpf_ringbuf_discard_dynptr` (or `bpf_ringbuf_submit_dynptr`) for `ptr2` in the success path before returning:
+
+```diff
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
++	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+ 
+ 	return 0;
+```
+
+Full corrected function:
+
+```c
+SEC("?raw_tp")
+int entry(void *ctx)
+{
+	struct bpf_dynptr ptr1, ptr2;
+	struct sample *sample;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);
+
+	sample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));
+	if (!sample) {
+		bpf_ringbuf_discard_dynptr(&ptr1, 0);
+		bpf_ringbuf_discard_dynptr(&ptr2, 0);
+		return 0;
+	}
+
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_discard_dynptr(&ptr2, 0);  /* release ptr2 in success path */
+
+	return 0;
+}
+```
+
+Every acquired ringbuf reference (both `ptr1` and `ptr2`) must be released on **every** code path. The success path was missing the release of `ptr2`.

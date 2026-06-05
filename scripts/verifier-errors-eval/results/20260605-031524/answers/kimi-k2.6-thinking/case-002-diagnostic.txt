@@ -1,0 +1,35 @@
+**Explanation**
+
+The program calls `bpf_cpumask_create()` inside `make_object()`, which acquires a reference-counted `bpf_cpumask` object. The verifier tracks this as an *owned resource* (reference id=2).
+
+There are three possible paths:
+
+1. **Allocation fails** (`cpumask == NULL`) – no resource is owned, so nothing needs to be released.
+2. **Allocation succeeds and the mask is *not* empty** – the code calls `bpf_cpumask_release(cpumask)` inside `make_object()` and returns `NULL`. The resource is properly freed.
+3. **Allocation succeeds and the mask *is* empty** – `make_object()` returns the live pointer to the caller (`entry`). Ownership of reference id=2 is now held by the main program.
+
+On path 3, `entry` stores the pointer in a local variable, calls `__sink(cpumask)` (which only prevents the compiler from optimizing it away), and then reaches the program exit without releasing the mask. The verifier therefore reports:
+
+> Unreleased reference id=2 … owned resource still needs release
+
+eBPF requires that every acquired reference be explicitly released (or transferred) before the program exits.
+
+**Fix**
+
+Add a `bpf_cpumask_release(cpumask)` call in `entry` before returning, guarded by a null check because the helper does not accept `NULL`.
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -38,6 +38,9 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ 
+ 	cpumask = make_object();
+ 	__sink(cpumask);
++	if (cpumask)
++		bpf_cpumask_release(cpumask);
+ 
+ 	return 0;
+ }
+```
+
+This ensures that on the success path the owned reference is released, satisfying the verifier’s resource-lifetime safety check.

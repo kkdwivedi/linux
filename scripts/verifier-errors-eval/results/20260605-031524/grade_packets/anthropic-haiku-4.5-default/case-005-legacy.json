@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Call bpf_preempt_enable() before bpf_copy_from_user and avoid re-entering the critical section unnecessarily.",
+    "Use a non-sleepable helper if one is semantically appropriate."
+  ],
+  "canonical_fix": "Move bpf_copy_from_user outside the bpf_preempt_disable/bpf_preempt_enable region, or re-enable preemption before calling it.",
+  "case_id": "case-005",
+  "category": "Execution Context Safety",
+  "difficulty": "easy",
+  "expected_explanation": "bpf_copy_from_user is sleepable, but the program calls it while preemption is disabled. The verifier rejects sleepable operations inside a non-preemptible region.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-005-legacy.txt",
+    "case_id": "case-005",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 1399,
+    "prompt_path": "public/case-005/prompt_legacy.md",
+    "prompt_sha256": "09ecaba7e5e77a1dc6657b7ce0f5a2f8e64d1673f8b7b61af5daff8054d00e3f",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-005-legacy.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "00a21e50-f829-469c-a2a9-2f52015122f7",
+    "started_at": "2026-06-05T03:17:57+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Analysis of the Verifier Failure\n\nThe verifier is rejecting this program with the error:\n\n```\nsleepable helper bpf_copy_from_user#148 in non-preemptible region\n```\n\n### Root Cause\n\nThe issue is a semantic contradiction in the code:\n\n1. `bpf_preempt_disable()` is called, which marks the region as non-preemptible\n2. `bpf_copy_from_user()` is a **sleepable helper** that can sleep/yield, which requires preemption to be enabled\n3. The verifier detects that a sleepable helper is being called in a region where preemption has been explicitly disabled, which is invalid\n\nSleepable helpers can only be called when the kernel can safely reschedule the task. Calling them in a non-preemptible region violates kernel semantics.\n\n### Solution\n\nRemove the `bpf_preempt_disable()` and `bpf_preempt_enable()` calls. These are unnecessary around `bpf_copy_from_user()` and are actively harmful since that helper must be callable in a preemptible context.\n\n## Patch\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"?fentry.s/sys_getpgid\")\nint entry(void *ctx)\n{\n\tu32 data;\n\n\tbpf_copy_from_user(&data, sizeof(data), NULL);\n\treturn 0;\n}\n```\n\n**Change:** Delete lines with `bpf_preempt_disable();` and `bpf_preempt_enable();`\n\nThis allows `bpf_copy_from_user()` to execute in a preemptible context where it's permitted to sleep, satisfying the verifier's requirement that sleepable helpers cannot be called in non-preemptible regions.",
+  "must_mention": [
+    "The helper may sleep",
+    "Preemption is disabled at the call site",
+    "The critical section must not contain sleepable operations"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks the NULL source pointer",
+    "Removes bpf_preempt_enable and leaves preemption disabled",
+    "Moves the helper deeper into the disabled region"
+  ]
+}

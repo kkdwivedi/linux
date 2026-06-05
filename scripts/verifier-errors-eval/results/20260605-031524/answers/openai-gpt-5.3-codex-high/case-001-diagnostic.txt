@@ -1,0 +1,41 @@
+`bpf_cpumask_populate()`’s first arg must be a **real, verifier-known writable memory region** (`struct cpumask`), not an arbitrary integer cast to pointer.
+
+In your program, this line:
+
+```c
+struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+```
+
+makes R1 a plain scalar (`0x123456`). At call time verifier sees:
+
+- R1 = scalar
+- expected = pointer to memory (stack/map/etc.), size at least `sizeof(struct cpumask)` (16 bytes in your log)
+
+So it rejects with “Invalid call argument”.
+
+Also, `bits` is currently uninitialized; once arg1 is fixed, verifier may then complain about passing uninitialized stack as input.
+
+### Smallest likely fix
+
+Use stack-backed `struct cpumask` and initialize `bits`.
+
+```diff
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+-	u64 bits;
++	struct cpumask mask = {};
++	u64 bits = 0;
+ 	int ret;
+ 
+-	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
++	ret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));
+ 	if (!ret)
+ 		return 2;
+ 
+ 	return 0;
+ }
+```
+
+This keeps behavior structure the same while satisfying verifier pointer/type safety.

@@ -1,0 +1,27 @@
+The verifier error is straightforward:
+
+- Program type is **kprobe** (`SEC("kprobe")`).
+- First instruction calls helper **`bpf_ktime_get_coarse_ns`** (helper id 160).
+- For this prog type, that helper is not in the allowed helper set, so verifier rejects immediately.
+
+Since your program ignores the helper return value anyway (`r0 = 0; exit;`), the smallest safe fix is to call a helper that is allowed for kprobe (or remove the call entirely).
+
+### Minimal patch (keep structure, use allowed helper)
+```diff
+@@
+ SEC("kprobe")
+ __naked void entry(void)
+ {
+ 	asm volatile ("					\
+-	call %[bpf_ktime_get_coarse_ns];		\
++	call %[bpf_ktime_get_ns];			\
+ 	r0 = 0;						\
+ 	exit;						\
+ "	:
+-	: __imm(bpf_ktime_get_coarse_ns)
++	: __imm(bpf_ktime_get_ns)
+ 	: __clobber_all);
+ }
+```
+
+This should satisfy the verifier because `bpf_ktime_get_ns` is commonly allowed for kprobe programs.

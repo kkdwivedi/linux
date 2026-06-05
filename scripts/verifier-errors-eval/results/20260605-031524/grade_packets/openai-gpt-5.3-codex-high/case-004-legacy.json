@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Guard helper_a with if (!s) return 0; before s->x.",
+    "Make the function pattern local/static only if that changes verifier validation so the argument is proven non-NULL, without hiding an unsafe dereference."
+  ],
+  "canonical_fix": "Add a NULL check in helper_a before reading s->x, returning a safe value on the NULL path.",
+  "case_id": "case-004",
+  "category": "Register Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The global subprogram dereferences its pointer argument directly. The verifier validates global subprograms for any argument state matching the prototype, including NULL-like memory arguments, so the callee must prove the pointer is non-NULL before dereferencing.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-004-legacy.txt",
+    "case_id": "case-004",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 1415,
+    "prompt_path": "public/case-004/prompt_legacy.md",
+    "prompt_sha256": "5122475504cbe77965669ffc9de4273ee4a86feb8b73ecbb090ea008b68a08ae",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-004-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "83c7d747-e021-4ef4-9229-f49703f81119",
+    "started_at": "2026-06-05T03:16:45+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "The failure is caused by how the verifier treats `helper_a()`\u2019s argument when validating that subprogram on its own.\n\n### Why it fails\n\nIn the log, at `helper_a` entry:\n\n- `R1=mem_or_null(id=1,sz=4)`\n\nSo `s` is considered a **nullable memory pointer**.  \nThen the code does:\n\n- `r6 = r1`\n- `r2 = *(u32 *)(r6 +0)`  \u2190 dereference `s->x`\n\nThere is no prior null check, so dereferencing `mem_or_null` is rejected:\n\n- `R6 invalid mem access 'mem_or_null'`\n\nEven though caller passes `&s` (non-null stack address), verifier checks `helper_a` with generic arg constraints, not just that one callsite fact.\n\n---\n\n### Smallest likely fix\n\nAdd a null check before dereferencing `s`.\n\n```diff\n@@\n __noinline int helper_a(const struct Item *s)\n {\n+\tif (!s)\n+\t\treturn 0;\n \treturn bpf_get_prandom_u32() < s->x;\n }\n```\n\nThis is minimal and should make verifier happy by refining `s` to non-null on the dereference path.",
+  "must_mention": [
+    "The callee argument may be NULL",
+    "The dereference is inside helper_a",
+    "The fix belongs before s->x is read"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check after dereferencing s",
+    "Checks the address of the local object in entry but leaves helper_a unsafe for verifier validation",
+    "Changes the comparison but not the dereference"
+  ]
+}

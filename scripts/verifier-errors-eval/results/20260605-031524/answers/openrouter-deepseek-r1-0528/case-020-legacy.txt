@@ -1,0 +1,11 @@
+The verifier failure occurs because the program's call chain complexity exceeds the verifier's liveness analysis limit (10001 calls). The nested structure with 50 calls per function level creates an exponential number of call paths (50^7 = 781 billion paths), overwhelming the verifier.
+
+The fix reduces the number of calls per function from 50 to 2 by redefining the `CALLS_50` macro. This lowers the total call paths to 2^7 = 128, well below the verifier's limit. The stack offsets (8 and 16) remain valid as they are distinct and within bounds.
+
+Patch:
+```c
+#undef CALLS_50
+#define CALLS_50(fn) CALL_AT(fn, 8) CALL_AT(fn, 16)
+```
+
+Apply this change after the original macro definitions and before any function uses `CALLS_50`. This is the smallest effective change to pass verification while maintaining the program structure.

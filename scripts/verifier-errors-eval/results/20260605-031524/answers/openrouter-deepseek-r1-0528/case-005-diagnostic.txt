@@ -1,0 +1,27 @@
+The verifier failure occurs because the `bpf_copy_from_user` helper is sleepable, meaning it may block during execution. This helper is called within a non-preemptible region created by `bpf_preempt_disable()` and `bpf_preempt_enable()`, which is not allowed. Sleepable helpers cannot be used in non-preemptible contexts because they might cause scheduling issues.
+
+**Proposed Fix:**
+Remove the non-preemptible region since it's unnecessary for this simple program and conflicts with the sleepable helper. The critical section only contains the `bpf_copy_from_user` call, so the preemption guards can be safely removed.
+
+**Patch:**
+```diff
+--- original.c
++++ fixed.c
+@@ -8,8 +8,6 @@
+ {
+ 	u32 data;
+ 
+-	bpf_preempt_disable();
+ 	bpf_copy_from_user(&data, sizeof(data), NULL);
+-	bpf_preempt_enable();
+ 	return 0;
+ }
+```
+
+**Explanation:**
+- Removed `bpf_preempt_disable()` and `bpf_preempt_enable()` calls
+- The sleepable helper `bpf_copy_from_user` is now in a preemptible context
+- Maintains original functionality while satisfying verifier constraints
+- Fixes the "sleepable helper in non-preemptible region" error
+
+Note: The NULL pointer passed to `bpf_copy_from_user` may cause runtime issues but wasn't flagged in the provided verifier log. This fix specifically addresses the context safety error shown in the log.

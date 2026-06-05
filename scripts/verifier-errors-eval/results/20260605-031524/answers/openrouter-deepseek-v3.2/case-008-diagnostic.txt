@@ -1,0 +1,18 @@
+The verifier error occurs because `bpf_dynptr_slice` is called with a length of 9 bytes, but the provided stack buffer `buffer` is only 8 bytes. The verifier enforces that the memory region (third argument) must be at least as large as the requested length (fourth argument). Since the buffer is allocated as `char buffer[8]`, accessing 9 bytes would overflow into adjacent stack memory (specifically into the `struct bpf_dynptr ptr` at offset `fp-16`), which is invalid.
+
+The smallest fix is to adjust the length argument to match the buffer size, changing `9` to `8`. This ensures the memory/length pair satisfies the verifier's safety checks.
+
+Patch:
+```diff
+--- a/case.c
++++ b/case.c
+@@ -7,7 +7,7 @@ int entry(struct __sk_buff *skb)
+ 	if (bpf_dynptr_from_skb(skb, 0, &ptr))
+ 		return 1;
+ 
+-	data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
++	data = bpf_dynptr_slice(&ptr, 0, buffer, 8);
+ 
+ 	return !!data;
+ }
+```

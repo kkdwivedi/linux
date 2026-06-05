@@ -1,0 +1,109 @@
+{
+  "answer_text": "The verifier failure occurs because `bpf_local_irq_save` and `bpf_local_irq_restore` must be used in a last-in, first-out (LIFO) order to ensure proper nesting and avoid race conditions. In the original code, the IRQ flags are saved in this order:\n\n1. `flags1` (first saved, ID=1)\n2. `flags2` (second saved, ID=2)\n\nBut then they are restored in the same order they were saved:\n\n1. `flags1` (restored first - this is incorrect, as ID=2 should be restored first)\n2. `flags2` (restored second)\n\nThe verifier correctly detects this as a violation of the required LIFO order. The fix is to restore `flags2` first, then `flags1`.\n\nHere's the minimal patch to fix the issue:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);  // Restore in reverse order\n\tbpf_local_irq_restore(&flags1);  // Restore in reverse order\n\treturn 0;\n}\n```\n\nThis change ensures that the IRQ flags are restored in the correct LIFO order, which satisfies the verifier's resource lifetime safety checks.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-017-diagnostic.txt",
+    "case_id": "case-017",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 2781,
+    "prompt_path": "public/case-017/prompt_diagnostic.md",
+    "prompt_sha256": "675d45e8a367c50d949964d5e150f18c1e043733cbcf9e98094409311c602ad9",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-017-diagnostic.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "ca6d7054-bf0c-40e3-b735-c4912a7c9de3",
+    "started_at": "2026-06-05T03:21:06+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00021009999999999998,
+    "output_cost_usd": 0.0005382000000000001,
+    "total_cost_usd": 0.0007483
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 955,
+    "output_tokens": 299,
+    "raw_usage": {
+      "completion_tokens": 299,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.0005087,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.000299,
+        "upstream_inference_cost": 0.0005087,
+        "upstream_inference_prompt_cost": 0.0002097
+      },
+      "is_byok": false,
+      "prompt_tokens": 955,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 384,
+        "video_tokens": 0
+      },
+      "total_tokens": 1254
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1254
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "The verifier failure occurs because `bpf_local_irq_save` and `bpf_local_irq_restore` must be used in a last-in, first-out (LIFO) order to ensure proper nesting and avoid race conditions. In the original code, the IRQ flags are saved in this order:\n\n1. `flags1` (first saved, ID=1)\n2. `flags2` (second saved, ID=2)\n\nBut then they are restored in the same order they were saved:\n\n1. `flags1` (restored first - this is incorrect, as ID=2 should be restored first)\n2. `flags2` (restored second)\n\nThe verifier correctly detects this as a violation of the required LIFO order. The fix is to restore `flags2` first, then `flags1`.\n\nHere's the minimal patch to fix the issue:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);  // Restore in reverse order\n\tbpf_local_irq_restore(&flags1);  // Restore in reverse order\n\treturn 0;\n}\n```\n\nThis change ensures that the IRQ flags are restored in the correct LIFO order, which satisfies the verifier's resource lifetime safety checks.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "stop"
+      }
+    ],
+    "created": 1780629667,
+    "id": "gen-1780629667-a2k2ExcqGi3sJpcTAjT9",
+    "model": "qwen/qwen3-coder-480b-a35b-07-25",
+    "object": "chat.completion",
+    "provider": "DeepInfra",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 299,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.0005087,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.000299,
+        "upstream_inference_cost": 0.0005087,
+        "upstream_inference_prompt_cost": 0.0002097
+      },
+      "is_byok": false,
+      "prompt_tokens": 955,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 384,
+        "video_tokens": 0
+      },
+      "total_tokens": 1254
+    }
+  },
+  "reasoning_content": ""
+}

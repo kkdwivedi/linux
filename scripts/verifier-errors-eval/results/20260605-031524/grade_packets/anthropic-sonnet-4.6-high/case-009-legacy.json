@@ -1,0 +1,67 @@
+{
+  "acceptable_fixes": [
+    "Use bpf_rcu_read_lock(), load task = value->task, check if (!task), call bpf_task_acquire(task) only on the non-NULL path, and unlock appropriately.",
+    "Avoid reading a nullable map kptr field directly and instead pass a task pointer from a trusted source that already satisfies bpf_task_acquire's argument contract."
+  ],
+  "canonical_fix": "Load value->task into a temporary, prove it is non-NULL on the call path, and use the verifier-required trusted/RCU-safe access pattern before calling bpf_task_acquire.",
+  "case_id": "case-009",
+  "category": "Call Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "value->task is loaded from a map value as an RCU/null-capable task pointer. bpf_task_acquire requires an argument that the verifier can prove is non-NULL and trusted/acceptable for that kfunc. Passing the field directly does not satisfy that contract.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-high/case-009-legacy.txt",
+    "case_id": "case-009",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-high",
+    "prompt_bytes": 7630,
+    "prompt_path": "public/case-009/prompt_legacy.md",
+    "prompt_sha256": "cf955480f8f9d7c397454ba70a58615a32d27994e0f99c26d423ded383546618",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-high/case-009-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "15fa9618-8e55-46b6-8f47-68c6b1459c54",
+    "started_at": "2026-06-05T04:10:46+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Verifier Failure Analysis\n\nThe failure occurs at:\n```\n3: (79) r1 = *(u64 *)(r0 +0)   ; R1=rcu_ptr_or_null_task_struct(id=10)\n4: (85) call bpf_task_acquire#63762\nPossibly NULL pointer passed to trusted R1\n```\n\nWhen `value->task` is loaded from the map, the verifier correctly tracks it as `rcu_ptr_or_null_task_struct` \u2014 a kptr stored in a map can be NULL. Passing this potentially-NULL value directly to `bpf_task_acquire`, which requires a non-NULL trusted/RCU pointer (the `trusted` annotation on R1), triggers the error.\n\n## Fix\n\nAdd an explicit NULL check on `value->task` before calling `bpf_task_acquire`. Loading the field into a local variable and guarding it lets the verifier narrow the type to non-null:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired, *task_ptr;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n\ttask_ptr = value->task;\n\tif (!task_ptr)\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(task_ptr);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\n**Why this works:** After the `if (!task_ptr) return 0;` guard, the verifier knows `task_ptr` is non-NULL (`rcu_ptr_task_struct` without the `_or_null` qualifier), satisfying the requirement that `bpf_task_acquire`'s first argument must be a non-NULL trusted/RCU pointer.",
+  "must_mention": [
+    "The first argument may be NULL",
+    "The pointer comes from value->task/map kptr state",
+    "The call must happen only after the verifier can prove the pointer satisfies the kfunc contract"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check on the returned acquired pointer only",
+    "Checks value but not value->task",
+    "Casts value->task to another pointer type without proving trust/non-NULL"
+  ]
+}

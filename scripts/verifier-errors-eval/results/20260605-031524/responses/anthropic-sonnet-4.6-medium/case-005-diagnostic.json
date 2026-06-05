@@ -1,0 +1,87 @@
+{
+  "answer_text": "The fix is to move `bpf_copy_from_user` outside the preempt-disabled region. `bpf_copy_from_user` is a sleepable helper and cannot be called while preemption is disabled.\n\n```c\nSEC(\"?fentry.s/sys_getpgid\")\nint entry(void *ctx)\n{\n\tu32 data;\n\n\tbpf_copy_from_user(&data, sizeof(data), NULL);\n\tbpf_preempt_disable();\n\tbpf_preempt_enable();\n\treturn 0;\n}\n```",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-medium/case-005-diagnostic.txt",
+    "case_id": "case-005",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-medium",
+    "prompt_bytes": 3103,
+    "prompt_path": "public/case-005/prompt_diagnostic.md",
+    "prompt_sha256": "799957463f3832353b191717439b9959634b01ce147029e024cd92ae8b255a93",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-medium/case-005-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "2ae4b407-8369-4a7b-8f58-ee2e3a17df7d",
+    "started_at": "2026-06-05T03:17:51+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00339,
+    "output_cost_usd": 0.00219,
+    "total_cost_usd": 0.00558
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1130,
+    "output_tokens": 146,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1130,
+      "output_tokens": 146,
+      "output_tokens_details": {
+        "thinking_tokens": 0
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1276
+  },
+  "raw_response": {
+    "content": [
+      {
+        "text": "The fix is to move `bpf_copy_from_user` outside the preempt-disabled region. `bpf_copy_from_user` is a sleepable helper and cannot be called while preemption is disabled.\n\n```c\nSEC(\"?fentry.s/sys_getpgid\")\nint entry(void *ctx)\n{\n\tu32 data;\n\n\tbpf_copy_from_user(&data, sizeof(data), NULL);\n\tbpf_preempt_disable();\n\tbpf_preempt_enable();\n\treturn 0;\n}\n```",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01QBk8q1NrXzyyZPTiCgt1tT",
+    "model": "claude-sonnet-4-6",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1130,
+      "output_tokens": 146,
+      "output_tokens_details": {
+        "thinking_tokens": 0
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

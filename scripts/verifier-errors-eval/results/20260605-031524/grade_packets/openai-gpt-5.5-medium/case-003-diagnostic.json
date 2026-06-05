@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Remove the byte store to fp-7 before reloading the pointer.",
+    "Store the scalar into a different stack slot that does not overlap the pointer spill.",
+    "Reload/use the original context pointer instead of the corrupted spill."
+  ],
+  "canonical_fix": "Do not partially overwrite the stack slot that contains the spilled pointer. Use a separate stack slot/register for the scalar byte, or reload the original pointer from a preserved uncorrupted source before dereferencing.",
+  "case_id": "case-003",
+  "category": "Register Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The program spills a pointer to the stack, partially overwrites one byte of the spill with a scalar, reloads the corrupted stack slot, and then dereferences the result. The verifier no longer treats the reloaded value as a pointer.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-medium/case-003-diagnostic.txt",
+    "case_id": "case-003",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-medium",
+    "prompt_bytes": 2939,
+    "prompt_path": "public/case-003/prompt_diagnostic.md",
+    "prompt_sha256": "f0ae7f2740c6566909dcad09724c1c4e67495167ac5f9dff858044543f91e0e9",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-medium/case-003-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "a1128b75-b86d-4eef-ae14-92d3327e1a31",
+    "started_at": "2026-06-05T03:15:35+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The failure is caused by corrupting the spilled context pointer on the stack.\n\n`r1` is the socket context pointer. The program spills it here:\n\n```asm\n*(u64*)(r10 - 8) = r1;\n```\n\nThat stack slot is bytes `fp-8 .. fp-1`. Then this instruction writes one byte inside that same slot:\n\n```asm\n*(u8*)(r10 - 7) = r0;\n```\n\nAfter a partial overwrite of a spilled pointer, the verifier can no longer treat the 8-byte stack slot as a valid pointer spill. The log shows that as:\n\n```text\nfp-8=mmmmmmmm\n```\n\nSo when the program reloads it:\n\n```asm\nr0 = *(u64*)(r10 - 8);\n```\n\n`r0` becomes an unknown scalar, not a `ctx` pointer. The next instruction then tries to dereference that scalar:\n\n```asm\nr0 = *(u64*)(r0 + 8);\n```\n\nand the verifier rejects it:\n\n```text\nR0 invalid mem access 'scalar'\n```\n\nA minimal fix is to avoid writing into the 8-byte slot containing the spilled pointer. Store the byte somewhere else on the stack. Also, for a `SEC(\"socket\")` program, offset `8` in `struct __sk_buff` is a 32-bit field, so the final context load should be `u32`, not `u64`, to avoid a likely follow-up verifier error.\n\nPatch:\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -8,9 +8,9 @@ __naked void entry(void)\n \tasm volatile (\"\t\t\t\t\t\\\n \t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n \tr0 = 0x23;\t\t\t\t\t\\\n-\t*(u8*)(r10 - 7) = r0;\t\t\t\t\\\n+\t*(u8*)(r10 - 16) = r0;\t\t\t\t\\\n \tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n-\tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n+\tr0 = *(u32*)(r0 + 8);\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t::: __clobber_all);\n }\n```\n\nThe essential verifier fix is the stack offset change: the byte store no longer overlaps the spilled pointer, so reloading from `r10 - 8` preserves the `ctx` pointer type. The `u32` load makes the context field access match the socket context layout.",
+  "must_mention": [
+    "The pointer spill is corrupted by a partial write",
+    "The reload becomes scalar/unknown",
+    "Dereferencing the scalar is invalid"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a bounds check after the pointer has already become scalar",
+    "Changes only the final load offset",
+    "Claims the issue is packet or map bounds"
+  ]
+}

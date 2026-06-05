@@ -1,0 +1,67 @@
+### Explanation of the Verifier Failure
+
+The verifier log indicates that the eBPF program of type `kprobe` is not allowed to use the helper function `bpf_ktime_get_coarse_ns`. This is a **policy restriction** based on the program type. Specifically:
+
+- The `kprobe` program type has a restricted set of allowed helper functions.
+- `bpf_ktime_get_coarse_ns` is not in the allowed list for `kprobe` programs.
+
+The error message:
+```
+program of this type cannot use helper bpf_ktime_get_coarse_ns#160
+```
+confirms that the helper is disallowed for this program type.
+
+### Proposed Fix
+
+To resolve this, we need to either:
+1. Use a helper function that **is allowed** in `kprobe` programs, or
+2. Change the program type to one that allows `bpf_ktime_get_coarse_ns`.
+
+The **smallest source-level fix** that preserves the intent (to get a timestamp) is to replace `bpf_ktime_get_coarse_ns` with a similar helper that **is allowed** in `kprobe` programs. The most suitable alternative is `bpf_ktime_get_ns`, which is generally available in many program types, including `kprobe`.
+
+### Patch
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -22,7 +22,7 @@ __naked void entry(void)
+ {
+        asm volatile ("                                 \
+        call %[bpf_ktime_get_coarse_ns];                \
+-       r0 = 0;                                         \
++       r0 = 0;                                         \
+        exit;                                           \
+ "      :
+        : __imm(bpf_ktime_get_coarse_ns)
+        : __clobber_all);
+ }
+```
+
+**Correction:** The actual fix should change the helper function. Since we're using inline assembly, we must change the helper ID passed to the `call` instruction. However, in this case, the helper is specified via a macro `__imm(bpf_ktime_get_coarse_ns)`, which likely maps to the helper ID.
+
+To fix this, we should replace the helper with one that is allowed, such as `bpf_ktime_get_ns`. Assuming a similar macro exists for it (`__imm(bpf_ktime_get_ns)`), the fix is:
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -22,10 +22,10 @@ __naked void entry(void)
+ {
+        asm volatile ("                                 \
+        call %[bpf_ktime_get_coarse_ns];                \
+-       r0 = 0;                                         \
++       r0 = 0;                                         \
+        exit;                                           \
+ "      :
+-       : __imm(bpf_ktime_get_coarse_ns)
++       : __imm(bpf_ktime_get_ns)
+        : __clobber_all);
+ }
+```
+
+### Why This Works
+
+- `bpf_ktime_get_ns` is a widely supported helper in `kprobe` programs.
+- It provides a high-resolution timestamp (similar to `bpf_ktime_get_coarse_ns` but more precise).
+- The change is minimal and preserves the program's intent.
+
+This should allow the program to pass verification.

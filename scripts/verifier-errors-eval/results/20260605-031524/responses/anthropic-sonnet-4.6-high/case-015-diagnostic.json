@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\n`bpf_skb_pull_data` (called transitively through `helper_a \u2192 helper_b`) can reallocate/move the packet's linear data area. The BPF verifier therefore **invalidates every previously-held `pkt` pointer** after such a call. R7 (which held `p = sk->data`) is demoted to a plain scalar, so the subsequent `*(u32 *)(r7 +0) = r1` is rejected as an invalid pointer dereference.\n\nThe fix is to **reload `sk->data` and re-validate the bounds** after the helper call, before the write.\n\n## Patch\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p = (void *)(long)sk->data;\n\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\thelper_a(sk, 0);\n\n\t/* Packet data may have moved; reload and re-validate. */\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nAfter `helper_a` returns, `p` is reloaded from `sk->data` (which the verifier tracks as a fresh `pkt` pointer) and the bounds check re-establishes that `p + 1 \u2264 sk->data_end`, making the subsequent write to `*p` valid.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-high/case-015-diagnostic.txt",
+    "case_id": "case-015",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-high",
+    "prompt_bytes": 3663,
+    "prompt_path": "public/case-015/prompt_diagnostic.md",
+    "prompt_sha256": "f4ee93633090707b3340ee048a1cd9c29849370062dafdfa25c31c23d9df8821",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-high/case-015-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "6056725a-f23a-4ced-adde-39530f04a884",
+    "started_at": "2026-06-05T04:16:31+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.004329,
+    "output_cost_usd": 0.010905,
+    "total_cost_usd": 0.015234000000000001
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1443,
+    "output_tokens": 727,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1443,
+      "output_tokens": 727,
+      "output_tokens_details": {
+        "thinking_tokens": 330
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 480,
+    "reasoning_tokens": 0,
+    "total_tokens": 2170
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EtgICmUIDhgCKkAu3Jt38BZqWU9FCoK2rqGiTUiMjzf/DRxZRHjaJW6fLfzurGAZ7XNxUv/i3rYSMMMGZf6ovnUCFTduoJLLfsJbMhFjbGF1ZGUtc29ubmV0LTQtNjgAQgh0aGlua2luZxIMNUolQy6WTqeCGIkVGgzv5iI77K0RQJVPNeoiMNGkgzVnPfWyumyuQ8KkQmxJV4YMylTpU3+y5B+2eiGPJ6HkmtcnObqCkEZR8YLkhiqgB7cPQr+OQCw0mACvLikwcTKjFTijbtOfPj8tJgmFt3kDHF3nXdQenPoX1IAqQaglav1kiHJP7TSorpFJLoH8aAZNqshUSmO4uMMCQpolzqUpmdQu6xt8QpNOk20hxso5TpIetN4X1egd0jIph7h9lp3wxsrkWOcV21MCHZjHxl28c5/m/YNz7WUGeut1lVuVMsOLUTL6Q/MkzxFj4A4RAORT+LDAUb09p96dV/IHaKvc95lfVV2ILfR2LH7b08h+iGk+DdIduzWtAGHl2/p/chDj397eFQbFFlHJQfGb80mKwm3/NkA/2lCJamw+scjFsQNjlsWrxxw8LKgnHA+BUSz7ih+xCe/0h4TsuCqCiwj9ON6DXGO9WqWzHWAsUJdqwhuZW3hYZJAFSCrva/+LZZasBegCGRivaZhiU6HPyXAKLysQI72dBOw9sItC1ombBLlj2BzZMO4G+rsqYop0xitwv352WzjvRJrpsdHx5sWLA90RqjkvG+eSjZCkFwxQN6ADC2U0CKB10RdbWLWB0FfImkx5AAmXbIN4LZcOQqZHqVEwwlGBQ0+sSn2/R0cpoVi6eQAMK8GAjus2U0w/PewndDsdvXcbDzP9bD6s5EdAls+baRd1djK9c0AMgb3jfua+BMf/EfOlGb5/UmPgkJCnKRQ20Yz/KhRgGgaf0NQGtBdns9LWUxvaSTAUU8tUJp2bs2UjJhIZd1v3XVPr0UxdT2M9qQygoYQSEpuvwb76nCiyp56l8y4kw5K3bVlxm5U87o4oP6AA+pBG4l7UwPCOUmMgWQwSeGCFZmeIWOSYXqjEfmCBbztfnGB9G+WWdW6xfsHjZlJwW+T02hOn3errQhZS78sBKt99Y+ZB1KIcD89FX7AWHUvoSEj2cKlzkwIQ9QXitXM1CmryKWarunPc0fEL/AkLlJ9FkhXwtJtjDxwIOhAI0KniN9eZ6vyxv7WBJYlYxgWYxExu+khtiPw5Rjy1Xzg53DBnEJQGvqZ4Bu2pylxk8CZDqsH2GUCqSRc5z8jCcVzqL+EtYbNwOOebRQmWnSTn8843KzW8Yxq8QpnfURuxc/f9/Qs6I9vK3leoJDu1oyhZm8tl9NPD+DSwfiwt2E/MUY/5VBvZu6QWGAhuqHPdSifFjdK9zHvcB+q5BtFtabiCynb0WAPQatrCqbjtEeFPWolD7pFMKKkFlkqqR0sKgOep36z0UDIK1v0N//5FQl6NXiCnoRj7GIEYAQ==",
+        "thinking": "The verifier failure is clear: after calling `helper_a(sk, 0)` (which calls `bpf_skb_pull_data`), the packet data pointer `p` (stored in R7) is invalidated because `bpf_skb_pull_data` can potentially move the packet data in memory. After such a call, any previously validated packet pointers become stale scalars.\n\nThe fix is to reload `p` from `sk->data` after the helper call and re-validate the bounds before dereferencing it.\n\nThe simplest fix:\n\n\nWriting the corrected code...",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\n`bpf_skb_pull_data` (called transitively through `helper_a \u2192 helper_b`) can reallocate/move the packet's linear data area. The BPF verifier therefore **invalidates every previously-held `pkt` pointer** after such a call. R7 (which held `p = sk->data`) is demoted to a plain scalar, so the subsequent `*(u32 *)(r7 +0) = r1` is rejected as an invalid pointer dereference.\n\nThe fix is to **reload `sk->data` and re-validate the bounds** after the helper call, before the write.\n\n## Patch\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p = (void *)(long)sk->data;\n\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\thelper_a(sk, 0);\n\n\t/* Packet data may have moved; reload and re-validate. */\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nAfter `helper_a` returns, `p` is reloaded from `sk->data` (which the verifier tracks as a fresh `pkt` pointer) and the bounds check re-establishes that `p + 1 \u2264 sk->data_end`, making the subsequent write to `*p` valid.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01NGPz5zAPWKwLmudMrzqbJo",
+    "model": "claude-sonnet-4-6",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1443,
+      "output_tokens": 727,
+      "output_tokens_details": {
+        "thinking_tokens": 330
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": "The verifier failure is clear: after calling `helper_a(sk, 0)` (which calls `bpf_skb_pull_data`), the packet data pointer `p` (stored in R7) is invalidated because `bpf_skb_pull_data` can potentially move the packet data in memory. After such a call, any previously validated packet pointers become stale scalars.\n\nThe fix is to reload `p` from `sk->data` after the helper call and re-validate the bounds before dereferencing it.\n\nThe simplest fix:\n\n\nWriting the corrected code..."
+}

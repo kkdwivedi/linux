@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Lower MAX_STACK enough that the nested helper frames fit within 512 bytes.",
+    "Move large buffers out of nested helpers or reuse a smaller/shared buffer in a verifier-accepted way.",
+    "Restructure calls so helper_b and helper_c are not simultaneously on the stack with large local buffers."
+  ],
+  "canonical_fix": "Reduce stack use along the nested call chain or shorten the call chain so the combined stack depth is at or below the verifier limit.",
+  "case_id": "case-013",
+  "category": "Verifier Limit",
+  "difficulty": "medium",
+  "expected_explanation": "The call chain entry -> helper_c -> helper_b uses more than the verifier's combined call-stack depth limit. The large per-function stack buffers accumulate across nested bpf2bpf calls.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-013-diagnostic.txt",
+    "case_id": "case-013",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 2658,
+    "prompt_path": "public/case-013/prompt_diagnostic.md",
+    "prompt_sha256": "044070894a5a67f43ab32448001b1bd67c0db88fee4087d1bb67f71a9273513d",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-013-diagnostic.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "3ceeaf15-a7eb-4172-930b-b56d57e12492",
+    "started_at": "2026-06-05T03:21:03+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier failure occurs because the combined stack usage across nested function calls exceeds the 512-byte limit. Specifically, the call chain `entry -> helper_c -> helper_b` results in a total stack usage of 544 bytes, which is over the limit.\n\nEach of the functions `helper_b`, `helper_c`, and `helper_d` allocates a local array of size `MAX_STACK` (260 bytes). When these functions are called in nested fashion, their stack allocations accumulate. The verifier tracks the worst-case stack depth across all possible call paths, and in this case, the path through `helper_c -> helper_b` uses too much stack space.\n\nThe fix is to reduce the stack allocation in at least one of the functions involved in the deep call chain. The smallest change would be to reduce the size of the `buf` array in `helper_b` or `helper_c` to bring the total stack usage under the 512-byte limit.\n\nHere is the minimal fix:\n\n```diff\n--- a/helper_b\n+++ b/helper_b\n@@ -14,7 +14,7 @@ int helper_b(struct __sk_buff *skb)\n int helper_b(struct __sk_buff *skb)\n {\n-\tvolatile char buf[MAX_STACK] = {};\n+\tvolatile char buf[200] = {};\n \t__sink(buf[MAX_STACK - 1]);\n \treturn helper_a(0, skb) + skb->len;\n }\n```\n\nThis reduces the stack usage of `helper_b` from 260 bytes to 200 bytes. Combined with the 260-byte allocations in `helper_c` and `helper_d`, the total becomes 200 + 260 + 260 = 720 bytes, but since `helper_d` is called after `helper_b` returns, the peak concurrent stack usage is now 200 + 260 = 460 bytes (from `helper_b` and `helper_c`), which is under the 512-byte limit.\n\nHowever, looking more carefully at the call chain:\n- `helper_c` calls `helper_b` and `helper_d`\n- `helper_b` does not call `helper_d`\n\nSo the actual stack accumulation is:\n- `helper_c` (260 bytes) + `helper_b` (260 bytes) = 520 bytes (still over)\nOr:\n- `helper_c` (260 bytes) + `helper_d` (260 bytes) = 520 bytes (still over)\n\nWe need to reduce the total to under 512 bytes. If we reduce `helper_b`'s allocation to 252 bytes, then:\n- `helper_c` (260) + `helper_b` (252) = 512 bytes (exactly at limit, might still fail)\nOr better, reduce it to 250:\n- `helper_c` (260) + `helper_b` (250) = 510 bytes (under limit)\n\nBut `helper_d` is also called from `helper_c`, so we must consider that stack usage too. Since `helper_d` is called after `helper_b` returns, they don't stack concurrently. The verifier is tracking the maximum concurrent stack usage, which would be the larger of:\n- `helper_c` + `helper_b` (while `helper_b` is active)\n- `helper_c` + `helper_d` (while `helper_d` is active)\n\nIf we reduce `helper_b` to 250 bytes:\n- `helper_c` (260) + `helper_b` (250) = 510 bytes (under 512)\n- `helper_c` (260) + `helper_d` (260) = 520 bytes (over 512)\n\nSo we must also reduce `helper_d` or `helper_c`. The smallest change is to reduce one of them slightly. Let's reduce `helper_b` to 250 and `helper_d` to 250:\n\nActually, let's just reduce `helper_b` to 250 and see if that's sufficient. The error message says the combined stack size of 3 calls is 544. That suggests the path is `entry -> helper_c -> helper_b` (and maybe `helper_d` too, but the log points to `helper_b`).\n\nLet's re-read: \"combined stack size of 3 calls is 544\". The call chain is `helper_c -> helper_b` (and `helper_c -> helper_d`). The verifier is likely considering the maximum stack depth in `helper_c`, which calls both `helper_b` and `helper_d`. Since both are called from `helper_c`, and assuming they don't call each other, the stack usage in `helper_c` is the sum of its own local variables plus the maximum of the two callees' stack usage.\n\nBut the error is triggered at `helper_b`, and it says \"combined stack size of 3 calls is 544\". This likely means the path `entry -> helper_c -> helper_b` uses 544 bytes total.\n\nIf `entry` has no local stack, and `helper_c` allocates 260, and `helper_b` allocates 260, that's 260 + 260 = 520. Still not 544.\n\nPerhaps `entry` also allocates some stack (e.g., for calling convention, or its own locals). Or perhaps the verifier includes padding or alignment.\n\nLet's assume the calculation is:\n- `entry` (some amount) + `helper_c` (260) + `helper_b` (260) = 544\nThen `entry`'s stack is 544 - 260 - 260 = 24 bytes.\n\nTo get under 512 total, we need:\n24 + 260 + `helper_b_new_size` < 512\n284 + `helper_b_new_size` < 512\n`helper_b_new_size` < 228\n\nSo reducing `helper_b`'s `buf` to 227 should work.\n\nBut to be safe and match the pattern of the other functions, let's reduce it to 200.\n\n```diff\n--- a/source.c\n+++ b/source.c\n@@ -14,7 +14,7 @@ int helper_a(int val, struct __sk_buff *skb)\n int helper_b(struct __sk_buff *skb)\n {\n-\tvolatile char buf[MAX_STACK] = {};\n+\tvolatile char buf[200] = {};\n \t__sink(buf[MAX_STACK - 1]);\n \treturn helper_a(0, skb) + skb->len;\n }\n```\n\nThis is the minimal and clearest fix to resolve the stack depth limit exceeded error.",
+  "must_mention": [
+    "Combined call-chain stack depth exceeds the verifier limit",
+    "Large local buffers in nested helpers are the cause",
+    "Fix must reduce stack usage or call depth"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds bounds checks around skb fields",
+    "Changes helper return arithmetic only",
+    "Reduces stack in a helper not on the reported call chain while leaving the chain over limit"
+  ]
+}

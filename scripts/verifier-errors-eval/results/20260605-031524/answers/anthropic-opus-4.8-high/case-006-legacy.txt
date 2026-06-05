@@ -1,0 +1,44 @@
+## Explanation
+
+The verifier rejects the program here:
+
+```
+program of this type cannot use helper bpf_ktime_get_coarse_ns#160
+```
+
+`bpf_ktime_get_coarse_ns()` is **not** on the allow-list of helpers for tracing-type programs (`BPF_PROG_TYPE_KPROBE`, perf events, tracepoints). The kernel restricts the "coarse" time helpers from these contexts because they can run in NMI/interrupt context where reading the coarse clock isn't safe. Only the regular `bpf_ktime_get_ns()` / `bpf_ktime_get_boot_ns()` style helpers are permitted there.
+
+So the failure is purely a *program-type vs. helper* mismatch, not a logic/register problem — the verifier stops at the very first instruction (`call`).
+
+## Smallest fix
+
+Either:
+
+1. **Use an allowed helper** in a kprobe program (e.g. `bpf_ktime_get_ns`), or
+2. **Change the program type** to one where `bpf_ktime_get_coarse_ns` is allowed (networking-type programs such as `tc`).
+
+If the intent is to exercise `bpf_ktime_get_coarse_ns`, the minimal edit is to switch the attach/program type:
+
+```c
+SEC("tc")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_coarse_ns];		\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_coarse_ns)
+	: __clobber_all);
+}
+```
+
+If instead the intent is to keep it as a kprobe, swap the helper:
+
+```c
+	call %[bpf_ktime_get_ns];
+...
+	: __imm(bpf_ktime_get_ns)
+```
+
+Either change resolves the "cannot use helper" rejection. Given the test is a `kprobe`, the most faithful one-line fix is changing `SEC("kprobe")` to `SEC("tc")` so the coarse-time helper is on the allow-list.

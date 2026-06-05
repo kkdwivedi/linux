@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nThe verifier rejects the program because `bpf_ktime_get_coarse_ns()` is **not in the allowed helper set for `BPF_PROG_TYPE_KPROBE`**.\n\n`bpf_ktime_get_coarse_ns()` is intentionally restricted: it reads a coarse timestamp that is only updated under certain conditions and is not safe/permitted from arbitrary NMI/interrupt contexts such as kprobes. The kprobe program type's helper-allow check (`kprobe_prog_func_proto`) does not expose this helper, so the call fails the policy check at load time:\n\n```\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\nThis is a program-type/helper compatibility error, not a data-flow or safety error.\n\n## Fix\n\nUse a time helper that *is* permitted for kprobe programs. `bpf_ktime_get_ns()` is allowed for tracing/kprobe program types and provides equivalent functionality.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"kprobe\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_ns];\t\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_ns)\n\t: __clobber_all);\n}\n```\n\nThis is the smallest change: swap `bpf_ktime_get_coarse_ns` \u2192 `bpf_ktime_get_ns` (in both the `call` and the `__imm(...)` operand). \n\nAlternatively, if the intent is to test `bpf_ktime_get_coarse_ns()` specifically, change the program type to one that allows it (e.g. `SEC(\"tc\")`/`BPF_PROG_TYPE_SCHED_CLS` or a socket filter), which would satisfy the helper policy.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-006-diagnostic.txt",
+    "case_id": "case-006",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 1849,
+    "prompt_path": "public/case-006/prompt_diagnostic.md",
+    "prompt_sha256": "0c351f7275500308d5dd7e77f65459b6d00560f51ba8d1d768a521650bb1de73",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-006-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "d3396d45-8708-49d1-85e2-c1025565eb42",
+    "started_at": "2026-06-05T03:17:15+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.004365,
+    "output_cost_usd": 0.019375,
+    "total_cost_usd": 0.02374
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 873,
+    "output_tokens": 775,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 873,
+      "output_tokens": 775,
+      "output_tokens_details": {
+        "thinking_tokens": 111
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1648
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "Eq4DCmMIDhgCKkBwY3he/72U7PQZbaW0b/+ifBCCZj+RJM5uZZd27SMwcG8ZCdFMh4JCyL30lwadSwie2xoj9N4BFaEE4/eVr/1FMg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDLLkqgpVBqq2kVxvthoM80fhmPRg9enDfXvGIjAua21hTh7Nuj8Vq1j/gh/zbEwyid0TaHQuXfc5DWz/xulpiXLZVeefXjBT2TVHSTEq+AG89gxv7a2TVAwyrxzYIY62pYhvL0nBi3nkGFV2bdxbNPgDAwGxhofiZ8E3LeWMh8j/BzlIzZFGLQUiRBFmQQKR+varKYQlgWfrWzord116RUm/vRAm4QpKZWv02rcwx+VQZijUaXXhNicuwv/RZFF8ObEbuHz1OzleQo+ajtyNYACw9pYh6xPiKBRfljpUWL3AF1H2+uPRUiLrWPVQ3Bx3G8zubZ4TTJHG3XUJTcxc0OsuangMOyM0GVLJYNdOZXXKBJnqg7YCf1k+4o6LnPoNDasryYTcdLx75B+U0KgH4liB9dBB/rN+GPfTuQifavafJu7bf677qxgB",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nThe verifier rejects the program because `bpf_ktime_get_coarse_ns()` is **not in the allowed helper set for `BPF_PROG_TYPE_KPROBE`**.\n\n`bpf_ktime_get_coarse_ns()` is intentionally restricted: it reads a coarse timestamp that is only updated under certain conditions and is not safe/permitted from arbitrary NMI/interrupt contexts such as kprobes. The kprobe program type's helper-allow check (`kprobe_prog_func_proto`) does not expose this helper, so the call fails the policy check at load time:\n\n```\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\nThis is a program-type/helper compatibility error, not a data-flow or safety error.\n\n## Fix\n\nUse a time helper that *is* permitted for kprobe programs. `bpf_ktime_get_ns()` is allowed for tracing/kprobe program types and provides equivalent functionality.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"kprobe\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_ns];\t\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_ns)\n\t: __clobber_all);\n}\n```\n\nThis is the smallest change: swap `bpf_ktime_get_coarse_ns` \u2192 `bpf_ktime_get_ns` (in both the `call` and the `__imm(...)` operand). \n\nAlternatively, if the intent is to test `bpf_ktime_get_coarse_ns()` specifically, change the program type to one that allows it (e.g. `SEC(\"tc\")`/`BPF_PROG_TYPE_SCHED_CLS` or a socket filter), which would satisfy the helper policy.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_017Ccf4PTS4h5SEK9nttme2N",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 873,
+      "output_tokens": 775,
+      "output_tokens_details": {
+        "thinking_tokens": 111
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

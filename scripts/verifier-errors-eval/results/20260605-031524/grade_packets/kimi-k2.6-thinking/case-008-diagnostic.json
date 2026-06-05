@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Change char buffer[8] to char buffer[9] or larger.",
+    "Change the bpf_dynptr_slice length argument from 9 to sizeof(buffer) or 8."
+  ],
+  "canonical_fix": "Make the fallback buffer at least 9 bytes or reduce the requested slice length to 8 bytes.",
+  "case_id": "case-008",
+  "category": "Call Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The fallback stack buffer is 8 bytes, but bpf_dynptr_slice is asked to use 9 bytes. The memory/length pair therefore describes a read beyond the stack object.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-thinking/case-008-diagnostic.txt",
+    "case_id": "case-008",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-thinking",
+    "prompt_bytes": 3876,
+    "prompt_path": "public/case-008/prompt_diagnostic.md",
+    "prompt_sha256": "6473479527e9eaa1732d9224d382c7fc572786756d22aa3518774f108c567394",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-thinking/case-008-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "enabled"
+    },
+    "run_id": "be114af8-bbbe-4146-84b0-02cf6b9dabb9",
+    "started_at": "2026-06-05T03:46:08+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "**Explanation**\n\n`bpf_dynptr_slice` takes a memory buffer and a length as its 3rd and 4th arguments. The verifier treats this as a **memory/length pair** and checks that the pointed-to object is large enough for the requested length.\n\nIn this program:\n\n* `buffer` is declared as `char buffer[8]`, so the verifier knows it is an 8-byte stack object.\n* The call passes `9` as the length: `bpf_dynptr_slice(&ptr, 0, buffer, 9)`.\n\nBecause 9 bytes are requested from an 8-byte buffer, the verifier rejects the call with:\n\n```\ninvalid read from stack R3 off -24+8 size 9\nR3 and R4 memory, len pair leads to invalid memory access\n```\n\nThe fix is simply to make the buffer at least as large as the length argument (or reduce the length to fit the buffer).\n\n**Fix**\n\nIncrease `buffer` to 9 bytes so it matches the length passed to `bpf_dynptr_slice`:\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -2000,7 +2000,7 @@ char _license[] SEC(\"license\") = \"GPL\";\n SEC(\"?cgroup_skb/egress\")\n int entry(struct __sk_buff *skb)\n {\n \tstruct bpf_dynptr ptr;\n-\tchar buffer[8] = {};\n+\tchar buffer[9] = {};\n \t__u64 *data;\n \n \tif (bpf_dynptr_from_skb(skb, 0, &ptr))\n```\n\n*(Alternatively, changing the length from `9` to `8` in the helper call would also satisfy the verifier, but making the buffer large enough for the requested slice is the most direct fix.)*",
+  "must_mention": [
+    "Requested length is 9",
+    "Buffer size is 8",
+    "The memory/length pair must fit"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks data for NULL after the call",
+    "Changes the dynptr initialization but leaves 9 against an 8-byte buffer",
+    "Treats the problem as a ringbuf capacity issue"
+  ]
+}

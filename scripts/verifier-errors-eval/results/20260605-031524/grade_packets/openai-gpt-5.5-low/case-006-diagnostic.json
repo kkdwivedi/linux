@@ -1,0 +1,63 @@
+{
+  "acceptable_fixes": [
+    "Replace bpf_ktime_get_coarse_ns with bpf_ktime_get_ns if that satisfies the program's requirements and is allowed.",
+    "Change the program type/section to one where the helper is allowed."
+  ],
+  "canonical_fix": "Use a helper allowed for this program type, such as an allowed time helper with suitable semantics, or move the logic to a program type/attach point where bpf_ktime_get_coarse_ns is permitted.",
+  "case_id": "case-006",
+  "category": "Policy",
+  "difficulty": "easy",
+  "expected_explanation": "The program type used by this case is not allowed to call bpf_ktime_get_coarse_ns. This is a helper policy/program-type compatibility failure, not a register or memory proof failure.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-low/case-006-diagnostic.txt",
+    "case_id": "case-006",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-low",
+    "prompt_bytes": 1849,
+    "prompt_path": "public/case-006/prompt_diagnostic.md",
+    "prompt_sha256": "0c351f7275500308d5dd7e77f65459b6d00560f51ba8d1d768a521650bb1de73",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-low/case-006-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "low"
+    },
+    "run_id": "d7e20efa-ad81-4707-9830-7d333fcd1d54",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier rejects the program immediately at instruction 0:\n\n```text\n0: (85) call bpf_ktime_get_coarse_ns#160\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\nThis is not a register-state or control-flow problem. The program is a `kprobe` program because of:\n\n```c\nSEC(\"kprobe\")\n```\n\nFor this program type, the verifier\u2019s helper policy does not allow `bpf_ktime_get_coarse_ns()`. Since helper availability is checked before the rest of the program matters, verification fails after processing only that one instruction.\n\nThe smallest likely source-level fix is to call a time helper that is allowed for kprobe programs. The usual allowed helper is `bpf_ktime_get_ns()`.\n\nThe program does not use the helper result anyway, since it immediately does:\n\n```asm\nr0 = 0;\nexit;\n```\n\nSo replacing the helper call preserves the intent of \u201ccall a ktime helper, then return 0\u201d while satisfying the verifier policy.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..1111111 100644\n--- a/case.c\n+++ b/case.c\n@@ -8,10 +8,10 @@ SEC(\"kprobe\")\n __naked void entry(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n-\tcall %[bpf_ktime_get_coarse_ns];\t\t\\\n+\tcall %[bpf_ktime_get_ns];\t\t\t\\\n \tr0 = 0;\t\t\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t:\n-\t: __imm(bpf_ktime_get_coarse_ns)\n+\t: __imm(bpf_ktime_get_ns)\n \t: __clobber_all);\n }\n```\n\nWhy this should pass: `bpf_ktime_get_ns()` is a standard helper permitted for kprobe/tracing-style programs, unlike `bpf_ktime_get_coarse_ns()` in this verifier configuration. The rest of the program is valid: it sets `r0` to `0` before `exit`, so the program has a valid return value.",
+  "must_mention": [
+    "Helper is forbidden for this program type",
+    "The fix is to use an allowed helper or compatible program type"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds register initialization around the helper call",
+    "Treats it as a GPL license issue",
+    "Suggests a bounds or NULL check"
+  ]
+}

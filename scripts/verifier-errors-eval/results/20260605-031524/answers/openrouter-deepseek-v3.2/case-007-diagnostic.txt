@@ -1,0 +1,25 @@
+The verifier fails because the `slice_len` parameter passed to `bpf_dynptr_slice` is an unbounded scalar loaded from a global variable. The verifier cannot guarantee that this value (which could be any 32-bit number) fits within the stack-allocated `buffer` of fixed size `sizeof(struct ethhdr)`. This violates the verifier's requirement that memory-length pairs must be provably safe.
+
+The simplest fix is to replace the dynamic `slice_len` with the compile-time constant `sizeof(buffer)`, which the verifier can directly validate against the buffer size.
+
+```diff
+--- original.c
++++ fixed.c
+@@ -12,7 +12,7 @@ __u32 slice_len = sizeof(struct ethhdr);
+ SEC("?tc")
+ int entry(struct __sk_buff *skb)
+ {
+ 	struct bpf_dynptr ptr;
+ 	struct ethhdr *hdr;
+ 	char buffer[sizeof(*hdr)] = {};
+ 
+ 	bpf_dynptr_from_skb(skb, 0, &ptr);
+ 
+-	hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
++	hdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+ 	if (!hdr)
+ 		return SK_DROP;
+ 
+ 	return SK_PASS;
+ }
+```

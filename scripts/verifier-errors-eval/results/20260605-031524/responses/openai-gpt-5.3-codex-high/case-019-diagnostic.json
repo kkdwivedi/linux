@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier is rejecting this **before full instruction analysis** because of program structure:\n\n- `entry()` calls `helper_a()`\n- `helper_a()` conditionally does `call helper_a` (self-call)\n\nThat creates a recursive bpf2bpf call graph cycle (`helper_a -> helper_a`), and recursion is always forbidden, even if it looks runtime-bounded.\n\n### Smallest likely fix\n\nRewrite the self-call as an in-function bounded loop (tail-recursion elimination).  \nThat removes call-graph recursion while keeping behavior.\n\n```diff\n static __naked __noinline __attribute__((used))\n void helper_a(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n-\tr1 += 1;\t\t\t\t\t\\\n-\tr0 = r1;\t\t\t\t\t\\\n-\tif r1 < 4 goto l0_%=;\t\t\t\t\\\n-\texit;\t\t\t\t\t\t\\\n-l0_%=:\tcall helper_a;\t\t\t\t\t\\\n+l0_%=:\tr1 += 1;\t\t\t\t\t\\\n+\tr0 = r1;\t\t\t\t\t\\\n+\tif r1 < 4 goto l0_%=;\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t::: __clobber_all);\n }\n```\n\nWhy this should pass: no subprogram calls inside `helper_a`, so call graph is acyclic; loop is explicitly bounded by `r1 < 4`.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-019-diagnostic.txt",
+    "case_id": "case-019",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 2020,
+    "prompt_path": "public/case-019/prompt_diagnostic.md",
+    "prompt_sha256": "bc762d4843d61b1404dac4a4f4cffddeb5a6c6e29d1ad0933b5631140c8504bd",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-019-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "ef6cb89e-8956-4244-b304-27f47a78b4a6",
+    "started_at": "2026-06-05T03:17:02+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.001043,
+    "output_cost_usd": 0.031416,
+    "total_cost_usd": 0.032459
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 596,
+    "output_tokens": 2244,
+    "raw_usage": {
+      "input_tokens": 596,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 2244,
+      "output_tokens_details": {
+        "reasoning_tokens": 1955
+      },
+      "total_tokens": 2840
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 1955,
+    "total_tokens": 2840
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629457,
+    "created_at": 1780629422,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0d03c676f47eb087006a223faefb5c81a1967e4adf94e1ad83",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0d03c676f47eb087006a223faf75d481a1b5435bd631ca5c59",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier is rejecting this **before full instruction analysis** because of program structure:\n\n- `entry()` calls `helper_a()`\n- `helper_a()` conditionally does `call helper_a` (self-call)\n\nThat creates a recursive bpf2bpf call graph cycle (`helper_a -> helper_a`), and recursion is always forbidden, even if it looks runtime-bounded.\n\n### Smallest likely fix\n\nRewrite the self-call as an in-function bounded loop (tail-recursion elimination).  \nThat removes call-graph recursion while keeping behavior.\n\n```diff\n static __naked __noinline __attribute__((used))\n void helper_a(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n-\tr1 += 1;\t\t\t\t\t\\\n-\tr0 = r1;\t\t\t\t\t\\\n-\tif r1 < 4 goto l0_%=;\t\t\t\t\\\n-\texit;\t\t\t\t\t\t\\\n-l0_%=:\tcall helper_a;\t\t\t\t\t\\\n+l0_%=:\tr1 += 1;\t\t\t\t\t\\\n+\tr0 = r1;\t\t\t\t\t\\\n+\tif r1 < 4 goto l0_%=;\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t::: __clobber_all);\n }\n```\n\nWhy this should pass: no subprogram calls inside `helper_a`, so call graph is acyclic; loop is explicitly bounded by `r1 < 4`.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0d03c676f47eb087006a223fcd8bdc81a19d27785c2d4851e8",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 596,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 2244,
+      "output_tokens_details": {
+        "reasoning_tokens": 1955
+      },
+      "total_tokens": 2840
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

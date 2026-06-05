@@ -1,0 +1,27 @@
+`helper_b()` is passing a **modified context pointer** into `helper_c()`:
+
+```c
+helper_c(val, skb + 1)
+```
+
+For `struct __sk_buff *` (PTR_TO_CTX), the verifier requires dereferences to use the original ctx base pointer (offset 0).  
+`skb + 1` becomes ctx pointer with fixed offset `+192` (size of `struct __sk_buff`), and then `helper_c()` dereferences it (`skb->ifindex`), which is rejected:
+
+- `R2=ctx(imm=192)`
+- `dereference of modified ctx ptr ... disallowed`
+
+### Smallest likely fix
+Pass the original `skb` pointer unchanged.
+
+#### Patch
+```diff
+@@
+ __attribute__((noinline))
+ int helper_b(int val, struct __sk_buff *skb)
+ {
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+ }
+```
+
+This keeps `R2` as plain `ctx()` at call time, satisfying verifier rules for ctx dereference in `helper_c()`.

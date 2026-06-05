@@ -1,0 +1,64 @@
+The verifier is rejecting the program because the resource spin locks are acquired in one order but released in a different order.
+
+The program does:
+
+```c
+lock_a;
+lock_b;
+unlock_a;   /* wrong: lock_b is still held */
+unlock_b;
+```
+
+The verifier tracks `bpf_res_spin_lock()` acquisitions as a stack and requires LIFO release order. After `lock_b` is acquired, the top-most held lock is `lock_b`, so the next unlock must be `bpf_res_spin_unlock(&lock_b)`. The log shows the verifier failing exactly when the compiled program tries to unlock `lock_a` while `lock_b` is still held:
+
+```text
+10: call bpf_res_spin_unlock#63448
+bpf_res_spin_unlock cannot be out of order
+```
+
+The smallest fix is to release the locks in reverse acquisition order on the success path.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -12,7 +12,7 @@ int entry(struct __sk_buff *ctx)
+ 		bpf_res_spin_unlock(&lock_a);
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+ 	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+Resulting program:
+
+```c
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```
+
+This satisfies the verifier because the successful nested locking sequence becomes:
+
+```c
+lock_a;
+lock_b;
+unlock_b;
+unlock_a;
+```

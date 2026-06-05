@@ -1,0 +1,87 @@
+{
+  "answer_text": "The verifier requires that the first argument to `bpf_cpumask_populate` be verifier-known memory (stack, map value, etc.), not an arbitrary integer cast to a pointer. The fix is to use a stack-allocated `struct bpf_cpumask *` (or rather, allocate a properly-sized buffer on the stack) instead of casting an integer.\n\nThe smallest fix is to declare a local buffer of the appropriate size on the stack and pass that:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_tracing.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct cpumask local_mask;\n\tu64 bits;\n\tint ret;\n\n\tret = bpf_cpumask_populate(&local_mask, &bits, sizeof(bits));\n\tif (!ret)\n\t\treturn 2;\n\n\treturn 0;\n}\n```\n\nThe key change: replace the bogus `(struct bpf_cpumask *)0x123456` with a stack-allocated `struct cpumask local_mask` and pass `&local_mask` as the first argument. This gives the verifier a known stack memory location of the right type/size instead of an integer scalar.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-medium/case-001-diagnostic.txt",
+    "case_id": "case-001",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-medium",
+    "prompt_bytes": 3387,
+    "prompt_path": "public/case-001/prompt_diagnostic.md",
+    "prompt_sha256": "70fa73da88be6c0d0c8fc97fe892aca7a31514097f240a7d4ded815530dce3b0",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-medium/case-001-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "fcaf977c-4607-4860-a17a-8b641992ae9e",
+    "started_at": "2026-06-05T04:02:53+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.0036,
+    "output_cost_usd": 0.005235,
+    "total_cost_usd": 0.008834999999999999
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1200,
+    "output_tokens": 349,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1200,
+      "output_tokens": 349,
+      "output_tokens_details": {
+        "thinking_tokens": 0
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1549
+  },
+  "raw_response": {
+    "content": [
+      {
+        "text": "The verifier requires that the first argument to `bpf_cpumask_populate` be verifier-known memory (stack, map value, etc.), not an arbitrary integer cast to a pointer. The fix is to use a stack-allocated `struct bpf_cpumask *` (or rather, allocate a properly-sized buffer on the stack) instead of casting an integer.\n\nThe smallest fix is to declare a local buffer of the appropriate size on the stack and pass that:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_tracing.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct cpumask local_mask;\n\tu64 bits;\n\tint ret;\n\n\tret = bpf_cpumask_populate(&local_mask, &bits, sizeof(bits));\n\tif (!ret)\n\t\treturn 2;\n\n\treturn 0;\n}\n```\n\nThe key change: replace the bogus `(struct bpf_cpumask *)0x123456` with a stack-allocated `struct cpumask local_mask` and pass `&local_mask` as the first argument. This gives the verifier a known stack memory location of the right type/size instead of an integer scalar.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01NhSMyidCe5vqrwMsFGeaNH",
+    "model": "claude-sonnet-4-6",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1200,
+      "output_tokens": 349,
+      "output_tokens_details": {
+        "thinking_tokens": 0
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

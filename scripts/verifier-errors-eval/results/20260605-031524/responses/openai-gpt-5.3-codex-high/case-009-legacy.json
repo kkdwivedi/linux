@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier is failing at this call in `entry()`:\n\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\nFrom the log:\n\n- `value` is known non-NULL (after `if (!v)` check),\n- but `value->task` is loaded as `rcu_ptr_or_null_task_struct`,\n- and `bpf_task_acquire()` requires a non-NULL pointer argument at call time.\n\nSo verifier rejects with:\n\n> Possibly NULL pointer passed to trusted R1\n\nIt does **not** infer that `map_insert()` previously set this field, because map contents are mutable and the loaded kptr is still considered nullable.\n\n### Smallest likely fix\n\nLoad `value->task` into a local, check it for NULL, then call `bpf_task_acquire()` on that checked local.\n\n```diff\n@@ SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n-\tstruct task_struct *acquired;\n+\tstruct task_struct *acquired, *stored;\n \tstruct map_value *value;\n@@\n \tvalue = helper_a(task);\n \tif (!value)\n \t\treturn 0;\n \n-\tacquired = bpf_task_acquire(value->task);\n+\tstored = value->task;\n+\tif (!stored)\n+\t\treturn 0;\n+\n+\tacquired = bpf_task_acquire(stored);\n \tif (!acquired)\n \t\treturn 0;\n \n \tbpf_task_release(acquired);\n \treturn 0;\n }\n```\n\nThis is the minimal source-level change that should satisfy the verifier for this failure.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-009-legacy.txt",
+    "case_id": "case-009",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 7630,
+    "prompt_path": "public/case-009/prompt_legacy.md",
+    "prompt_sha256": "cf955480f8f9d7c397454ba70a58615a32d27994e0f99c26d423ded383546618",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-009-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "2d7d7ad8-f2f0-4a3a-bdfc-844e389b51c5",
+    "started_at": "2026-06-05T03:16:48+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00500675,
+    "output_cost_usd": 0.036806,
+    "total_cost_usd": 0.041812749999999996
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 2861,
+    "output_tokens": 2629,
+    "raw_usage": {
+      "input_tokens": 2861,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 2629,
+      "output_tokens_details": {
+        "reasoning_tokens": 2286
+      },
+      "total_tokens": 5490
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 2286,
+    "total_tokens": 5490
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629448,
+    "created_at": 1780629409,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_04e05f44d5d52611006a223fa11548819da2dda5297086775e",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_04e05f44d5d52611006a223fa188a0819d994dde6f28073c4e",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier is failing at this call in `entry()`:\n\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\nFrom the log:\n\n- `value` is known non-NULL (after `if (!v)` check),\n- but `value->task` is loaded as `rcu_ptr_or_null_task_struct`,\n- and `bpf_task_acquire()` requires a non-NULL pointer argument at call time.\n\nSo verifier rejects with:\n\n> Possibly NULL pointer passed to trusted R1\n\nIt does **not** infer that `map_insert()` previously set this field, because map contents are mutable and the loaded kptr is still considered nullable.\n\n### Smallest likely fix\n\nLoad `value->task` into a local, check it for NULL, then call `bpf_task_acquire()` on that checked local.\n\n```diff\n@@ SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n-\tstruct task_struct *acquired;\n+\tstruct task_struct *acquired, *stored;\n \tstruct map_value *value;\n@@\n \tvalue = helper_a(task);\n \tif (!value)\n \t\treturn 0;\n \n-\tacquired = bpf_task_acquire(value->task);\n+\tstored = value->task;\n+\tif (!stored)\n+\t\treturn 0;\n+\n+\tacquired = bpf_task_acquire(stored);\n \tif (!acquired)\n \t\treturn 0;\n \n \tbpf_task_release(acquired);\n \treturn 0;\n }\n```\n\nThis is the minimal source-level change that should satisfy the verifier for this failure.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_04e05f44d5d52611006a223fc5e3a0819db5979870afaa512b",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 2861,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 2629,
+      "output_tokens_details": {
+        "reasoning_tokens": 2286
+      },
+      "total_tokens": 5490
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

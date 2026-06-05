@@ -1,0 +1,112 @@
+The verifier is rejecting the program because one nested call chain exceeds the BPF combined stack limit.
+
+The failing chain is:
+
+```text
+entry -> helper_c -> helper_b
+```
+
+Both `helper_c()` and `helper_b()` allocate:
+
+```c
+volatile char buf[MAX_STACK] = {};
+```
+
+with:
+
+```c
+#define MAX_STACK 260
+```
+
+So each of those functions uses roughly 260 bytes of stack, plus compiler/verifier alignment and spill overhead. The verifier reports:
+
+```text
+combined stack size of 3 calls is 544. Too large
+```
+
+The BPF verifier limit for combined nested call stack depth is 512 bytes. The chain `entry -> helper_c -> helper_b` reaches 544 bytes, so verification fails before considering whether the program is otherwise safe.
+
+`helper_d()` also has the same local buffer, but the specific failing path in the log is through `helper_c()` into `helper_b()`.
+
+The smallest source-level fix is to reduce the per-function stack allocation so that two nested helpers using the buffer fit under 512 bytes including overhead. Since the reported total is 544, reducing `MAX_STACK` by at least 16 bytes per frame should be enough. A conservative minimal fix is to reduce it from 260 to 240.
+
+Patch:
+
+```diff
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ 
+-#define MAX_STACK 260
++#define MAX_STACK 240
+ 
+ static __attribute__((noinline))
+ int helper_a(int val, struct __sk_buff *skb)
+ {
+ 	asm volatile ("");
+ 	return skb->len;
+ }
+```
+
+With `MAX_STACK` at 240, the deepest problematic chain should use approximately:
+
+```text
+240 + 240 + overhead
+```
+
+instead of:
+
+```text
+260 + 260 + overhead = 544
+```
+
+The same overhead that produced 544 before should now produce about 504, which is below the 512-byte verifier limit.
+
+So the likely complete fixed source is:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+#define MAX_STACK 240
+
+static __attribute__((noinline))
+int helper_a(int val, struct __sk_buff *skb)
+{
+	asm volatile ("");
+	return skb->len;
+}
+
+__attribute__((noinline))
+int helper_b(struct __sk_buff *skb)
+{
+	volatile char buf[MAX_STACK] = {};
+	__sink(buf[MAX_STACK - 1]);
+	return helper_a(0, skb) + skb->len;
+}
+
+int helper_d(int val, struct __sk_buff *skb, int arg);
+
+__attribute__((noinline))
+int helper_c(int val, struct __sk_buff *skb)
+{
+	volatile char buf[MAX_STACK] = {};
+	__sink(buf[MAX_STACK - 1]);
+	return helper_b(skb) + helper_d(val, skb, 1);
+}
+
+__attribute__((noinline))
+int helper_d(int val, struct __sk_buff *skb, int arg)
+{
+	volatile char buf[MAX_STACK] = {};
+	__sink(buf[MAX_STACK - 1]);
+	return skb->ifindex * val * arg;
+}
+
+SEC("tc")
+int entry(struct __sk_buff *skb)
+{
+	return helper_a(1, skb) + helper_b(skb) + helper_c(2, skb) + helper_d(3, skb, 4);
+}
+```
+
+This keeps the structure of the test intact while bringing the nested stack usage under the verifier’s 512-byte combined stack limit.

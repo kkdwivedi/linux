@@ -1,0 +1,64 @@
+Looking at the verifier log, I can analyze this failure.
+
+## Verifier Failure Explanation
+
+The program creates two dynamic pointers (`ptr1` and `ptr2`) using `bpf_ringbuf_reserve_dynptr()`:
+- `ptr1` at instruction 7 (resource id=1, with dynptr id=2)
+- `ptr2` at instruction 14 (resource id=3, with dynptr id=4)
+
+The verifier tracks **resource ownership** for these dynamic pointers. Each reserved ringbuf dynptr must be either:
+- **submitted** via `bpf_ringbuf_submit_dynptr()` (transfers ownership, consumes the resource)
+- **discarded** via `bpf_ringbuf_discard_dynptr()` (releases the resource)
+
+The problem is in the **fall-through path** when `sample != NULL` (the branch at instruction 19 is **not taken**, so execution continues to instruction 29):
+
+| Path | `ptr1` | `ptr2` | Status |
+|------|--------|--------|--------|
+| `if (!sample)` true (sample is NULL) | discarded ✓ | discarded ✓ | OK |
+| `if (!sample)` false (sample != NULL) | submitted ✓ | **NOT released** ✗ | **LEAK** |
+
+When `sample != NULL`, the code submits `ptr1` but completely forgets about `ptr2`. The verifier correctly identifies this as an unreleased reference leak (id=3, acquired at instruction 14).
+
+## The Fix
+
+The smallest fix is to ensure `ptr2` is released on **all exit paths**. Since `ptr2` is never used, we should discard it in the success path as well. The cleanest approach is to simply discard `ptr2` right after reserving it (since it's never used), or add proper cleanup in the success path.
+
+The minimal fix: **discard `ptr2` before returning in the non-NULL sample path**.
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+struct sample {
+	__u64 value;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 4096);
+} ringbuf SEC(".maps");
+
+SEC("?raw_tp")
+int entry(void *ctx)
+{
+	struct bpf_dynptr ptr1, ptr2;
+	struct sample *sample;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);
+
+	sample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));
+	if (!sample) {
+		bpf_ringbuf_discard_dynptr(&ptr1, 0);
+		bpf_ringbuf_discard_dynptr(&ptr2, 0);
+		return 0;
+	}
+
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_discard_dynptr(&ptr2, 0);  /* ADD THIS LINE */
+
+	return 0;
+}
+```
+
+Alternatively, since `ptr2` is never used at all, an even cleaner fix would be to simply remove `ptr2` entirely, but that changes the program's semantics more. Given the existing structure with two reserves, adding the single `bpf_ringbuf_discard_dynptr(&ptr2, 0);` after the submit is the smallest source-level fix.

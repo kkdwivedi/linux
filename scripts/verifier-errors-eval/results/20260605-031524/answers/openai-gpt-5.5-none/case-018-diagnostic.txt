@@ -1,0 +1,66 @@
+The program acquires two resource spin locks in this order:
+
+1. `lock_a`
+2. `lock_b`
+
+But on the success path it releases them in this order:
+
+```c
+bpf_res_spin_unlock(&lock_a);
+bpf_res_spin_unlock(&lock_b);
+```
+
+That is not allowed. The verifier tracks resource locks as a stack: the most recently acquired lock must be released first. Since `lock_b` is acquired after `lock_a`, `lock_b` must be unlocked before `lock_a`.
+
+The verifier error is therefore correct:
+
+```text
+bpf_res_spin_unlock cannot be out of order
+Locks must be released in last-in, first-out order
+```
+
+The smallest fix is to swap the two unlock calls on the path where both locks were acquired.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -13,8 +13,8 @@ int entry(struct __sk_buff *ctx)
+ 		bpf_res_spin_unlock(&lock_a);
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+ 	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+Fixed source:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+struct bpf_res_spin_lock lock_a __hidden SEC(".data.A");
+struct bpf_res_spin_lock lock_b __hidden SEC(".data.B");
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```
+
+The failure branch after `bpf_res_spin_lock(&lock_b)` is already fine: if acquiring `lock_b` fails, only `lock_a` is held, so unlocking `lock_a` is valid. The only invalid path was the path where both locks were successfully acquired and then unlocked in acquisition order instead of reverse acquisition order.

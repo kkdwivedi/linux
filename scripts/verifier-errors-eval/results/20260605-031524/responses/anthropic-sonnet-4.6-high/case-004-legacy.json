@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nWhen BPF validates a `__noinline` function, it does so independently of its call sites. The verifier conservatively assigns the pointer parameter `s` the type `mem_or_null` \u2014 meaning it could be null \u2014 regardless of the fact that the caller always passes a valid stack address. The function body then dereferences `r6` (a copy of `s`) at instruction 10 without any prior null check:\n\n```\nR6 invalid mem access 'mem_or_null'\n```\n\nThe verifier refuses to allow a memory load through a pointer that hasn't been proven non-null.\n\n## Fix\n\nAdd a null check for `s` at the start of `helper_a`. This causes the verifier to narrow the type from `mem_or_null` to `mem` before the dereference, satisfying the constraint.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nstruct Item {\n\tint x;\n};\n\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n\nSEC(\"cgroup_skb/ingress\")\nint entry(struct __sk_buff *skb)\n{\n\tconst struct Item s = {.x = skb->len};\n\n\thelper_a(&s);\n\n\treturn 1;\n}\n```\n\nThe added `if (!s) return 0;` guard satisfies the verifier: after the check, on the taken path the function returns immediately, and on the fall-through path `s` is known to be non-null, so `s->x` is a valid access.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-high/case-004-legacy.txt",
+    "case_id": "case-004",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-high",
+    "prompt_bytes": 1415,
+    "prompt_path": "public/case-004/prompt_legacy.md",
+    "prompt_sha256": "5122475504cbe77965669ffc9de4273ee4a86feb8b73ecbb090ea008b68a08ae",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-high/case-004-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "40fec7b1-f77c-4fb1-b9b7-39c3fd1c2d96",
+    "started_at": "2026-06-05T04:08:42+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.002016,
+    "output_cost_usd": 0.01029,
+    "total_cost_usd": 0.012306000000000001
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 672,
+    "output_tokens": 686,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 672,
+      "output_tokens": 686,
+      "output_tokens_details": {
+        "thinking_tokens": 271
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 767,
+    "reasoning_tokens": 0,
+    "total_tokens": 1358
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EtYICmUIDhgCKkDU/e5HDOWho2MVyksZ/kio1cezpURHco2TKyqM6odnPYn3Ig50mRN7ozLlLcYz2r1rXhLviFW6xCy8LegVVN0+MhFjbGF1ZGUtc29ubmV0LTQtNjgAQgh0aGlua2luZxIMgwLMX36VB4Ah6qFuGgx3P9jOVHpNnQzsxw4iMFWI58CN+BZ/SdVeKFZIppql5HRrjRmgNUtYKBWuKtpvlxwmFaNCNsPK6whWfuhZ2SqeB76DEs1rhjgB7MdK3AchkjlMfaOoNYGg9NfLsE35gPWPKSK4hcAWVfcF9ZNizDfxxzQnd0l6cnPi7C3mTENz9W3Rn7mYp7tR4zVQZ+5YvulNuePUUFthJypldIxA9nAmLALQH4DtqlhinQJmN4exlUkUfFMitT5DMQdAQqhFXzGDxwwov0z87uFl2DQTJEejJU6q7S+ZNGqtUliFsWxVtToPtkHXP4VgI2RBczJ/cg4wshRxQnxQlbqOGdtNi8ntmmj8vGm942vHvP2TXClBoJdrvImyP6VQdpTjXcrSK2DcIanFGOLumbVSjTS11+uZNSYjZHl2lSmxa7l66CYjmErdwsaYhjk+ntmOVjYHUrcNq4fQui1AJHQT7hgKvhZomRZ/bMAdLOLKgSv+xLldYwFWad2O/u98CGlihZDZC3Kwl/6r1en2aPyCOI73Xq7yG6GoQrWQkUo7bYBnbiLYOfY+guGiNZ2GBNVs9bL90+d4GIoGPHjDUfzpHJ70iLNP0tUwu3eHD9Q9Ffw9iBUTDOHA5pp6AFj6rDseVKsXNwWDp1KX4hk+/vYGQGxwYJ54sPo6x/zCkldxbCvvYLf31ewDmiK3o6dX0Quba6Nr8srCYS4LpTox/CY6XSHZkdY3x80FQ1qJWn1edg/wOGrn/AqvFeTXXF9ssg7x0n7j45Td6/7YoJHXgznstmq121bRJMAcp1qbZBDwAbjppIBf52TLU0zeLYwwaUMm6aac2MxJ+aW/oKhBix/d7GDeFxfiGvUoG0yaGpVY+ZGsO7FAyDBXeQ7TlxPjaLZzOV0HvDXKBePtQliBsOjbVamjFof0VYxpUgANmYJfSpyaMgby+N/PbXqW/SoMr7cKqERfeSFbzOLbLSAQeyBHej2mAXechbaQ6amULMNmyiQKIomolPkeS4jFOLEQVrQ/mriFoLKTMygAisXy8ya8Mzmu453n4j1ehW7+4FPLIi0aYAh9Mf35F7VN0PWIXJCjEZLGYL7LIP7K3GiIebP7uUd6FTVLITJyVIUMbcEh6wux5c+MpNZuzXfQ7EB1hPc/KfVLYCBCim5YEzukt3pjZvDnA2O0hkGqRqS4tKBDyrOhZVWLfmBXtTgv+mAU/XHFWxmUR1L7SgvO43FsQUoIBSRR32YB5JNcTA4c1j331w6fifzpvZeem/3+ZteAT1HruZ0UlKZ+dFXN7eAU74ZxqT90K1y0IY1LK0wg/TCbV5DCX1unGAE=",
+        "thinking": "The verifier error is clear: `R6 invalid mem access 'mem_or_null'`. The issue is that when `helper_a` is called with a pointer to a stack-allocated `struct Item`, the verifier treats the parameter as `mem_or_null` (a nullable pointer), and the function doesn't check for null before dereferencing it.\n\nThe problem is that `helper_a` receives a pointer typed as `mem_or_null` - this happens because the BPF verifier treats pointers passed to global/noinline functions as potentially null. The function needs to check for null before dereferencing the pointer.\n\n\nThe solution is to add a null check at the start of `helper_a` before accessing the struct member, which is the standard pattern for noinline functions in BPF since their parameters are treated as nullable.",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nWhen BPF validates a `__noinline` function, it does so independently of its call sites. The verifier conservatively assigns the pointer parameter `s` the type `mem_or_null` \u2014 meaning it could be null \u2014 regardless of the fact that the caller always passes a valid stack address. The function body then dereferences `r6` (a copy of `s`) at instruction 10 without any prior null check:\n\n```\nR6 invalid mem access 'mem_or_null'\n```\n\nThe verifier refuses to allow a memory load through a pointer that hasn't been proven non-null.\n\n## Fix\n\nAdd a null check for `s` at the start of `helper_a`. This causes the verifier to narrow the type from `mem_or_null` to `mem` before the dereference, satisfying the constraint.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nstruct Item {\n\tint x;\n};\n\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n\nSEC(\"cgroup_skb/ingress\")\nint entry(struct __sk_buff *skb)\n{\n\tconst struct Item s = {.x = skb->len};\n\n\thelper_a(&s);\n\n\treturn 1;\n}\n```\n\nThe added `if (!s) return 0;` guard satisfies the verifier: after the check, on the taken path the function returns immediately, and on the fall-through path `s` is known to be non-null, so `s->x` is a valid access.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01RNb2dvVKfBZSXnj7UsSbAn",
+    "model": "claude-sonnet-4-6",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 672,
+      "output_tokens": 686,
+      "output_tokens_details": {
+        "thinking_tokens": 271
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": "The verifier error is clear: `R6 invalid mem access 'mem_or_null'`. The issue is that when `helper_a` is called with a pointer to a stack-allocated `struct Item`, the verifier treats the parameter as `mem_or_null` (a nullable pointer), and the function doesn't check for null before dereferencing it.\n\nThe problem is that `helper_a` receives a pointer typed as `mem_or_null` - this happens because the BPF verifier treats pointers passed to global/noinline functions as potentially null. The function needs to check for null before dereferencing the pointer.\n\n\nThe solution is to add a null check at the start of `helper_a` before accessing the struct member, which is the standard pattern for noinline functions in BPF since their parameters are treated as nullable."
+}

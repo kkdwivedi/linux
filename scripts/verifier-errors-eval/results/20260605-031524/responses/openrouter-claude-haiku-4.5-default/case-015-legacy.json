@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Verifier Failure Analysis\n\nThe verifier rejects this program because **R7 loses its packet pointer type information after the function call**.\n\nHere's what happens:\n\n1. **Lines 0-5**: R7 is loaded with `sk->data` (packet pointer) and bounds-checked against `sk->data_end`. After the bounds check passes, R7 has type `pkt(r=0)` (packet pointer with 0 bytes read).\n\n2. **Line 8**: `call pc+4` invokes `helper_a()`, which is marked `__noinline` and is a global function.\n\n3. **Line 9**: After the call returns, the verifier treats `helper_a` as an opaque function (marked \"assumed valid\"). Since the function is not inlined and the verifier cannot track what it does, **R7's type is invalidated** and becomes `scalar`.\n\n4. **Line 10**: When attempting `*(u32 *)(r7 +0) = r1`, the verifier rejects it because R7 is now a scalar, not a packet pointer. The error is `R7 invalid mem access 'scalar'`.\n\n## Root Cause\n\nThe BPF verifier cannot preserve packet pointer types across calls to non-inlined functions because it treats them as black boxes. The function `helper_a` doesn't modify R7, but the verifier doesn't know that and conservatively invalidates all potentially-modified registers.\n\n## Solution\n\n**Remove the `__noinline` attribute** from both helper functions to allow them to be inlined. This way, the verifier can see through the function calls and maintain R7's packet pointer type.\n\n### Patch\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nlong helper_b(struct __sk_buff *sk, __u32 len)\n{\n\treturn bpf_skb_pull_data(sk, len);\n}\n\nlong helper_a(struct __sk_buff *sk, __u32 len)\n{\n\treturn helper_b(sk, len);\n}\n\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p = (void *)(long)sk->data;\n\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\thelper_a(sk, 0);\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\n**Changes**: Remove `__noinline` from both `helper_b` and `helper_a` declarations (lines 3 and 8).\n\nThis allows the verifier to inline these functions and track that R7 remains a valid packet pointer throughout execution.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-015-legacy.txt",
+    "case_id": "case-015",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 1984,
+    "prompt_path": "public/case-015/prompt_legacy.md",
+    "prompt_sha256": "dc0fc1e91b61bdf915966f9cbe5ae652d8b1776a8af859d12e6cd23d52604af2",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-015-legacy.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "e54c2f27-3e08-4ae6-9d80-9187ec8b2226",
+    "started_at": "2026-06-05T03:19:04+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000973,
+    "output_cost_usd": 0.003265,
+    "total_cost_usd": 0.0042380000000000004
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 973,
+    "output_tokens": 653,
+    "raw_usage": {
+      "completion_tokens": 653,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.004238,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.003265,
+        "upstream_inference_cost": 0.004238,
+        "upstream_inference_prompt_cost": 0.000973
+      },
+      "is_byok": false,
+      "prompt_tokens": 973,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1626
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1626
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Verifier Failure Analysis\n\nThe verifier rejects this program because **R7 loses its packet pointer type information after the function call**.\n\nHere's what happens:\n\n1. **Lines 0-5**: R7 is loaded with `sk->data` (packet pointer) and bounds-checked against `sk->data_end`. After the bounds check passes, R7 has type `pkt(r=0)` (packet pointer with 0 bytes read).\n\n2. **Line 8**: `call pc+4` invokes `helper_a()`, which is marked `__noinline` and is a global function.\n\n3. **Line 9**: After the call returns, the verifier treats `helper_a` as an opaque function (marked \"assumed valid\"). Since the function is not inlined and the verifier cannot track what it does, **R7's type is invalidated** and becomes `scalar`.\n\n4. **Line 10**: When attempting `*(u32 *)(r7 +0) = r1`, the verifier rejects it because R7 is now a scalar, not a packet pointer. The error is `R7 invalid mem access 'scalar'`.\n\n## Root Cause\n\nThe BPF verifier cannot preserve packet pointer types across calls to non-inlined functions because it treats them as black boxes. The function `helper_a` doesn't modify R7, but the verifier doesn't know that and conservatively invalidates all potentially-modified registers.\n\n## Solution\n\n**Remove the `__noinline` attribute** from both helper functions to allow them to be inlined. This way, the verifier can see through the function calls and maintain R7's packet pointer type.\n\n### Patch\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nlong helper_b(struct __sk_buff *sk, __u32 len)\n{\n\treturn bpf_skb_pull_data(sk, len);\n}\n\nlong helper_a(struct __sk_buff *sk, __u32 len)\n{\n\treturn helper_b(sk, len);\n}\n\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p = (void *)(long)sk->data;\n\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\thelper_a(sk, 0);\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\n**Changes**: Remove `__noinline` from both `helper_b` and `helper_a` declarations (lines 3 and 8).\n\nThis allows the verifier to inline these functions and track that R7 remains a valid packet pointer throughout execution.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629544,
+    "id": "gen-1780629544-6tneH6bUfYRcpTbO1u3W",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 653,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.004238,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.003265,
+        "upstream_inference_cost": 0.004238,
+        "upstream_inference_prompt_cost": 0.000973
+      },
+      "is_byok": false,
+      "prompt_tokens": 973,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1626
+    }
+  },
+  "reasoning_content": ""
+}

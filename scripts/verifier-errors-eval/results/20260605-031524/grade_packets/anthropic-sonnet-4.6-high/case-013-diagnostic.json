@@ -1,0 +1,68 @@
+{
+  "acceptable_fixes": [
+    "Lower MAX_STACK enough that the nested helper frames fit within 512 bytes.",
+    "Move large buffers out of nested helpers or reuse a smaller/shared buffer in a verifier-accepted way.",
+    "Restructure calls so helper_b and helper_c are not simultaneously on the stack with large local buffers."
+  ],
+  "canonical_fix": "Reduce stack use along the nested call chain or shorten the call chain so the combined stack depth is at or below the verifier limit.",
+  "case_id": "case-013",
+  "category": "Verifier Limit",
+  "difficulty": "medium",
+  "expected_explanation": "The call chain entry -> helper_c -> helper_b uses more than the verifier's combined call-stack depth limit. The large per-function stack buffers accumulate across nested bpf2bpf calls.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-high/case-013-diagnostic.txt",
+    "case_id": "case-013",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-high",
+    "prompt_bytes": 2658,
+    "prompt_path": "public/case-013/prompt_diagnostic.md",
+    "prompt_sha256": "044070894a5a67f43ab32448001b1bd67c0db88fee4087d1bb67f71a9273513d",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-high/case-013-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "e9624da9-250e-4a3c-b537-68dac85d00b0",
+    "started_at": "2026-06-05T04:13:40+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation of the Failure\n\nThe BPF verifier enforces a **combined stack depth limit of 512 bytes** across all nested call frames. The verifier traces the deepest call chain and accumulates each frame's stack usage.\n\nThe problematic chain here is:\n\n```\nentry \u2192 helper_c \u2192 helper_b (\u2192 helper_a uses no stack)\n```\n\nStack accounting:\n| Frame | Stack used |\n|-------|-----------|\n| `entry` | ~24 bytes (spills return values of `helper_a`/`helper_b` before calling `helper_c`) |\n| `helper_c` | 260 bytes (`volatile char buf[MAX_STACK]`) |\n| `helper_b` | 260 bytes (`volatile char buf[MAX_STACK]`) |\n| **Total** | **544 bytes > 512** |\n\nThe parallel chain `entry \u2192 helper_c \u2192 helper_d` is identical in depth (260 + 260 + 24 = 544).\n\n## Fix\n\nReduce `MAX_STACK` so the combined stack fits within 512 bytes:\n\n```\nentry(24) + helper_c(MAX_STACK) + helper_b(MAX_STACK) \u2264 512\n\u27f9 MAX_STACK \u2264 244\n```\n\nUsing 240 (a multiple of 8 to avoid alignment surprises) gives a comfortable margin of 504 bytes.\n\n### Patch\n\n```diff\n-#define MAX_STACK 260\n+#define MAX_STACK 240\n```\n\nWith this change:\n- `entry \u2192 helper_c \u2192 helper_b`: 24 + 240 + 240 = **504 bytes \u2264 512** \u2713  \n- `entry \u2192 helper_c \u2192 helper_d`: 24 + 240 + 240 = **504 bytes \u2264 512** \u2713  \n- All shallower chains remain well within the limit.",
+  "must_mention": [
+    "Combined call-chain stack depth exceeds the verifier limit",
+    "Large local buffers in nested helpers are the cause",
+    "Fix must reduce stack usage or call depth"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds bounds checks around skb fields",
+    "Changes helper return arithmetic only",
+    "Reduces stack in a helper not on the reported call chain while leaving the chain over limit"
+  ]
+}

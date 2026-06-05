@@ -1,0 +1,69 @@
+## Verifier Failure Analysis
+
+The verifier rejects the program at instruction 4 with the error: **"Possibly NULL pointer passed to trusted R1"**
+
+### Root Cause
+
+At line 42 in the source:
+```c
+acquired = bpf_task_acquire(value->task);
+```
+
+The issue is that `value->task` is a kptr (kernel pointer) loaded from the map. When dereferenced with `*(u64 *)(r0 +0)` at instruction 3, it returns type `rcu_ptr_or_null_task_struct(id=10)` — a pointer that could be NULL.
+
+The `bpf_task_acquire()` helper requires a `trusted_ptr_task_struct()`, not a `rcu_ptr_or_null_task_struct()`. The NULL check is missing before passing it to `bpf_task_acquire()`.
+
+### Why This Happens
+
+In the `map_insert()` function, after `bpf_kptr_xchg(&value->task, acquired)`, we know `value->task` is non-NULL (because we just exchanged a non-NULL `acquired` into it). However, in the calling code (`entry` function), we only have a fresh lookup of `value` without knowledge of what was stored in `value->task`. The verifier conservatively treats `value->task` as potentially NULL.
+
+### Fix
+
+Add a NULL check before calling `bpf_task_acquire()`:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct task_struct *acquired;
+	struct map_value *value;
+
+	value = helper_a(task);
+	if (!value)
+		return 0;
+
+	acquired = bpf_task_acquire(value->task);
+	if (!acquired)
+		return 0;
+
+	bpf_task_release(acquired);
+	return 0;
+}
+```
+
+Should become:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct task_struct *acquired;
+	struct map_value *value;
+
+	value = helper_a(task);
+	if (!value)
+		return 0;
+
+	if (!value->task)
+		return 0;
+
+	acquired = bpf_task_acquire(value->task);
+	if (!acquired)
+		return 0;
+
+	bpf_task_release(acquired);
+	return 0;
+}
+```
+
+**Change:** Add `if (!value->task) return 0;` immediately after checking `value`, before the `bpf_task_acquire()` call. This null-checks the kptr before passing it to the helper, satisfying the verifier's requirement for a trusted (non-null) pointer.

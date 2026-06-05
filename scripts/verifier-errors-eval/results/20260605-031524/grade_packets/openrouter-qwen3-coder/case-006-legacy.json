@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Replace bpf_ktime_get_coarse_ns with bpf_ktime_get_ns if that satisfies the program's requirements and is allowed.",
+    "Change the program type/section to one where the helper is allowed."
+  ],
+  "canonical_fix": "Use a helper allowed for this program type, such as an allowed time helper with suitable semantics, or move the logic to a program type/attach point where bpf_ktime_get_coarse_ns is permitted.",
+  "case_id": "case-006",
+  "category": "Policy",
+  "difficulty": "easy",
+  "expected_explanation": "The program type used by this case is not allowed to call bpf_ktime_get_coarse_ns. This is a helper policy/program-type compatibility failure, not a register or memory proof failure.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-006-legacy.txt",
+    "case_id": "case-006",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 1056,
+    "prompt_path": "public/case-006/prompt_legacy.md",
+    "prompt_sha256": "120f6abe2c1570fcf1f340a5df8b99d8138acdc6e56cef9bda9d3f882cdbea64",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-006-legacy.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "6cd5c6fa-69fe-4848-b055-097113f9720d",
+    "started_at": "2026-06-05T03:20:55+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "Looking at the verifier log, the issue is clear:\n\n**Verifier Failure Explanation:**\nThe program is using the `kprobe` program type, but this program type is not allowed to use the `bpf_ktime_get_coarse_ns` helper function. The verifier explicitly states \"program of this type cannot use helper bpf_ktime_get_coarse_ns#160\".\n\n**Root Cause:**\nThe `kprobe` program type has restrictions on which helper functions it can call, and `bpf_ktime_get_coarse_ns` is not permitted for this program type.\n\n**Solution:**\nThe smallest fix is to change the program type to one that allows `bpf_ktime_get_coarse_ns`. The `socket` program type is known to support this helper function.\n\n**Patch:**\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"socket\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_coarse_ns];\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_coarse_ns)\n\t: __clobber_all);\n}\n```\n\nThe only change needed is replacing `SEC(\"kprobe\")` with `SEC(\"socket\")` to use a program type that's allowed to call the `bpf_ktime_get_coarse_ns` helper function.",
+  "must_mention": [
+    "Helper is forbidden for this program type",
+    "The fix is to use an allowed helper or compatible program type"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds register initialization around the helper call",
+    "Treats it as a GPL license issue",
+    "Suggests a bounds or NULL check"
+  ]
+}

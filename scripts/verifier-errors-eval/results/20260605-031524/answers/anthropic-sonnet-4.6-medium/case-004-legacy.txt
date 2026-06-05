@@ -1,0 +1,24 @@
+## Explanation
+
+When the verifier validates a `__noinline` (global) function, it treats pointer parameters conservatively as `mem_or_null` — the pointer might be null. Before `helper_a` can dereference `s->x`, the verifier requires a null check to narrow the type from `mem_or_null` to a valid pointer.
+
+The log confirms this:
+```
+R6 invalid mem access 'mem_or_null'
+```
+At instruction 10, `r6` (which holds `s`) is still `mem_or_null` when the load `*(u32 *)(r6 +0)` happens.
+
+## Fix
+
+Add a null guard at the top of `helper_a`:
+
+```c
+__noinline int helper_a(const struct Item *s)
+{
+	if (!s)
+		return 0;
+	return bpf_get_prandom_u32() < s->x;
+}
+```
+
+After the `if (!s)` check, the verifier knows `s` is non-null on the path that reaches the dereference, so `s->x` becomes a valid access. The caller always passes a stack address (`&s`), so the added branch is never actually taken at runtime.

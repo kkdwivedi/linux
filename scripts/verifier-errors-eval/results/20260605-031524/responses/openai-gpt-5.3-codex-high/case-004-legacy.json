@@ -1,0 +1,130 @@
+{
+  "answer_text": "The failure is caused by how the verifier treats `helper_a()`\u2019s argument when validating that subprogram on its own.\n\n### Why it fails\n\nIn the log, at `helper_a` entry:\n\n- `R1=mem_or_null(id=1,sz=4)`\n\nSo `s` is considered a **nullable memory pointer**.  \nThen the code does:\n\n- `r6 = r1`\n- `r2 = *(u32 *)(r6 +0)`  \u2190 dereference `s->x`\n\nThere is no prior null check, so dereferencing `mem_or_null` is rejected:\n\n- `R6 invalid mem access 'mem_or_null'`\n\nEven though caller passes `&s` (non-null stack address), verifier checks `helper_a` with generic arg constraints, not just that one callsite fact.\n\n---\n\n### Smallest likely fix\n\nAdd a null check before dereferencing `s`.\n\n```diff\n@@\n __noinline int helper_a(const struct Item *s)\n {\n+\tif (!s)\n+\t\treturn 0;\n \treturn bpf_get_prandom_u32() < s->x;\n }\n```\n\nThis is minimal and should make verifier happy by refining `s` to non-null on the dereference path.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-004-legacy.txt",
+    "case_id": "case-004",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 1415,
+    "prompt_path": "public/case-004/prompt_legacy.md",
+    "prompt_sha256": "5122475504cbe77965669ffc9de4273ee4a86feb8b73ecbb090ea008b68a08ae",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-004-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "83c7d747-e021-4ef4-9229-f49703f81119",
+    "started_at": "2026-06-05T03:16:45+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000945,
+    "output_cost_usd": 0.015134,
+    "total_cost_usd": 0.016079
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 540,
+    "output_tokens": 1081,
+    "raw_usage": {
+      "input_tokens": 540,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1081,
+      "output_tokens_details": {
+        "reasoning_tokens": 817
+      },
+      "total_tokens": 1621
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 817,
+    "total_tokens": 1621
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629421,
+    "created_at": 1780629405,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_002e4b93861e666f006a223f9d3bcc819d904e091c28fbc34b",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_002e4b93861e666f006a223f9d9694819d8fb088cd00635b62",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is caused by how the verifier treats `helper_a()`\u2019s argument when validating that subprogram on its own.\n\n### Why it fails\n\nIn the log, at `helper_a` entry:\n\n- `R1=mem_or_null(id=1,sz=4)`\n\nSo `s` is considered a **nullable memory pointer**.  \nThen the code does:\n\n- `r6 = r1`\n- `r2 = *(u32 *)(r6 +0)`  \u2190 dereference `s->x`\n\nThere is no prior null check, so dereferencing `mem_or_null` is rejected:\n\n- `R6 invalid mem access 'mem_or_null'`\n\nEven though caller passes `&s` (non-null stack address), verifier checks `helper_a` with generic arg constraints, not just that one callsite fact.\n\n---\n\n### Smallest likely fix\n\nAdd a null check before dereferencing `s`.\n\n```diff\n@@\n __noinline int helper_a(const struct Item *s)\n {\n+\tif (!s)\n+\t\treturn 0;\n \treturn bpf_get_prandom_u32() < s->x;\n }\n```\n\nThis is minimal and should make verifier happy by refining `s` to non-null on the dereference path.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_002e4b93861e666f006a223faa0880819da784a4f0a1a0eb00",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 540,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1081,
+      "output_tokens_details": {
+        "reasoning_tokens": 817
+      },
+      "total_tokens": 1621
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

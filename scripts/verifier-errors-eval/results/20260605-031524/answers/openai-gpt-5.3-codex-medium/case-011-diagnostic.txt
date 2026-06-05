@@ -1,0 +1,45 @@
+The verifier error is a **reference leak** from the second ringbuf dynptr (`ptr2`).
+
+### What happens
+
+You reserve two dynptr-backed ringbuf records:
+
+- `ptr1` at insn 7 (ref id=1)
+- `ptr2` at insn 14 (ref id=3)
+
+In the `!sample` branch, you correctly discard both.
+
+But on the `sample != NULL` branch, you only do:
+
+```c
+bpf_ringbuf_submit_dynptr(&ptr1, 0);
+return 0;
+```
+
+`ptr2` is never submitted or discarded there, so verifier reports:
+
+- `Unreleased reference id=3 alloc_insn=14`
+
+---
+
+### Smallest fix
+
+Release `ptr2` on the success path as well (discard it since you never use it).
+
+#### Patch
+
+```diff
+@@ SEC("?raw_tp")
+ int entry(void *ctx)
+ {
+ 	struct bpf_dynptr ptr1, ptr2;
+ 	struct sample *sample;
+@@
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
++	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+
+ 	return 0;
+ }
+```
+
+This makes ownership balanced on all exit paths, which is what the verifier requires.

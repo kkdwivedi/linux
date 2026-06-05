@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Change char buffer[8] to char buffer[9] or larger.",
+    "Change the bpf_dynptr_slice length argument from 9 to sizeof(buffer) or 8."
+  ],
+  "canonical_fix": "Make the fallback buffer at least 9 bytes or reduce the requested slice length to 8 bytes.",
+  "case_id": "case-008",
+  "category": "Call Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The fallback stack buffer is 8 bytes, but bpf_dynptr_slice is asked to use 9 bytes. The memory/length pair therefore describes a read beyond the stack object.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-008-diagnostic.txt",
+    "case_id": "case-008",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 3876,
+    "prompt_path": "public/case-008/prompt_diagnostic.md",
+    "prompt_sha256": "6473479527e9eaa1732d9224d382c7fc572786756d22aa3518774f108c567394",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-008-diagnostic.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "1fb3daf1-1b3f-418f-a8c0-200efc51bff9",
+    "started_at": "2026-06-05T04:21:55+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation of the Verifier Failure\n\nThe verifier is rejecting the `bpf_dynptr_slice` call because of a buffer size mismatch:\n\n1. **Buffer declaration**: `char buffer[8] = {};` allocates 8 bytes on the stack\n2. **Function call**: `bpf_dynptr_slice(&ptr, 0, buffer, 9)` requests a 9-byte slice\n3. **Verifier error**: The buffer pointer (R3 at fp-24) with length 9 (R4) exceeds the allocated 8-byte buffer, resulting in an \"invalid read from stack\" error\n\nThe verifier enforces memory safety by ensuring that when you pass a memory pointer and length pair to a BPF helper, the length cannot exceed the actual allocated size of that memory region.\n\n## Root Cause\n\nThe fourth argument to `bpf_dynptr_slice` specifies the size of the auxiliary buffer for the slice operation. This size (9) exceeds the actual buffer size (8), violating the memory safety contract.\n\n## Fix\n\nIncrease the buffer size from 8 to 9 bytes to match the requested slice size:\n\n```c\nchar buffer[9] = {};\n```\n\nThis ensures the buffer has sufficient space (9 bytes) to accommodate the `bpf_dynptr_slice` call with size 9.\n\n**Why this works**: The verifier will now see that R3 (buffer pointer at fp-24) with R4 (length 9) points to a valid 9-byte region on the stack, satisfying the memory safety requirement.",
+  "must_mention": [
+    "Requested length is 9",
+    "Buffer size is 8",
+    "The memory/length pair must fit"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks data for NULL after the call",
+    "Changes the dynptr initialization but leaves 9 against an 8-byte buffer",
+    "Treats the problem as a ringbuf capacity issue"
+  ]
+}

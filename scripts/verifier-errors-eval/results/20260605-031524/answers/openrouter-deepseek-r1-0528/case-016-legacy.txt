@@ -1,0 +1,28 @@
+The verifier error occurs because the program leaks a socket reference when `r6 != 0`. The `bpf_sk_lookup_tcp` call (instruction 19) acquires a reference stored in `r0`. If `r6 != 0`, the program exits (instruction 21) without releasing this reference. The verifier detects this reference leak in the execution path where `r6 != 0`.
+
+The fix removes the `r6` check and always releases the socket reference if `r0` is non-NULL. This ensures the reference is properly released in all paths, satisfying the verifier.
+
+Patch:
+```diff
+--- original.c
++++ fixed.c
+@@ -20,9 +20,6 @@
+ 	r4 = 0;						\
+ 	r5 = 0;						\
+ 	call %[bpf_sk_lookup_tcp];			\
+-	if r6 == 0 goto l1_%=;				\
+-	exit;						\
+-l1_%=:	if r0 == 0 goto l2_%=;				\
++	if r0 == 0 goto l2_%=;				\
+ 	r1 = r0;					\
+ 	call %[bpf_sk_release];				\
+ l2_%=:	exit;						\
+```
+
+This change:
+1. Removes the `r6` check and conditional exit
+2. Directly checks if `r0` is NULL
+3. Releases the socket reference if `r0` is non-NULL
+4. Maintains the existing exit point (`l2_%=`)
+
+The fix eliminates the reference leak path while preserving the program's core functionality. The socket reference is now properly released in all cases where it's non-NULL.

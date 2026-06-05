@@ -1,0 +1,37 @@
+`p` is derived from `sk->data` **before** a call chain that reaches `bpf_skb_pull_data()`.  
+That helper can reallocate/shift skb linear data, so the verifier invalidates previously known packet pointers after the call.
+
+So this sequence is the problem:
+
+1. load `sk->data` into `p` (`R7=pkt`)
+2. bounds-check `p`
+3. call `helper_a()` → may move packet data, invalidates `R7`
+4. dereference old `p` → verifier sees scalar, rejects
+
+That’s exactly why log says `R7 invalid mem access 'scalar'` at `*p = 42`.
+
+## Smallest likely fix
+
+Reacquire `sk->data` and redo bounds check **after** `helper_a()`, or move the helper call before taking `p`.
+
+### Minimal patch (move call earlier)
+
+```diff
+ SEC("tc")
+ int entry(struct __sk_buff *sk)
+ {
+-	int *p = (void *)(long)sk->data;
++	int *p;
++
++	helper_a(sk, 0);
++	p = (void *)(long)sk->data;
+ 
+ 	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+ 		return TCX_DROP;
+-	helper_a(sk, 0);
+ 	*p = 42;
+ 	return TCX_PASS;
+ }
+```
+
+This keeps semantics close while ensuring the pointer used for `*p` is fresh and validated for current packet data layout.

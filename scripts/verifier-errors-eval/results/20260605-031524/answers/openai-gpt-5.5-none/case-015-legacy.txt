@@ -1,0 +1,63 @@
+The failure is caused by using a packet pointer saved before a call that may invalidate packet data pointers.
+
+In `entry()`:
+
+```c
+int *p = (void *)(long)sk->data;
+
+if ((void *)(p + 1) > (void *)(long)sk->data_end)
+	return TCX_DROP;
+
+helper_a(sk, 0);
+*p = 42;
+```
+
+Before the call, the verifier proves that `p`/`r7` points to at least 4 writable bytes of packet data:
+
+```text
+5: if r3 > r2 goto ...
+```
+
+But `helper_a()` calls `helper_b()`, which calls:
+
+```c
+bpf_skb_pull_data(sk, len);
+```
+
+`bpf_skb_pull_data()` is a packet-mutating helper. Even with `len == 0`, the verifier treats it as potentially changing/reallocating skb data. Therefore all previously loaded packet pointers become invalid after the call.
+
+The log shows that clearly:
+
+```text
+8: call pc+4
+Func#1 ('helper_a') is global and assumed valid.
+...
+10: *(u32 *)(r7 +0) = r1
+R7 invalid mem access 'scalar'
+```
+
+After the call, `r7`, which held the old `sk->data` packet pointer, has been downgraded to a scalar, so storing through it is rejected.
+
+The smallest fix is to reload `sk->data` and `sk->data_end` after the helper call and redo the bounds check before writing.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -15,8 +15,12 @@ int entry(struct __sk_buff *sk)
+ 	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+ 		return TCX_DROP;
+ 	helper_a(sk, 0);
++
++	p = (void *)(long)sk->data;
++	if ((void *)(p + 1) > (void *)(long)sk->data_end)
++		return TCX_DROP;
+ 	*p = 42;
+ 	return TCX_PASS;
+ }
+```
+
+This satisfies the verifier because the write uses a fresh packet pointer loaded after the potentially packet-invalidating helper call, and that fresh pointer is bounds-checked immediately before use.

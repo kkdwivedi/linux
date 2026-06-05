@@ -1,0 +1,84 @@
+The failure happens because `helper_a(sk, 0)` eventually calls:
+
+```c
+bpf_skb_pull_data(sk, len);
+```
+
+`bpf_skb_pull_data()` is one of the skb helpers that may move or reallocate packet data. Therefore, after the call, any previously loaded packet pointer derived from `sk->data` is no longer considered valid by the verifier.
+
+In `entry()`:
+
+```c
+int *p = (void *)(long)sk->data;
+
+if ((void *)(p + 1) > (void *)(long)sk->data_end)
+	return TCX_DROP;
+
+helper_a(sk, 0);
+*p = 42;
+```
+
+`p` is loaded and bounds-checked before the helper call. After the call, the verifier invalidates `p`, because packet data may have moved. The store:
+
+```c
+*p = 42;
+```
+
+then tries to dereference the old packet pointer, which the verifier has downgraded to a scalar/invalid value.
+
+The smallest reliable fix is to reload `sk->data` and `sk->data_end` after the helper call and redo the bounds check before writing.
+
+Patch:
+
+```diff
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ 
+ __noinline long helper_b(struct __sk_buff *sk, __u32 len)
+ {
+ 	return bpf_skb_pull_data(sk, len);
+ }
+ 
+ __noinline long helper_a(struct __sk_buff *sk, __u32 len)
+ {
+ 	return helper_b(sk, len);
+ }
+ 
+ SEC("tc")
+ int entry(struct __sk_buff *sk)
+ {
+ 	int *p = (void *)(long)sk->data;
+ 
+ 	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+ 		return TCX_DROP;
+ 	helper_a(sk, 0);
++
++	p = (void *)(long)sk->data;
++	if ((void *)(p + 1) > (void *)(long)sk->data_end)
++		return TCX_DROP;
++
+ 	*p = 42;
+ 	return TCX_PASS;
+ }
+```
+
+Alternatively, if the first bounds check is not needed for the intended test semantics, an even cleaner version is to move the helper call before loading `p`:
+
+```c
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	int *p;
+
+	helper_a(sk, 0);
+
+	p = (void *)(long)sk->data;
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+The key requirement is: after any call to `bpf_skb_pull_data()` or a wrapper around it, packet pointers must be reloaded from the context and revalidated before use.

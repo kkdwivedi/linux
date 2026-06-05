@@ -1,0 +1,63 @@
+{
+  "acceptable_fixes": [
+    "Replace bpf_ktime_get_coarse_ns with bpf_ktime_get_ns if that satisfies the program's requirements and is allowed.",
+    "Change the program type/section to one where the helper is allowed."
+  ],
+  "canonical_fix": "Use a helper allowed for this program type, such as an allowed time helper with suitable semantics, or move the logic to a program type/attach point where bpf_ktime_get_coarse_ns is permitted.",
+  "case_id": "case-006",
+  "category": "Policy",
+  "difficulty": "easy",
+  "expected_explanation": "The program type used by this case is not allowed to call bpf_ktime_get_coarse_ns. This is a helper policy/program-type compatibility failure, not a register or memory proof failure.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-thinking/case-006-diagnostic.txt",
+    "case_id": "case-006",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-thinking",
+    "prompt_bytes": 1849,
+    "prompt_path": "public/case-006/prompt_diagnostic.md",
+    "prompt_sha256": "0c351f7275500308d5dd7e77f65459b6d00560f51ba8d1d768a521650bb1de73",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-thinking/case-006-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "enabled"
+    },
+    "run_id": "117731ef-5131-45ce-b229-6c7a11f1507f",
+    "started_at": "2026-06-05T03:44:18+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "**Explanation**\n\nThe verifier rejects the program because the helper `bpf_ktime_get_coarse_ns` (ID\u202f160) is not in the allow-list for the `kprobe` program type. The error message is explicit:\n\n> *program of this type cannot use helper bpf_ktime_get_coarse_ns#160*\n\nKprobe programs can, however, use the older `bpf_ktime_get_ns` helper (ID\u202f5), which provides the same monotonic-clock time in nanoseconds.\n\n**Smallest fix**\n\nReplace the disallowed helper with `bpf_ktime_get_ns` in both the assembly string and the `__imm` constraint.\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -8,10 +8,10 @@ SEC(\"kprobe\")\n __naked void entry(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n-\tcall %[bpf_ktime_get_coarse_ns];\t\t\\\n+\tcall %[bpf_ktime_get_ns];\t\t\t\\\n \tr0 = 0;\t\t\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t:\n-\t: __imm(bpf_ktime_get_coarse_ns)\n+\t: __imm(bpf_ktime_get_ns)\n \t: __clobber_all);\n }\n```\n\nThis keeps the program type, structure, and logic identical while using a helper that the verifier permits for kprobes.",
+  "must_mention": [
+    "Helper is forbidden for this program type",
+    "The fix is to use an allowed helper or compatible program type"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds register initialization around the helper call",
+    "Treats it as a GPL license issue",
+    "Suggests a bounds or NULL check"
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "answer_text": "## What the verifier is complaining about\n\nThe key line is at the end:\n\n```\nUnreleased reference id=3 alloc_insn=14\nBPF_EXIT instruction in main prog would lead to reference leak\n```\n\n`bpf_ringbuf_reserve_dynptr()` is an acquire function: each successful call creates a \"reference\" that the verifier tracks and that **must** be released on every path that reaches `exit` (via `bpf_ringbuf_submit_dynptr()` or `bpf_ringbuf_discard_dynptr()`).\n\nIn this program two dynptrs are reserved:\n\n- `ptr1` \u2192 reference id=1/2 (alloc at insn 7)\n- `ptr2` \u2192 reference id=3 (alloc at insn 14)\n\nThe error/`!sample` path correctly discards both `ptr1` and `ptr2`. But the **success path** only does:\n\n```c\nbpf_ringbuf_submit_dynptr(&ptr1, 0);\nreturn 0;\n```\n\nIt releases `ptr1` but never releases `ptr2`. So on the fall-through path to `exit` (insns 29\u201334), reference id=3 (`ptr2`) is still held \u2192 reference leak.\n\n(The `arg#0 reference type('UNKNOWN ') ... -22` line at the very top is just an unrelated/benign log artifact from BTF arg resolution, not the cause of rejection.)\n\n## Smallest fix\n\nRelease `ptr2` on the success path too. Add a discard (or submit) of `ptr2` before returning from the success branch:\n\n```c\n\tsample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));\n\tif (!sample) {\n\t\tbpf_ringbuf_discard_dynptr(&ptr1, 0);\n\t\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\t\treturn 0;\n\t}\n\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);   /* <-- add this */\n\n\treturn 0;\n```\n\n### Patch\n\n```diff\n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n \n \treturn 0;\n```\n\nThis guarantees that on **every** path that reaches `exit`, both acquired dynptr references are released, satisfying the verifier's reference-tracking requirement.\n\n(Either `bpf_ringbuf_discard_dynptr(&ptr2, 0)` or `bpf_ringbuf_submit_dynptr(&ptr2, 0)` works to clear the reference; discard is the natural choice since `ptr2` was never used.)",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-011-legacy.txt",
+    "case_id": "case-011",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 3372,
+    "prompt_path": "public/case-011/prompt_legacy.md",
+    "prompt_sha256": "762b0c608dbde5c1090172be3b10e7e17988b9698301148bebea627aedc1c8f8",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-011-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "2ee13f92-1072-417c-b498-0e75b2ca952c",
+    "started_at": "2026-06-05T03:17:37+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00996,
+    "output_cost_usd": 0.027725,
+    "total_cost_usd": 0.037684999999999996
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1992,
+    "output_tokens": 1109,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1992,
+      "output_tokens": 1109,
+      "output_tokens_details": {
+        "thinking_tokens": 194
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 3101
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EvEECmMIDhgCKkD5wO0CqYbLs4qwAreb0rR4xlq4HVKjI74LA+6+6Caa50SAdmHgmXvdUNZ4bVevY8+XFhCGxV8aXC6V7/O6nk6LMg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDEmSzPDv69FqkAJsoBoMwEOSBJqjFXrajbT8IjAF+afn0gDYdIndBys6tJQqt7XVOHVFK74SB1B+ub9cCHmoXyieBqC/yWeRlhXUS00quwPp2J3YkaDZn0SRnquu1CD5kROptkgE4l8z2LZCwJc2sIt/A0xkLzWURSNTsasW/c3IcBsyUMO4qHCbPx/+lqXXnTDLVpzwuR/99tJl/RlF+5ZgwbCh/EliesLwF8JjJ1x4HA/iY/k070xsy7Z+CNHgDy4GXosRiSH1C83/p2EnLqr80SCq0dDEPm4Vb/XmlDoOlT4ZnxTFnSCG9iLWRv1erfAOtouLtiCk/4btYAtmUNI+/YCVokvJiwOTACzddZnFqNFFn+Z1GO/TCrUcpB7wiwL6ZWNUJ0hV7QFB17cg+RLITRd6f4MYkQzJwyrbWVb4CRq27Nh/WRkHN32LMtA++cuR+BQSdtTg0j4pV1E5qnZfDeN7G2weW70ujbrY/7dpyLFSnZX28GGiY1Zj5b1FV1hOSX23h24kr/2X2Ec0rCfBVR3RNcw7Hqcrd+n+DWo/FyKh00lWYWq4XNjmAWuPv4Zv9mPtSpCx8wcl/6v9/GAF5qQiASgy7Glu6WrW3pKTF7wEa49VkBzyAY/LBPCic0kYKya8/C46ZQdBtb0EnDp7KNN4tvdKAiW0R+Jolb0esv/ndSUuU1M8MxgB",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## What the verifier is complaining about\n\nThe key line is at the end:\n\n```\nUnreleased reference id=3 alloc_insn=14\nBPF_EXIT instruction in main prog would lead to reference leak\n```\n\n`bpf_ringbuf_reserve_dynptr()` is an acquire function: each successful call creates a \"reference\" that the verifier tracks and that **must** be released on every path that reaches `exit` (via `bpf_ringbuf_submit_dynptr()` or `bpf_ringbuf_discard_dynptr()`).\n\nIn this program two dynptrs are reserved:\n\n- `ptr1` \u2192 reference id=1/2 (alloc at insn 7)\n- `ptr2` \u2192 reference id=3 (alloc at insn 14)\n\nThe error/`!sample` path correctly discards both `ptr1` and `ptr2`. But the **success path** only does:\n\n```c\nbpf_ringbuf_submit_dynptr(&ptr1, 0);\nreturn 0;\n```\n\nIt releases `ptr1` but never releases `ptr2`. So on the fall-through path to `exit` (insns 29\u201334), reference id=3 (`ptr2`) is still held \u2192 reference leak.\n\n(The `arg#0 reference type('UNKNOWN ') ... -22` line at the very top is just an unrelated/benign log artifact from BTF arg resolution, not the cause of rejection.)\n\n## Smallest fix\n\nRelease `ptr2` on the success path too. Add a discard (or submit) of `ptr2` before returning from the success branch:\n\n```c\n\tsample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));\n\tif (!sample) {\n\t\tbpf_ringbuf_discard_dynptr(&ptr1, 0);\n\t\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\t\treturn 0;\n\t}\n\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);   /* <-- add this */\n\n\treturn 0;\n```\n\n### Patch\n\n```diff\n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n \n \treturn 0;\n```\n\nThis guarantees that on **every** path that reaches `exit`, both acquired dynptr references are released, satisfying the verifier's reference-tracking requirement.\n\n(Either `bpf_ringbuf_discard_dynptr(&ptr2, 0)` or `bpf_ringbuf_submit_dynptr(&ptr2, 0)` works to clear the reference; discard is the natural choice since `ptr2` was never used.)",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01MS837DE2kqavJiuDurfzdc",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1992,
+      "output_tokens": 1109,
+      "output_tokens_details": {
+        "thinking_tokens": 194
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

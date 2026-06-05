@@ -1,0 +1,45 @@
+## Explanation
+
+`helper_a()` is a **global** (non-static) function. Even though it is marked `__noinline`, because it has external linkage the verifier validates it **independently** of its caller. For such functions, a pointer-to-memory argument is presented to the verifier as `mem_or_null` — i.e. the verifier assumes the caller *might* pass NULL.
+
+When the function then does:
+
+```c
+return bpf_get_prandom_u32() < s->x;   /* r2 = *(u32 *)(r6 + 0) */
+```
+
+it dereferences `s` without first proving it is non-NULL, so the verifier rejects it:
+
+```
+R6 invalid mem access 'mem_or_null'
+```
+
+The contents/value being checked (`bpf_get_prandom_u32()`) is irrelevant; the failure is purely that a possibly-NULL pointer is dereferenced.
+
+## Smallest fix
+
+Add an explicit NULL check before dereferencing `s`. This makes the verifier narrow `mem_or_null` to a valid `mem` pointer on the path that reaches the dereference:
+
+```c
+__noinline int helper_a(const struct Item *s)
+{
+	if (!s)
+		return 0;
+	return bpf_get_prandom_u32() < s->x;
+}
+```
+
+After the `if (!s)` test, on the fall-through path `s` is known to be a valid `mem(sz=4)` pointer, so `*(u32 *)(s + 0)` is allowed.
+
+### Alternative
+
+If your libbpf/kernel headers support it, you can instead annotate the argument as guaranteed non-NULL, telling the verifier the caller always passes a valid pointer:
+
+```c
+__noinline int helper_a(const struct Item *s __arg_nonnull)
+{
+	return bpf_get_prandom_u32() < s->x;
+}
+```
+
+Both approaches satisfy the verifier; the explicit `if (!s) return 0;` is the most portable and minimal source change.

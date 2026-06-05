@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Release cpumask after __sink(cpumask) if cpumask is non-NULL.",
+    "Transfer the owned cpumask into a kptr/map in a verifier-accepted way so the program no longer owns it."
+  ],
+  "canonical_fix": "After make_object returns a non-NULL cpumask, call bpf_cpumask_release(cpumask) before returning on every path that still owns it.",
+  "case_id": "case-002",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "easy",
+  "expected_explanation": "make_object acquires an owned cpumask reference. The entry program stores/sinks it and returns without releasing or transferring ownership, so one exit path leaks the reference.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-002-legacy.txt",
+    "case_id": "case-002",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 2521,
+    "prompt_path": "public/case-002/prompt_legacy.md",
+    "prompt_sha256": "b1009b27b63c85152af26046b06f483efc378f604fa60de5cb0fdda6b91ed858",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-002-legacy.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "3b950673-90ba-456b-b805-46d1e96062ff",
+    "started_at": "2026-06-05T03:17:56+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Verifier Failure Analysis\n\nThe verifier is reporting an **unreleased reference leak**. Here's what happens:\n\n1. At instruction 0, `bpf_cpumask_create()` returns a trusted pointer with reference count (refs=2)\n2. The pointer is stored in `r6`\n3. At instruction 8-11, `bpf_cpumask_empty()` is called on the cpumask\n4. If the cpumask is NOT empty (the condition at instruction 11 is true), the function **releases the reference** via `bpf_cpumask_release(cpumask)` and returns NULL\n5. However, if the cpumask IS empty (condition false), the function **returns the cpumask pointer without releasing it**, and this pointer gets stored in memory at fp-8\n6. At instruction 21, the program exits with the reference still held (refs=2), causing a reference leak\n\nThe problem is in the `make_object()` function: the success path returns the cpumask without releasing the extra reference that `bpf_cpumask_create()` creates. The verifier tracks that a reference exists and expects it to be released before the program exits.\n\n## Root Cause\n\n`bpf_cpumask_create()` returns a reference-counted object. When `make_object()` returns this pointer directly (without a corresponding release), the caller receives ownership but the verifier sees an unreleased reference at program exit.\n\n## Fix\n\nThe cpumask object returned by `make_object()` must be released before the program exits. The `__sink()` call is clearly meant to consume the object, but it's not a real function that releases the reference in the verifier's view.\n\nAdd an explicit `bpf_cpumask_release()` call after using the cpumask:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *cpumask;\n\n\tcpumask = make_object();\n\t__sink(cpumask);\n\tif (cpumask)\n\t\tbpf_cpumask_release(cpumask);\n\n\treturn 0;\n}\n```\n\nThis ensures the reference created by `bpf_cpumask_create()` (and returned through `make_object()`) is explicitly released before the program exits, satisfying the verifier's reference counting requirements.",
+  "must_mention": [
+    "An owned cpumask reference is acquired",
+    "Every exit path must release or transfer ownership",
+    "The NULL path does not need release"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Removes the acquisition without preserving the intended object use",
+    "Calls release without considering NULL when the API requires non-NULL",
+    "Releases only on an error path and still returns with ownership on success"
+  ]
+}

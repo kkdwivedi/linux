@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Swap the two unlock calls on the success path.",
+    "Avoid taking lock_b while lock_a is still held if nesting is unnecessary."
+  ],
+  "canonical_fix": "On the path where both locks are held, call bpf_res_spin_unlock(&lock_b) before bpf_res_spin_unlock(&lock_a).",
+  "case_id": "case-018",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program acquires lock_a and then lock_b, but releases lock_a before lock_b on the success path. Nested resource spin locks must be unlocked in last-in, first-out order.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-018-diagnostic.txt",
+    "case_id": "case-018",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 2550,
+    "prompt_path": "public/case-018/prompt_diagnostic.md",
+    "prompt_sha256": "b2c0e6d8199078791c9358d84b560ed1081e0fd58d1a492ad2d0272f131fa115",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-018-diagnostic.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "4b67c2ce-b478-4ada-9654-d88d54676f19",
+    "started_at": "2026-06-05T04:23:08+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Verifier Failure Analysis\n\nThe BPF verifier enforces **LIFO (Last-In, First-Out) ordering** for spin lock acquisition and release. The issue is in the error handling path:\n\n1. `lock_a` is acquired (instruction 0-2)\n2. `lock_b` is acquired (instruction 4-6)\n3. When `lock_b` acquisition fails (the `if` condition at instruction 7), the code attempts to unlock `lock_a` (instruction 10)\n4. **This violates LIFO**: `lock_b` was acquired last, so it should be unlocked first, but it's still held when we try to unlock `lock_a`\n\nThe verifier correctly detects this as a resource lifetime safety violation\u2014you cannot unlock `lock_a` while `lock_b` is still locked.\n\n## Solution\n\nThe fix is to unlock locks in reverse order (LIFO). In the error path where `lock_b` acquisition fails, we need to unlock `lock_b` first (even though it failed to lock, the verifier tracks the attempt), then `lock_a`:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nstruct bpf_res_spin_lock lock_a __hidden SEC(\".data.A\");\nstruct bpf_res_spin_lock lock_b __hidden SEC(\".data.B\");\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tif (bpf_res_spin_lock(&lock_a))\n\t\treturn 0;\n\tif (bpf_res_spin_lock(&lock_b)) {\n\t\tbpf_res_spin_unlock(&lock_b);\n\t\tbpf_res_spin_unlock(&lock_a);\n\t\treturn 0;\n\t}\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n\treturn 0;\n}\n```\n\n**Key change**: In the error path (lines 10-11 in the new version), unlock `lock_b` before `lock_a`, maintaining LIFO order. This matches the LIFO principle required by the BPF verifier for resource lifetime safety.",
+  "must_mention": [
+    "lock_b was acquired after lock_a",
+    "Unlock order must be LIFO",
+    "The success path unlocks the wrong lock first"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Changes only the error path where lock_b acquisition fails",
+    "Drops one unlock and leaks a held lock",
+    "Confuses spin lock order with IRQ flag variable order"
+  ]
+}

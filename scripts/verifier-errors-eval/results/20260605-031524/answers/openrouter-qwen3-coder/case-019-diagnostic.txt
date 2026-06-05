@@ -1,0 +1,75 @@
+### Verifier Failure Explanation
+
+The eBPF verifier is rejecting the program because it detects a **recursive call** from the subprogram `helper_a` to itself. The verifier enforces that all subprogram call graphs must be **acyclic** to ensure:
+- Bounded stack depth.
+- Finite analysis during verification.
+
+In the provided code:
+- `helper_a` calls itself recursively via a conditional branch:
+  ```asm
+  if r1 < 4 goto l0_%=;
+  ...
+  l0_%=: call helper_a;
+  ```
+- This creates a cycle in the call graph: `helper_a -> helper_a`, which the verifier explicitly forbids.
+
+---
+
+### Proposed Fix
+
+To satisfy the verifier, we must **eliminate the recursive call** by rewriting the logic using an **explicit loop** instead of recursion. This ensures:
+- The call graph remains acyclic.
+- Stack usage is bounded.
+
+#### Smallest Source-Level Fix
+
+We can rewrite `helper_a` to use a loop instead of recursion. Here's the modified version:
+
+```c
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l0_%=:	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l0_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+#### Explanation of the Fix
+
+1. The recursive call `call helper_a` is removed.
+2. The logic is rewritten as a loop using the same label `l0_%=`, which is safe because the verifier allows intra-subprogram jumps as long as they don't involve recursion.
+3. This preserves the intended behavior (incrementing `r1` until it reaches 4) while eliminating the recursive structure.
+
+---
+
+### Final Patch
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -15,11 +15,9 @@ SEC("tracepoint")
+ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+-	asm volatile ("					\
+-	r1 += 1;					\
+-	r0 = r1;					\
+-	if r1 < 4 goto l0_%=;				\
+-	exit;						\
+-l0_%=:	call helper_a;					\
+-	exit;						\
+-"	::: __clobber_all);
++	asm volatile ("					\
++l0_%=:	r1 += 1;					\
++	r0 = r1;					\
++	if r1 < 4 goto l0_%=;				\
++	exit;						\
++"	::: __clobber_all);
+ }
+```
+
+This change replaces recursion with a bounded loop, satisfying the verifier's acyclicity requirement.

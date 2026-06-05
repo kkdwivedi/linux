@@ -1,0 +1,37 @@
+## Explanation of the Failure
+
+The verifier rejects the program because `bpf_cpumask_populate`'s first argument must be **verifier-known memory** (stack, map value, context, etc.) that covers at least 16 bytes for `struct cpumask`. The code passes `(struct bpf_cpumask *)0x123456` — an arbitrary integer cast to a pointer — which the verifier sees as a plain scalar (`R1=0x123456`), not a valid memory reference.
+
+```
+R1 type=scalar expected=fp
+Reason: the kfunc expects 16 bytes of memory for 'struct cpumask',
+        but it is an integer scalar and not verifier-known memory.
+```
+
+## Fix
+
+Replace the fabricated pointer with a stack-allocated `struct cpumask`, whose address is verifier-known memory:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct cpumask local_mask;
+	u64 bits;
+	int ret;
+
+	ret = bpf_cpumask_populate(&local_mask, &bits, sizeof(bits));
+	if (!ret)
+		return 2;
+
+	return 0;
+}
+```
+
+**Why this works:** `&local_mask` is a stack pointer (`fp`-relative), which the verifier can track as valid memory of exactly `sizeof(struct cpumask)` bytes — satisfying the kfunc's 16-byte memory requirement for the first argument.

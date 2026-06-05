@@ -1,0 +1,68 @@
+{
+  "acceptable_fixes": [
+    "Reduce CALLS_50 fan-out or the number of helper layers.",
+    "Pass a stable non-FP-derived argument pattern when possible.",
+    "Replace the generated call tree with a simpler bounded loop or less duplicated call structure."
+  ],
+  "canonical_fix": "Reduce the number of distinct call paths or argument patterns reaching the subprograms, for example by reducing fan-out/depth, consolidating calls, or avoiding many distinct FP-offset arguments.",
+  "case_id": "case-020",
+  "category": "Verifier Limit",
+  "difficulty": "hard",
+  "expected_explanation": "The program creates an enormous number of distinct bpf2bpf call paths and frame-pointer-derived argument patterns. Liveness analysis exceeds its complexity limit while recomputing subprogram liveness across those paths.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-high/case-020-legacy.txt",
+    "case_id": "case-020",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-high",
+    "prompt_bytes": 6158,
+    "prompt_path": "public/case-020/prompt_legacy.md",
+    "prompt_sha256": "cecfa6936349490d4b7bd2b0131df3ba133333894cfcdcc4438f6f6f0196b689",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-high/case-020-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "135f1292-56c3-48b4-906d-35c8e9381b56",
+    "started_at": "2026-06-05T04:18:53+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Explanation of the Verifier Failure\n\nThe BPF verifier's liveness analysis has a complexity limit of **10001 calls** (enforced to prevent unbounded exponential blowup). The program creates a call chain 8 levels deep:\n\n> `entry` \u2192(\u00d750) `helper_a` \u2192(\u00d750) `helper_b` \u2192(\u00d750) `helper_c` \u2192(\u00d750) `helper_d` \u2192(\u00d750) `helper_e` \u2192(\u00d750) `helper_f` \u2192(\u00d750) `helper_g`\n\nBecause the verifier re-analyzes each subprogram for every distinct call context (it cannot fully cache liveness across all call sites), the total liveness analysis invocations grow as:\n\n**N + N\u00b2 + N\u00b3 + \u2026 + N^(D\u22121)** where N = 50 calls/level, D = 8 levels\n\nThis sums to roughly **50^7 \u2248 7.8 billion**, far exceeding 10001. The log confirms `helper_g` is entered at `depth 7` thousands of times before the limit is hit.\n\n## Fix\n\nThe constraint to stay under 10001 is N^(D\u22121) < 10001. With D = 8 levels, we need N \u2264 3 (since 3^7 = 2187 < 10001, but 4^7 = 16384 > 10001).\n\nThe **smallest one-line fix** is to redefine `CALLS_50` to produce only 3 calls per level:\n\n```diff\n-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n+#define CALLS_50(fn) CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)\n```\n\nWith N = 3 and D = 8, total liveness calls \u2248 3 + 9 + 27 + 81 + 243 + 729 + 2187 = **3279**, safely under the 10001 limit.\n\nThe offsets 8, 16, 24 are already used by `CALLS_10`, so no other change is needed\u2014stack frames remain valid and the structure (8 levels of nested calls) is preserved.",
+  "must_mention": [
+    "The failure is verifier liveness complexity, not runtime recursion",
+    "Many call paths or distinct FP offsets drive the limit",
+    "The fix is to simplify the call/argument pattern"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only increases a runtime loop bound",
+    "Adds packet or memory bounds checks",
+    "Suggests releasing a resource"
+  ]
+}

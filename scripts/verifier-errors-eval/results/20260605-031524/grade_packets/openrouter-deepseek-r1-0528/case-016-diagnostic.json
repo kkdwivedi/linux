@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Before the r6 != 0 exit path, if r0 is non-NULL, release it with bpf_sk_release(r0).",
+    "Move the mark branch before acquiring the socket when possible so no reference exists on that exit path.",
+    "Restructure cleanup with a common release path for all exits after lookup."
+  ],
+  "canonical_fix": "On every path after bpf_sk_lookup_tcp returns a non-NULL reference, call bpf_sk_release before exiting unless ownership is transferred.",
+  "case_id": "case-016",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "hard",
+  "expected_explanation": "bpf_sk_lookup_tcp can return an owned socket reference. One branch exits based on packet mark/r6 after the lookup without releasing the reference if it was acquired.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-r1-0528/case-016-diagnostic.txt",
+    "case_id": "case-016",
+    "model": "deepseek/deepseek-r1-0528",
+    "profile": "openrouter-deepseek-r1-0528",
+    "prompt_bytes": 5484,
+    "prompt_path": "public/case-016/prompt_diagnostic.md",
+    "prompt_sha256": "26bd47d73322ec44031e7eab349344e578529fd97883aba22a22f0b6717c829d",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-r1-0528/case-016-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "ca69d5b9-c614-4d10-a1c8-9377f7ab0386",
+    "started_at": "2026-06-05T03:19:16+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier error occurs because the program fails to release an acquired socket reference on one of the exit paths. Specifically:\n\n1. `bpf_sk_lookup_tcp` acquires a socket reference (id=2) stored in `r0`\n2. If `r6 != 0`, the program exits immediately via `exit` instruction without releasing the socket\n3. This violates resource lifetime safety as owned resources must be released before exit\n\nThe fix ensures the socket is released when non-NULL regardless of `r6`'s value by:\n1. Removing the conditional check on `r6`\n2. Always checking if `r0` (socket reference) is non-NULL\n3. Releasing the socket only when `r0 != 0`\n\nHere's the minimal patch:\n\n```diff\n--- original.c\n+++ fixed.c\n@@ -13,10 +13,7 @@\n \tr5 = 0;\t\t\t\t\t\t\\\n \tcall %[bpf_sk_lookup_tcp];\t\t\t\\\n-\tif r6 == 0 goto l1_%=;\t\t\t\t\\\n-\texit;\t\t\t\t\t\t\\\n-l1_%=:\tif r0 == 0 goto l2_%=;\t\t\t\t\\\n+\tif r0 == 0 goto l2_%=;\t\t\t\t\\\n \tr1 = r0;\t\t\t\t\t\\\n \tcall %[bpf_sk_release];\t\t\t\t\\\n l2_%=:\texit;\t\t\t\t\t\t\\\n```\n\nThis change:\n1. Removes 3 instructions (`if r6 == 0`, `exit`, and label `l1_%=`)\n2. Adds 1 instruction (`if r0 == 0`)\n3. Maintains all other functionality\n4. Ensures socket is released on all exit paths when non-NULL\n\nThe fixed program will pass verification because:\n- Socket reference is now always checked\n- Release happens when reference is non-NULL\n- No paths exist where owned resources leak",
+  "must_mention": [
+    "An owned socket reference is acquired",
+    "The mark/r6 branch exits with the reference live",
+    "Release is needed on that branch"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only releases in the r6 == 0 branch",
+    "Releases before checking that lookup returned non-NULL in a way rejected by the verifier",
+    "Adds packet bounds checks but no reference cleanup"
+  ]
+}

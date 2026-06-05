@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Add bpf_ringbuf_discard_dynptr(&ptr2, 0) before the final return.",
+    "Submit ptr2 too, if the program actually initializes and intends to publish it.",
+    "Restructure cleanup so both ptr1 and ptr2 are released on all exits after reservation."
+  ],
+  "canonical_fix": "Submit or discard ptr2 on every path after it is reserved, including the path where ptr1 is submitted successfully.",
+  "case_id": "case-011",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The program reserves two ringbuf dynptrs. On the success path it submits/releases only ptr1 and returns while ptr2 is still live.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-011-diagnostic.txt",
+    "case_id": "case-011",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 5553,
+    "prompt_path": "public/case-011/prompt_diagnostic.md",
+    "prompt_sha256": "c4e9b1631d514a5b5c9e921fc3dfd8dc5de6eebfbb59913cb9ede46e6625c9ef",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-011-diagnostic.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "558a8606-5e1d-499b-a5b9-7e4e730ecb96",
+    "started_at": "2026-06-05T04:22:26+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Analysis\n\nThe verifier is detecting a **resource leak** of dynptr `ptr2` (id=3).\n\nThe problem is in the code flow:\n\n1. **Line 100**: `ptr1` is reserved (id=2)\n2. **Line 101**: `ptr2` is reserved (id=3)\n3. **Line 103**: `bpf_dynptr_data(&ptr1, ...)` is called\n4. **Line 104**: If `sample` is NULL:\n   - Both `ptr1` and `ptr2` are discarded (lines 105-106)\n   - Function returns early\n5. **Line 110**: If `sample` is NOT NULL:\n   - Only `ptr1` is submitted\n   - **`ptr2` is never released!** (no discard or submit)\n6. **Line 115**: Function exits with `ptr2` still owning a reference\n\nThe verifier tracks that `ptr2` (id=3) was acquired at instruction 14 but never released on the success path (when sample is not NULL).\n\n## Fix\n\nThe smallest fix is to release `ptr2` before the function returns in the success case. Since `ptr2` was reserved but never used, it should be discarded:\n\n```c\nSEC(\"?raw_tp\")\nint entry(void *ctx)\n{\n\tstruct bpf_dynptr ptr1, ptr2;\n\tstruct sample *sample;\n\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n\n\tsample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));\n\tif (!sample) {\n\t\tbpf_ringbuf_discard_dynptr(&ptr1, 0);\n\t\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\t\treturn 0;\n\t}\n\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);  // ADD THIS LINE\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\n\treturn 0;\n}\n```\n\n**Why this works:** By explicitly discarding `ptr2` on the success path (line after checking `sample`), we release the reference acquired at line 101, ensuring all paths through the program properly release all acquired resources before exit.",
+  "must_mention": [
+    "The second dynptr reservation is leaked",
+    "Every reserved dynptr must be submitted or discarded",
+    "The successful ptr1 path still needs ptr2 cleanup"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only releases ptr1",
+    "Adds cleanup only in the !sample branch, which already releases both",
+    "Calls a non-dynptr ringbuf cleanup API on the dynptr"
+  ]
+}

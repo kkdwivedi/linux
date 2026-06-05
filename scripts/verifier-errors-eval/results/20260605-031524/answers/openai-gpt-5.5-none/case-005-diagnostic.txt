@@ -1,0 +1,60 @@
+The verifier rejects the program because it calls a sleepable helper while preemption is disabled.
+
+`bpf_preempt_disable()` enters a non-preemptible region. While in that region, BPF programs may not call helpers that can sleep. `bpf_copy_from_user()` is sleepable because copying from user memory may fault and may need to sleep while resolving the fault.
+
+The failing sequence is:
+
+```c
+bpf_preempt_disable();
+bpf_copy_from_user(&data, sizeof(data), NULL);
+bpf_preempt_enable();
+```
+
+At the `bpf_copy_from_user()` call, the verifier tracks that preemption-disabled depth is `1`, so it rejects the program:
+
+```text
+sleepable helper bpf_copy_from_user#148 in non-preemptible region
+```
+
+The smallest source-level fix is to move the sleepable helper call outside the preemption-disabled region. Since the critical section is otherwise empty, the simplest repair is to call `bpf_copy_from_user()` before disabling preemption, or after re-enabling it.
+
+A minimal patch would be:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -8,9 +8,9 @@ SEC("?fentry.s/sys_getpgid")
+ int entry(void *ctx)
+ {
+ 	u32 data;
+ 
+-	bpf_preempt_disable();
+ 	bpf_copy_from_user(&data, sizeof(data), NULL);
++	bpf_preempt_disable();
+ 	bpf_preempt_enable();
+ 	return 0;
+ }
+```
+
+Or, equivalently, remove the preemption-disabled region entirely if it is only there for this test:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -8,9 +8,7 @@ SEC("?fentry.s/sys_getpgid")
+ int entry(void *ctx)
+ {
+ 	u32 data;
+ 
+-	bpf_preempt_disable();
+ 	bpf_copy_from_user(&data, sizeof(data), NULL);
+-	bpf_preempt_enable();
+ 	return 0;
+ }
+```
+
+The first patch is likely the smallest behavioral change if the test intends to keep exercising `bpf_preempt_disable()`/`bpf_preempt_enable()`: the sleepable helper is no longer inside the non-preemptible section, so the verifier’s execution-context safety check should pass.

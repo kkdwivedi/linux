@@ -1,0 +1,39 @@
+## Analysis of the Verifier Failure
+
+The verifier reports:
+```
+Unreleased reference id=2 alloc_insn=19
+BPF_EXIT instruction in main prog would lead to reference leak
+```
+
+After `bpf_sk_lookup_tcp` (insn 19) returns a socket reference (id=2), the code checks register `r6` (the packet mark):
+
+```asm
+call bpf_sk_lookup_tcp       ; r0 = socket_or_null  (ref id=2)
+if r6 == 0 goto l1_%=        ; if mark == 0, go release
+exit                         ; ← BUG: exits when r6 != 0 WITHOUT releasing r0
+l1_%=:
+  if r0 == 0 goto l2_%=
+  r1 = r0
+  call bpf_sk_release        ; ← only reached when r6 == 0
+l2_%=: exit
+```
+
+When `r6 != 0` (mark is non-zero), the program falls through to `exit` at insn 21 **without releasing** the socket reference acquired by `bpf_sk_lookup_tcp`. The BPF verifier enforces that every acquired reference must be released on every code path before exit.
+
+## Fix
+
+The minimal change is to replace the bare `exit;` with `goto l1_%=;`, so that **both** branches (mark==0 and mark!=0) go through the socket-release logic:
+
+```diff
+ 	call %[bpf_sk_lookup_tcp];			\
+ 	if r6 == 0 goto l1_%=;				\
+-	exit;						\
++	goto l1_%=;					\
+ l1_%=:	if r0 == 0 goto l2_%=;				\
+ 	r1 = r0;					\
+ 	call %[bpf_sk_release];				\
+ l2_%=:	exit;						\
+```
+
+With this change, regardless of `r6`, execution always reaches `l1_%=`, which checks whether `r0` holds a valid socket and releases it if so. The verifier will see that every path from `bpf_sk_lookup_tcp` either calls `bpf_sk_release` (when `r0 != 0`) or exits with `r0 == 0` (no reference held), satisfying the reference-tracking requirement.

@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Move helper_a(sk, 0) before taking and checking p.",
+    "Recompute p from sk->data after helper_a and repeat the data_end check before *p = 42.",
+    "Avoid calling a packet-data-invalidating helper between pointer validation and pointer use."
+  ],
+  "canonical_fix": "After helper_a returns, reload sk->data and sk->data_end, redo the bounds check, and only then write through the packet pointer.",
+  "case_id": "case-015",
+  "category": "Register Type Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program validates a packet data pointer, then calls a subprogram that invokes bpf_skb_pull_data. That helper can move packet data and invalidates packet pointers proven before the call. The later store through the old pointer uses an invalidated value.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-v3.2/case-015-legacy.txt",
+    "case_id": "case-015",
+    "model": "deepseek/deepseek-v3.2",
+    "profile": "openrouter-deepseek-v3.2",
+    "prompt_bytes": 1984,
+    "prompt_path": "public/case-015/prompt_legacy.md",
+    "prompt_sha256": "dc0fc1e91b61bdf915966f9cbe5ae652d8b1776a8af859d12e6cd23d52604af2",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-v3.2/case-015-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "542fdca1-0d8a-4b16-95a5-09ef358cfe57",
+    "started_at": "2026-06-05T03:20:33+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "The verifier error occurs because the program uses a packet pointer `p` derived from `sk->data` before calling `helper_a`, which eventually calls `bpf_skb_pull_data(sk, 0)`. Even with `len=0`, this helper may reallocate the packet buffer, invalidating any previously derived packet pointers. After the call, the verifier marks `p` (stored in `r7`) as a scalar value rather than a valid packet pointer, leading to the \"invalid mem access\" error when trying to write via `*p`.\n\nThe smallest fix is to move the pointer derivation and bounds check after the helper call, ensuring we use a fresh packet pointer that reflects any potential changes from `bpf_skb_pull_data`. This avoids using a stale pointer.\n\nHere is the patch:\n\n```diff\n SEC(\"tc\")\n int entry(struct __sk_buff *sk)\n {\n-\tint *p = (void *)(long)sk->data;\n+\tint *p;\n \n-\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n-\t\treturn TCX_DROP;\n \thelper_a(sk, 0);\n+\tp = (void *)(long)sk->data;\n+\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n+\t\treturn TCX_DROP;\n \t*p = 42;\n \treturn TCX_PASS;\n }\n```\n\nThis change preserves the original logic while ensuring the packet pointer is valid at the time of the write. The helper functions remain unchanged.",
+  "must_mention": [
+    "bpf_skb_pull_data invalidates packet pointers",
+    "The previous packet bounds check no longer applies after the call",
+    "Reload and revalidate data/data_end before dereference"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check for p only",
+    "Uses the old p after the helper call",
+    "Changes the write value but not pointer provenance"
+  ]
+}

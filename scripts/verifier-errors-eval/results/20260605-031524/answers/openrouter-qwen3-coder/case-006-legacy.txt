@@ -1,0 +1,32 @@
+Looking at the verifier log, the issue is clear:
+
+**Verifier Failure Explanation:**
+The program is using the `kprobe` program type, but this program type is not allowed to use the `bpf_ktime_get_coarse_ns` helper function. The verifier explicitly states "program of this type cannot use helper bpf_ktime_get_coarse_ns#160".
+
+**Root Cause:**
+The `kprobe` program type has restrictions on which helper functions it can call, and `bpf_ktime_get_coarse_ns` is not permitted for this program type.
+
+**Solution:**
+The smallest fix is to change the program type to one that allows `bpf_ktime_get_coarse_ns`. The `socket` program type is known to support this helper function.
+
+**Patch:**
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_coarse_ns];		\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_coarse_ns)
+	: __clobber_all);
+}
+```
+
+The only change needed is replacing `SEC("kprobe")` with `SEC("socket")` to use a program type that's allowed to call the `bpf_ktime_get_coarse_ns` helper function.

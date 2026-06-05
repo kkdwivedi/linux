@@ -1,0 +1,130 @@
+{
+  "answer_text": "The failure is not from an illegal instruction or an invalid stack access. It is a verifier complexity failure during subprogram liveness analysis.\n\nThe program builds a very wide/deep BPF-to-BPF call graph:\n\n```text\nentry -> helper_a -> helper_b -> helper_c -> helper_d -> helper_e -> helper_f -> helper_g\n```\n\nAt every level, the caller calls the next helper 50 times, each time setting `r1` to a different stack pointer value:\n\n```asm\nr1 = r10;\nr1 += -off;\ncall helper_x;\n```\n\nSo the verifier has to reason about many call paths and argument/stack-pointer patterns. Even though every helper ignores its argument and just returns `0`, the liveness pass still has to prove that across the nested calls. With 50-way fanout over 7 call levels, the number of possible call chains is enormous. The log shows the verifier repeatedly re-analyzing `helper_g` at depth 7 until it hits the liveness complexity limit:\n\n```text\nliveness analysis exceeded complexity limit (10001 calls)\n```\n\nA small source-level fix is to reduce the fanout. Since the depth is 7, using 3 calls per level gives at most:\n\n```text\n3 + 3^2 + ... + 3^7 = 3279\n```\n\ncallee analyses, comfortably below the 10001 limit. Using 4 calls per level would already be:\n\n```text\n4 + 4^2 + ... + 4^7 = 21844\n```\n\nwhich is likely still too high.\n\nA minimal patch is to redefine `CALLS_50()` to emit only three calls.\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -5,7 +5,8 @@\n #define CALLS_10(fn) \\\n \tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n \tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n+#define CALLS_50(fn) \\\n+\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)\n \n __naked __noinline __used\n static unsigned long helper_g(void)\n```\n\nThis keeps the structure of the test \u2014 nested BPF-to-BPF calls with stack-pointer arguments \u2014 but reduces the number of distinct call paths enough that the verifier should finish liveness analysis instead of hitting the complexity limit.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-high/case-020-diagnostic.txt",
+    "case_id": "case-020",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-high",
+    "prompt_bytes": 4110,
+    "prompt_path": "public/case-020/prompt_diagnostic.md",
+    "prompt_sha256": "cb7344658f86bd080c64c73a9c8ee3095a7de5b045356c00872dce60afb5bfb8",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-high/case-020-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "7929095b-577b-409a-a68c-1e2907b85771",
+    "started_at": "2026-06-05T03:16:14+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00724,
+    "output_cost_usd": 0.20514,
+    "total_cost_usd": 0.21237999999999999
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1448,
+    "output_tokens": 6838,
+    "raw_usage": {
+      "input_tokens": 1448,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 6838,
+      "output_tokens_details": {
+        "reasoning_tokens": 6214
+      },
+      "total_tokens": 8286
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 6214,
+    "total_tokens": 8286
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629540,
+    "created_at": 1780629374,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_06f191ab6d1c8bb6006a223f7e5cd8819cba26ef53c2d46de7",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_06f191ab6d1c8bb6006a223f7f17d4819cb75f2715eb86c1fb",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is not from an illegal instruction or an invalid stack access. It is a verifier complexity failure during subprogram liveness analysis.\n\nThe program builds a very wide/deep BPF-to-BPF call graph:\n\n```text\nentry -> helper_a -> helper_b -> helper_c -> helper_d -> helper_e -> helper_f -> helper_g\n```\n\nAt every level, the caller calls the next helper 50 times, each time setting `r1` to a different stack pointer value:\n\n```asm\nr1 = r10;\nr1 += -off;\ncall helper_x;\n```\n\nSo the verifier has to reason about many call paths and argument/stack-pointer patterns. Even though every helper ignores its argument and just returns `0`, the liveness pass still has to prove that across the nested calls. With 50-way fanout over 7 call levels, the number of possible call chains is enormous. The log shows the verifier repeatedly re-analyzing `helper_g` at depth 7 until it hits the liveness complexity limit:\n\n```text\nliveness analysis exceeded complexity limit (10001 calls)\n```\n\nA small source-level fix is to reduce the fanout. Since the depth is 7, using 3 calls per level gives at most:\n\n```text\n3 + 3^2 + ... + 3^7 = 3279\n```\n\ncallee analyses, comfortably below the 10001 limit. Using 4 calls per level would already be:\n\n```text\n4 + 4^2 + ... + 4^7 = 21844\n```\n\nwhich is likely still too high.\n\nA minimal patch is to redefine `CALLS_50()` to emit only three calls.\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -5,7 +5,8 @@\n #define CALLS_10(fn) \\\n \tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n \tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n+#define CALLS_50(fn) \\\n+\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)\n \n __naked __noinline __used\n static unsigned long helper_g(void)\n```\n\nThis keeps the structure of the test \u2014 nested BPF-to-BPF calls with stack-pointer arguments \u2014 but reduces the number of distinct call paths enough that the verifier should finish liveness analysis instead of hitting the complexity limit.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_06f191ab6d1c8bb6006a22401bbb5c819c8d389ff1f4b07fbe",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1448,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 6838,
+      "output_tokens_details": {
+        "reasoning_tokens": 6214
+      },
+      "total_tokens": 8286
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

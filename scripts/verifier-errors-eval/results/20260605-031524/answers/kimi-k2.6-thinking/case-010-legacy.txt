@@ -1,0 +1,32 @@
+**Verifier failure explanation**
+
+The eBPF verifier tracks context pointers (`struct __sk_buff *`) and their offsets very strictly. In `helper_b` the expression `skb + 1` performs pointer arithmetic on the context pointer, adding `sizeof(struct __sk_buff)` (192 bytes) to it. The verifier records this as `ctx(imm=192)`. When that modified pointer is passed to `helper_c`, which expects a `struct __sk_buff *` context argument, the verifier rejects it because a context pointer passed to a subprogram must have offset 0. The log lines:
+
+```
+21: (07) r6 += 192                    ; R6=ctx(imm=192)
+...
+dereference of modified ctx ptr R2 off=192 disallowed
+Caller passes invalid args into func#3 ('helper_c')
+```
+
+show exactly this: `r6` is the context pointer with a 192-byte offset, and it is disallowed as an argument to `helper_c`.
+
+**Fix**
+
+The smallest source-level fix is to pass the unmodified `skb` pointer to `helper_c` instead of `skb + 1`.
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -16,7 +16,7 @@ int helper_c(int val, struct __sk_buff *skb);
+ __attribute__((noinline))
+ int helper_b(int val, struct __sk_buff *skb)
+ {
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+ }
+ 
+ __attribute__((noinline))
+```
+
+This keeps the context pointer offset at 0, satisfying the verifier's requirement for context arguments passed to subprograms.

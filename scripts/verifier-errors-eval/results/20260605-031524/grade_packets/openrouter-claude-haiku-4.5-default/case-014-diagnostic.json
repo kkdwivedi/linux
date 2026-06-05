@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Check if (offset > 47) exit before using it for a 1-byte access to a 48-byte object.",
+    "Check if (offset + 1 > sizeof(struct value)) exit in a verifier-friendly way that avoids overflow.",
+    "Mask or clamp the offset so the verifier can prove the adjusted pointer remains within the map value."
+  ],
+  "canonical_fix": "Add an upper-bound check on the loaded offset before adding it to the map-value pointer, proving offset + access size <= object size.",
+  "case_id": "case-014",
+  "category": "Memory Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program loads a variable offset from the map value and adds it to the map-value pointer before a helper reads one byte. The verifier knows the offset is non-negative but has no safe upper bound, so it cannot prove offset + size stays within the 48-byte map value.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-014-diagnostic.txt",
+    "case_id": "case-014",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 4492,
+    "prompt_path": "public/case-014/prompt_diagnostic.md",
+    "prompt_sha256": "ac5a2ab54da5cf45e897928788b3ed66a0aaeb6499aac9a13e24b90fac12b24c",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-014-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "21726f00-18bd-47e5-a225-2ff6eb47e07d",
+    "started_at": "2026-06-05T03:19:04+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation of the Verifier Failure\n\nThe verifier rejects this program because of an **unbounded memory access** in the `bpf_probe_read_kernel` call.\n\nHere's the problematic sequence:\n\n1. `r0` is loaded from `bpf_map_lookup_elem`, giving it type `map_value` with size 48 bytes\n2. `r3 = *(u32*)(r0 + 0)` reads the first 4 bytes (the `offset` field), which can be any value from 0 to 0xffffffff\n3. `r1 += r3` adds this unbounded value to `r1` (which points to the map value)\n4. `bpf_probe_read_kernel(r1, 1, 0)` is called with `r1` as the destination\n\nThe verifier cannot verify that `r1 + 1 <= 48` (the map value size) because `r3` is completely unbounded. The offset could theoretically be larger than 48, causing an out-of-bounds access.\n\n## Solution\n\nThe fix is to **bounds-check the offset** before using it to adjust the pointer. We need to ensure that `offset + access_size <= 48`.\n\nSince the code reads 1 byte via `bpf_probe_read_kernel`, we need: `offset + 1 <= 48`, or `offset <= 47`.\n\nHere's the corrected assembly:\n\n```c\nSEC(\"tracepoint\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tr2 = r10;\t\t\t\t\t\\\n\tr2 += -8;\t\t\t\t\t\\\n\tr1 = 0;\t\t\t\t\t\t\\\n\t*(u64*)(r2 + 0) = r1;\t\t\t\t\\\n\tr1 = %[map_a] ll;\t\t\t\t\\\n\tcall %[bpf_map_lookup_elem];\t\t\t\\\n\tif r0 == 0 goto l0_%=;\t\t\t\t\\\n\tr1 = r0;\t\t\t\t\t\\\n\tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n\tif r3 > 47 goto l0_%=;\t\t\t\t\\\n\tr1 += r3;\t\t\t\t\t\\\n\tr2 = 1;\t\t\t\t\t\t\\\n\tr3 = 0;\t\t\t\t\t\t\\\n\tcall %[bpf_probe_read_kernel];\t\t\t\\\nl0_%=:\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_map_lookup_elem),\n\t  __imm(bpf_probe_read_kernel),\n\t  __imm_addr(map_a)\n\t: __clobber_all);\n}\n```\n\n**The key change:** Add `if r3 > 47 goto l0_%=;` after reading the offset and before adding it to `r1`.\n\nThis bounds check ensures that the offset cannot exceed 47, so `offset + 1 <= 48`, which satisfies the verifier's requirement that the access stays within the 48-byte map value object.",
+  "must_mention": [
+    "The offset is variable and lacks an upper bound",
+    "The object/map value size is finite",
+    "The proof needed is offset plus access size within bounds"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks that map_lookup_elem returned non-NULL",
+    "Adds a lower-bound check only",
+    "Checks after the helper access"
+  ]
+}

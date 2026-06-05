@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Move helper_a(0) after bpf_local_irq_restore(&flags).",
+    "Split helper_a so the IRQ-disabled path calls only a non-sleepable helper.",
+    "Avoid disabling IRQs around the call if the critical section is not needed."
+  ],
+  "canonical_fix": "Restore IRQ state before calling the sleepable subprogram, or remove/replace the sleepable helper from the subprogram used in the IRQ-disabled region.",
+  "case_id": "case-012",
+  "category": "Execution Context Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The entry program disables IRQs and then calls a global subprogram that can call a sleepable helper. The verifier treats the sleepable call through the subprogram as occurring inside the IRQ-disabled region.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-opus-4.8-high/case-012-legacy.txt",
+    "case_id": "case-012",
+    "model": "anthropic/claude-opus-4.8",
+    "profile": "openrouter-claude-opus-4.8-high",
+    "prompt_bytes": 1526,
+    "prompt_path": "public/case-012/prompt_legacy.md",
+    "prompt_sha256": "3c7396a0a94e22b4ffa05f47bf695c68faeca27ec07a26da548d621cb3473cdb",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-opus-4.8-high/case-012-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "3e8563e0-28d1-4abe-a5ff-b6b4db929831",
+    "started_at": "2026-06-05T03:18:27+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## What the verifier is complaining about\n\nThe decisive line is:\n\n```\nsleepable global function helper_a() called in IRQ-disabled region\n```\n\nTwo facts combine to cause the rejection:\n\n1. **`helper_a()` is a *global* subprogram.** It is declared `int __noinline helper_a(int i)` with external linkage (no `static`). The verifier verifies global subprograms in isolation and treats them conservatively. Because the body contains `bpf_copy_from_user()` \u2014 a *sleepable* helper \u2014 the whole global function is classified as \"sleepable\".\n\n2. **The call site is inside an IRQ-disabled critical section.** `bpf_local_irq_save(&flags)` opens a region in which sleeping is forbidden, and it is only closed by `bpf_local_irq_restore(&flags)`. Calling anything that may sleep between them is illegal.\n\nSo the verifier sees a \"may-sleep\" global function being invoked while IRQs are disabled and rejects it before it even looks inside `helper_a`.\n\nNote: simply changing the argument to `helper_a(1)` does **not** help while the function is global, because for a global function the verifier ignores the concrete argument and keeps the conservative \"sleepable\" classification.\n\n## Smallest fix\n\nMake `helper_a` a `static` subprogram so it is verified *inline* in the caller's context (where the constant argument is tracked), and arrange so that the sleepable `bpf_copy_from_user()` is **not reachable** inside the IRQ-disabled region.\n\nWith the call `helper_a(0)` and the guard `if (!i)`, the sleepable branch is taken, so just adding `static` is not enough \u2014 the inlined verification would then reject `bpf_copy_from_user()` itself for the same \"IRQ-disabled\" reason. Flip the guard (or pass a non-zero argument) so the constant argument makes that branch dead:\n\n```c\nstatic int __noinline helper_a(int i)\n{\n\tchar data[8];\n\n\tif (i)                                   /* was: if (!i) */\n\t\tbpf_copy_from_user(data, sizeof(data), NULL);\n\treturn i;\n}\n\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\tbpf_local_irq_save(&flags);\n\thelper_a(0);                             /* i == 0, sleepable path is dead */\n\tbpf_local_irq_restore(&flags);\n\treturn 0;\n}\n```\n\nWhy this passes:\n- `static` removes the \"global function\" classification; the function body is verified inline with the constant `i = 0` propagated in.\n- With `i = 0` and `if (i)`, the `bpf_copy_from_user()` call becomes dead code along the only reachable path, so no sleepable helper is invoked inside the IRQ-disabled region.\n\n### Alternative equally-small fixes\n- If the sleepable call isn't needed for the test's intent, simply drop it (then the global function is non-sleepable and the original code passes):\n  ```c\n  int __noinline helper_a(int i) { return i; }\n  ```\n- Or move `helper_a(0)` outside the `bpf_local_irq_save()`/`bpf_local_irq_restore()` pair so it is no longer in the non-sleepable region.\n\nThe key point is: a function that can sleep (directly or by being a conservatively-treated global subprog) must not be called between `bpf_local_irq_save()` and `bpf_local_irq_restore()`.",
+  "must_mention": [
+    "A sleepable operation is reached through a global subprogram",
+    "IRQs are disabled at that point",
+    "The call must be outside the IRQ-disabled region"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes helper_a's argument value",
+    "Moves bpf_local_irq_restore after the return",
+    "Adds a NULL check for the local buffer"
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "answer_text": "## Explanation of the Verifier Failure\n\nThe BPF verifier enforces strict **last-in, first-out (LIFO) ordering** for IRQ flag save/restore operations. This is a resource lifetime safety requirement.\n\nIn the code:\n1. `bpf_local_irq_save(&flags1)` is called first (insn 3, id=1)\n2. `bpf_local_irq_save(&flags2)` is called second (insn 7, id=2)\n3. `bpf_local_irq_restore(&flags1)` is called third (insn 9)\n\nThe problem: You're trying to restore `flags1` (id=1) while `flags2` (id=2) is still active. The verifier requires that the most recently acquired IRQ state (id=2) must be restored first. This is analogous to stack unwinding\u2014you must undo operations in reverse order.\n\nThe verifier message confirms: \"expected id=2 acquired at insn_idx=7\" - meaning it expects to restore flags2 before flags1.\n\n## Fix\n\nSwap the order of the restore calls to respect LIFO ordering:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);\n\tbpf_local_irq_restore(&flags1);\n\treturn 0;\n}\n```\n\n**Changes:** Lines 248-249 swapped so that `flags2` is restored before `flags1`.\n\n**Why this works:** The restore order now matches the reverse of the save order (LIFO), satisfying the verifier's resource lifetime safety requirements.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-017-diagnostic.txt",
+    "case_id": "case-017",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 2781,
+    "prompt_path": "public/case-017/prompt_diagnostic.md",
+    "prompt_sha256": "675d45e8a367c50d949964d5e150f18c1e043733cbcf9e98094409311c602ad9",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-017-diagnostic.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "b5122de8-7c84-4a68-b7ad-9194cb9ca5b7",
+    "started_at": "2026-06-05T04:23:04+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.001112,
+    "output_cost_usd": 0.002345,
+    "total_cost_usd": 0.003457
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1112,
+    "output_tokens": 469,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 1112,
+      "output_tokens": 469,
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1581
+  },
+  "raw_response": {
+    "content": [
+      {
+        "text": "## Explanation of the Verifier Failure\n\nThe BPF verifier enforces strict **last-in, first-out (LIFO) ordering** for IRQ flag save/restore operations. This is a resource lifetime safety requirement.\n\nIn the code:\n1. `bpf_local_irq_save(&flags1)` is called first (insn 3, id=1)\n2. `bpf_local_irq_save(&flags2)` is called second (insn 7, id=2)\n3. `bpf_local_irq_restore(&flags1)` is called third (insn 9)\n\nThe problem: You're trying to restore `flags1` (id=1) while `flags2` (id=2) is still active. The verifier requires that the most recently acquired IRQ state (id=2) must be restored first. This is analogous to stack unwinding\u2014you must undo operations in reverse order.\n\nThe verifier message confirms: \"expected id=2 acquired at insn_idx=7\" - meaning it expects to restore flags2 before flags1.\n\n## Fix\n\nSwap the order of the restore calls to respect LIFO ordering:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);\n\tbpf_local_irq_restore(&flags1);\n\treturn 0;\n}\n```\n\n**Changes:** Lines 248-249 swapped so that `flags2` is restored before `flags1`.\n\n**Why this works:** The restore order now matches the reverse of the save order (LIFO), satisfying the verifier's resource lifetime safety requirements.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01UX1Fx9PenyhN35MsDH4wPj",
+    "model": "claude-haiku-4-5-20251001",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 1112,
+      "output_tokens": 469,
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

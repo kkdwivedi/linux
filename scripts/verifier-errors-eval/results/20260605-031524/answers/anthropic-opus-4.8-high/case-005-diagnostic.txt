@@ -1,0 +1,33 @@
+## Explanation
+
+`bpf_copy_from_user()` is a **sleepable** helper — it may fault in the user page and block. The program calls it between `bpf_preempt_disable()` and `bpf_preempt_enable()`, i.e. inside a non‑preemptible region (depth 1). The verifier forbids any operation that may sleep while preemption is disabled, hence:
+
+```
+sleepable helper bpf_copy_from_user#148 in non-preemptible region
+```
+
+The verifier even tells you the fix: *"Move the helper call outside the critical section, or use a non-sleepable helper."*
+
+## Fix
+
+Pull the sleepable `bpf_copy_from_user()` out of the `preempt_disable`/`preempt_enable` pair so it runs in a preemptible context.
+
+```c
+SEC("?fentry.s/sys_getpgid")
+int entry(void *ctx)
+{
+	u32 data;
+
+	/* sleepable helper must run outside the non-preemptible region */
+	bpf_copy_from_user(&data, sizeof(data), NULL);
+
+	bpf_preempt_disable();
+	/* ... only non-sleepable operations here ... */
+	bpf_preempt_enable();
+	return 0;
+}
+```
+
+This is the minimal source change: the copy is now performed while preemption is still enabled, so the "sleepable helper in non-preemptible region" error disappears, and the empty (or non-sleeping) preempt-disabled section is legal.
+
+(The `arg#0 reference type('UNKNOWN ')` line in the log is unrelated BTF noise from loading `NULL`/void pointer info and does not affect the actual verification result; only the preemption check fails the program.)

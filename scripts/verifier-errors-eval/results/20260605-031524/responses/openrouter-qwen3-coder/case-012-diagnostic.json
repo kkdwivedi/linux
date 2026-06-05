@@ -1,0 +1,109 @@
+{
+  "answer_text": "### Verifier Failure Explanation\n\nThe verifier is rejecting the eBPF program because of a **context safety violation**:\n\n1. The program calls `bpf_local_irq_save()` at line 498, which enters an **IRQ-disabled region** (critical section).\n2. Inside this critical section, it calls `helper_a(0)` at line 499.\n3. The function `helper_a` is marked as **sleepable** (global function with potential for sleeping behavior).\n4. The verifier disallows calling **sleepable functions** while in an **IRQ-disabled context**, since such functions might sleep and cause system deadlock or latency issues.\n\nThis leads to the error message:\n```\nsleepable global function helper_a() called in IRQ-disabled region\n```\n\n---\n\n### Proposed Fix\n\nTo resolve this issue, we must ensure that `helper_a()` is **not called within the IRQ-disabled region**. The smallest change would be to move the call to `helper_a(0)` **outside** the critical section \u2014 either before `bpf_local_irq_save()` or after `bpf_local_irq_restore()`.\n\nSince the logic does not appear to require `helper_a()` to be inside the critical section, moving it after `bpf_local_irq_restore()` is safe and logical.\n\n#### Patch\n\n```diff\n--- a/source.c\n+++ b/source.c\n@@ -495,9 +495,9 @@ int entry(void *ctx)\n {\n        unsigned long flags;\n\n        bpf_local_irq_save(&flags);\n-       helper_a(0);\n        bpf_local_irq_restore(&flags);\n+       helper_a(0);\n        return 0;\n }\n```\n\n---\n\n### Why This Fixes It\n\nBy moving `helper_a(0)` **after** `bpf_local_irq_restore()`, we ensure that:\n\n- The IRQs are re-enabled when `helper_a()` is invoked.\n- No sleepable operations occur inside the IRQ-disabled critical section.\n- The program complies with execution context safety rules enforced by the verifier.\n\nThis minimal edit resolves the context safety violation without altering program semantics significantly.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-012-diagnostic.txt",
+    "case_id": "case-012",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 3392,
+    "prompt_path": "public/case-012/prompt_diagnostic.md",
+    "prompt_sha256": "cb0bb7bae71f637618353d539dc3320ce61e3ed2b36b833f42dc45015a35e430",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-012-diagnostic.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "c66c24c1-7458-44af-ba9a-f6ca812cec30",
+    "started_at": "2026-06-05T03:21:02+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00022396000000000002,
+    "output_cost_usd": 0.0007776,
+    "total_cost_usd": 0.00100156
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1018,
+    "output_tokens": 432,
+    "raw_usage": {
+      "completion_tokens": 432,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.00105644,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0006696,
+        "upstream_inference_cost": 0.00105644,
+        "upstream_inference_prompt_cost": 0.00038684
+      },
+      "is_byok": false,
+      "prompt_tokens": 1018,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1450
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1450
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "### Verifier Failure Explanation\n\nThe verifier is rejecting the eBPF program because of a **context safety violation**:\n\n1. The program calls `bpf_local_irq_save()` at line 498, which enters an **IRQ-disabled region** (critical section).\n2. Inside this critical section, it calls `helper_a(0)` at line 499.\n3. The function `helper_a` is marked as **sleepable** (global function with potential for sleeping behavior).\n4. The verifier disallows calling **sleepable functions** while in an **IRQ-disabled context**, since such functions might sleep and cause system deadlock or latency issues.\n\nThis leads to the error message:\n```\nsleepable global function helper_a() called in IRQ-disabled region\n```\n\n---\n\n### Proposed Fix\n\nTo resolve this issue, we must ensure that `helper_a()` is **not called within the IRQ-disabled region**. The smallest change would be to move the call to `helper_a(0)` **outside** the critical section \u2014 either before `bpf_local_irq_save()` or after `bpf_local_irq_restore()`.\n\nSince the logic does not appear to require `helper_a()` to be inside the critical section, moving it after `bpf_local_irq_restore()` is safe and logical.\n\n#### Patch\n\n```diff\n--- a/source.c\n+++ b/source.c\n@@ -495,9 +495,9 @@ int entry(void *ctx)\n {\n        unsigned long flags;\n\n        bpf_local_irq_save(&flags);\n-       helper_a(0);\n        bpf_local_irq_restore(&flags);\n+       helper_a(0);\n        return 0;\n }\n```\n\n---\n\n### Why This Fixes It\n\nBy moving `helper_a(0)` **after** `bpf_local_irq_restore()`, we ensure that:\n\n- The IRQs are re-enabled when `helper_a()` is invoked.\n- No sleepable operations occur inside the IRQ-disabled critical section.\n- The program complies with execution context safety rules enforced by the verifier.\n\nThis minimal edit resolves the context safety violation without altering program semantics significantly.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "stop"
+      }
+    ],
+    "created": 1780629662,
+    "id": "gen-1780629662-QvpK22zGHs1ARgr6paNL",
+    "model": "qwen/qwen3-coder-480b-a35b-07-25",
+    "object": "chat.completion",
+    "provider": "Novita",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 432,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.00105644,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0006696,
+        "upstream_inference_cost": 0.00105644,
+        "upstream_inference_prompt_cost": 0.00038684
+      },
+      "is_byok": false,
+      "prompt_tokens": 1018,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1450
+    }
+  },
+  "reasoning_content": ""
+}

@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Remove the byte store to fp-7 before reloading the pointer.",
+    "Store the scalar into a different stack slot that does not overlap the pointer spill.",
+    "Reload/use the original context pointer instead of the corrupted spill."
+  ],
+  "canonical_fix": "Do not partially overwrite the stack slot that contains the spilled pointer. Use a separate stack slot/register for the scalar byte, or reload the original pointer from a preserved uncorrupted source before dereferencing.",
+  "case_id": "case-003",
+  "category": "Register Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The program spills a pointer to the stack, partially overwrites one byte of the spill with a scalar, reloads the corrupted stack slot, and then dereferences the result. The verifier no longer treats the reloaded value as a pointer.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-sonnet-4.6-medium/case-003-legacy.txt",
+    "case_id": "case-003",
+    "model": "anthropic/claude-sonnet-4.6",
+    "profile": "openrouter-claude-sonnet-4.6-medium",
+    "prompt_bytes": 1266,
+    "prompt_path": "public/case-003/prompt_legacy.md",
+    "prompt_sha256": "ff79e3ce2090bf446fcac0650e4037fac5ac92314018b0ce73b4c838bf23c7cf",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-sonnet-4.6-medium/case-003-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "a85e786a-a2bb-4d70-aa9e-e68e2d847396",
+    "started_at": "2026-06-05T03:18:37+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Analysis of the Verifier Failure\n\n### What's happening\n\n1. **Instruction 0**: `*(u64*)(r10 - 8) = r1` \u2014 stores the ctx pointer (`r1`) into the 8-byte stack slot covering addresses `[r10-8 \u2026 r10-1]`. The verifier tracks `fp-8=ctx()`.\n\n2. **Instruction 2**: `*(u8*)(r10 - 7) = r0` \u2014 writes a single byte to `r10-7`, which falls **inside** the same 8-byte slot `[r10-8 \u2026 r10-1]`. The verifier sees that the pointer has been partially overwritten and marks the slot as `fp-8=mmmmmmmm` (mixed/corrupt).\n\n3. **Instruction 3**: `r0 = *(u64*)(r10 - 8)` \u2014 because the slot is now `mmmmmmmm`, the verifier can only produce `R0=scalar()` instead of `R0=ctx()`.\n\n4. **Instruction 4**: `r0 = *(u64*)(r0 + 8)` \u2014 fails because `r0` is a plain scalar, not a tracked pointer; dereferencing it is illegal.\n\n### Root Cause\n\nThe byte store at `r10 - 7` overlaps with the pointer stored at `r10 - 8` (which occupies bytes `r10-8` through `r10-1`), destroying the verifier's pointer-type information for that slot.\n\n### Fix\n\nMove the byte store to a stack address **outside** the 8-byte slot, e.g., `r10 - 9`:\n\n```diff\n-\t*(u8*)(r10 - 7) = r0;\t\t\t\t\\\n+\t*(u8*)(r10 - 9) = r0;\t\t\t\t\\\n```\n\n`r10 - 9` does not overlap with `[r10-8 \u2026 r10-1]`, so the pointer stored at `r10 - 8` remains intact as `ctx()`. After loading it back into `r0`, the verifier knows `r0 = ctx()` and permits the subsequent field access `r0 = *(u64*)(r0 + 8)`.\n\n### Complete Fixed Source\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"socket\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n\tr0 = 0x23;\t\t\t\t\t\\\n\t*(u8*)(r10 - 9) = r0;\t\t\t\t\\\n\tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n\tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```",
+  "must_mention": [
+    "The pointer spill is corrupted by a partial write",
+    "The reload becomes scalar/unknown",
+    "Dereferencing the scalar is invalid"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a bounds check after the pointer has already become scalar",
+    "Changes only the final load offset",
+    "Claims the issue is packet or map bounds"
+  ]
+}

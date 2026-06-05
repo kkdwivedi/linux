@@ -1,0 +1,75 @@
+The verifier rejects this program because `helper_a()` contains a bpf-to-bpf call to itself:
+
+```asm
+l0_%=: call helper_a;
+```
+
+That creates a recursive subprogram call graph:
+
+```text
+entry -> helper_a -> helper_a -> ...
+```
+
+Even though the code appears to bound recursion with:
+
+```asm
+r1 += 1;
+if r1 < 4 goto l0_%=;
+exit;
+```
+
+the BPF verifier rejects recursive subprogram calls structurally before relying on such control-flow reasoning. BPF subprogram calls must form an acyclic call graph so the verifier can statically bound stack usage and analysis complexity.
+
+There is also a register-state issue hidden behind the structural failure: after a bpf-to-bpf call, caller-saved registers such as `r1` are not preserved. So using recursion here to carry `r1` as a counter would not be verifier-friendly anyway.
+
+The smallest source-level fix is to replace the self-call with an explicit bounded loop inside `helper_a()`. Since this is naked inline assembly, the direct equivalent is to jump back to the local label instead of calling `helper_a`.
+
+One possible minimal patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..1111111 100644
+--- a/case.c
++++ b/case.c
+@@ -15,7 +15,7 @@ void helper_a(void)
+ 	r1 += 1;					\
+ 	r0 = r1;					\
+ 	if r1 < 4 goto l0_%=;				\
+ 	exit;						\
+-l0_%=:	call helper_a;					\
++l0_%=:	goto -4;					\
+ 	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+However, that exact `goto -4` is fragile because it depends on instruction layout. A clearer and safer edit is to structure the assembly as a normal bounded loop:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..1111111 100644
+--- a/case.c
++++ b/case.c
+@@ -13,10 +13,9 @@ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+ 	asm volatile ("					\
++l0_%=:						\
+ 	r1 += 1;					\
+ 	r0 = r1;					\
+-	if r1 < 4 goto l0_%=;				\
++	if r1 < 4 goto l0_%=;				\
+ 	exit;						\
+-l0_%=:	call helper_a;					\
+-	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+After the change, the subprogram call graph is acyclic:
+
+```text
+entry -> helper_a
+```
+
+and the repeated execution is represented as a bounded loop instead of recursion. Starting from `r1 = 0` in `entry`, `helper_a` increments `r1` until it reaches `4`, then exits, so the verifier should be able to prove the loop terminates.

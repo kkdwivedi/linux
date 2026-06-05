@@ -1,0 +1,92 @@
+{
+  "answer_text": "## What the verifier is complaining about\n\n`R7` holds the packet pointer `p` (loaded from `sk->data`). You validate it against `sk->data_end`, which is correct. But then you call:\n\n```c\nhelper_a(sk, 0);   // -> helper_b -> bpf_skb_pull_data(sk, len)\n```\n\n`bpf_skb_pull_data()` can **reallocate / move the packet buffer**. Any helper that can resize the packet causes the verifier to invalidate all existing packet pointers (`pkt`) by turning them into plain scalars. The verifier message says exactly this:\n\n```\ninvalidated: R7: packet data may have moved; previous value was pkt at offset 0\n```\n\nSo when you later do `*p = 42;`, `R7` is no longer a verified packet pointer \u2014 it's a scalar \u2014 and the store is rejected.\n\nNote this happens even though `helper_a`/`helper_b` are global functions \"assumed valid\": the propagation of `bpf_skb_pull_data`'s pkt-invalidating effect happens at the call boundary in the caller.\n\n## The fix\n\nReload the pointer from `sk->data` **after** the helper call and re-validate it against `sk->data_end` before dereferencing. The bounds check done *before* the call is meaningless because the buffer may have moved.\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p;\n\n\thelper_a(sk, 0);\n\n\t/* reload and re-validate after the helper that may move packet data */\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\n### Why this satisfies the verifier\n- After `helper_a()`, `p` is freshly loaded from `sk->data`, so `R7` becomes a `pkt` pointer again with range 0.\n- The subsequent comparison against `sk->data_end` establishes a verified range of at least 4 bytes for `p`.\n- `*p = 42;` now operates on a properly bounded packet pointer, so the store is accepted.\n\nThe key principle (also stated in the log's suggestion): any packet pointer must be (re)loaded and (re)validated *after* any call that can resize/move the packet, such as `bpf_skb_pull_data`.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-015-diagnostic.txt",
+    "case_id": "case-015",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 3663,
+    "prompt_path": "public/case-015/prompt_diagnostic.md",
+    "prompt_sha256": "f4ee93633090707b3340ee048a1cd9c29849370062dafdfa25c31c23d9df8821",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-015-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "dd8a0fbf-fa23-49b7-b0af-8a7d30aebd9b",
+    "started_at": "2026-06-05T03:17:42+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00851,
+    "output_cost_usd": 0.027675,
+    "total_cost_usd": 0.036185
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1702,
+    "output_tokens": 1107,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1702,
+      "output_tokens": 1107,
+      "output_tokens_details": {
+        "thinking_tokens": 320
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 2809
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "Es4HCmMIDhgCKkB4278egHcI9ZmInAnL1yhyO8kBTwsm7LVHux5jUcXwzzQHdNjWEV5dfu6ZskfJhKsolHcEmBiFrYiO30iaJmXTMg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDDUtNo8JVhxiardrDhoM7ppvAkZk/L3GjReEIjDqSuPDen9vYuAXAngXX/HFwnKTt9xZ/ICdmEEGv35TbNCfg5/IKt2KDffITrT3IYwqmAYcBQ30REHYtFrcCI3BKghRrJS3wlf5hwCYZffjOsTcQli2sllCx4A96RPaqtkMCVTvA3DQIBUqD9wXckJYJ2WWv3hhWzMDn7iP5epq47UHTKqVcq1PZb3W7ZX/5QOe+DHI2kLsEDkqL4O/ysy8YWkp6zoXgGOVF5TiD1Fsb4qZ2kOy+Fm7da1ve5+r/i1pt6qkn9FJK+AUomsAX19wKcaL1WbLWFMudxjumcm6QeXqHkpJf6qICa20B4K6FPsjgrSN1gcDGIvBY0YZzm5vPEkNKqnEIi5Z864w0r7JDG3zEeCHppKp+fBdz7kODK5CGXVUObpQogGrxGipRFyfea7aeKj03W4FwmYdy/XWeHs6k18QW6yiLv5wYtbKftNNePPNniGSUOb10qi4QGGbIfgEoeSd4mFt+Oz+kWyEXWdo2LZp1hN5IR894tqBu7WcVxofgWkRsOEWAWU2NAf3Ai7+23F2mS2aGt7RgUckpeNJCsEXu+TscKXsrJdlOUQgxw4oOZNqaCyP+HmVu01eDZaNhzIQ1qc66cT5JuLJuaWWx8UpID03WdVU8lWvyhnakx+nn/y0ArOeh94HrEjCRTduq1K4ZR87jUPZ8/rITfQbJ4VNGkDOMqOKrjHcv4x5+aIQF7Wg5yUg8QJu+KfY/Ie113N7qV5qIpQfudiiRMCZvMn8kelmXaO81bBgMWCdQWyLP7gRJ2d88bY2Abo6NxIL0VljCv3Ea5QTvIpEN1/VpZylYWZR1TB8LIioGHmHGuqCbUlo/xE01q7ZgbjjcHNpNB40NyGcSQu2lF3NPeRqAT+bzE/nA1BmnryfUE+vscezzm7WitoWpj1Yhf7c2KCctphhW8YrEz70uBY01jrWr7vGRNTRMP07IyFOvkeH20acuxW7yAOU9f/tdoYmqhRGtMDSBpdFyGTBhhMDBbUu4luS6rVzTs99AfxPzX94J5Y8Wnkrd9eJ0+LoPorVew+BU/S3vUoy5TzDW1P+7kCK2eHQHw7pWQgT3ocT3lIOvOOkcd1GL/2rnJ85y+zo8GGKf/iqhEZ5O94YAQ==",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## What the verifier is complaining about\n\n`R7` holds the packet pointer `p` (loaded from `sk->data`). You validate it against `sk->data_end`, which is correct. But then you call:\n\n```c\nhelper_a(sk, 0);   // -> helper_b -> bpf_skb_pull_data(sk, len)\n```\n\n`bpf_skb_pull_data()` can **reallocate / move the packet buffer**. Any helper that can resize the packet causes the verifier to invalidate all existing packet pointers (`pkt`) by turning them into plain scalars. The verifier message says exactly this:\n\n```\ninvalidated: R7: packet data may have moved; previous value was pkt at offset 0\n```\n\nSo when you later do `*p = 42;`, `R7` is no longer a verified packet pointer \u2014 it's a scalar \u2014 and the store is rejected.\n\nNote this happens even though `helper_a`/`helper_b` are global functions \"assumed valid\": the propagation of `bpf_skb_pull_data`'s pkt-invalidating effect happens at the call boundary in the caller.\n\n## The fix\n\nReload the pointer from `sk->data` **after** the helper call and re-validate it against `sk->data_end` before dereferencing. The bounds check done *before* the call is meaningless because the buffer may have moved.\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p;\n\n\thelper_a(sk, 0);\n\n\t/* reload and re-validate after the helper that may move packet data */\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\n### Why this satisfies the verifier\n- After `helper_a()`, `p` is freshly loaded from `sk->data`, so `R7` becomes a `pkt` pointer again with range 0.\n- The subsequent comparison against `sk->data_end` establishes a verified range of at least 4 bytes for `p`.\n- `*p = 42;` now operates on a properly bounded packet pointer, so the store is accepted.\n\nThe key principle (also stated in the log's suggestion): any packet pointer must be (re)loaded and (re)validated *after* any call that can resize/move the packet, such as `bpf_skb_pull_data`.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01SMKKeJ5ntveyyLKbMDERbN",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1702,
+      "output_tokens": 1107,
+      "output_tokens_details": {
+        "thinking_tokens": 320
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

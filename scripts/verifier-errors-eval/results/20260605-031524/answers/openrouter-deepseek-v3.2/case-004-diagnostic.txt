@@ -1,0 +1,21 @@
+The verifier fails because `helper_a` dereferences its pointer argument `s` without a NULL check. Since `helper_a` is `__noinline`, the verifier conservatively assumes the pointer could be NULL when validating the function independently, even though the caller (`entry`) always passes a valid stack address. The dereference `s->x` is unsafe on the path where `s` is NULL.
+
+To fix this, add a NULL check at the start of `helper_a`. This ensures the pointer is only dereferenced when non-NULL, satisfying the verifier's safety requirements.
+
+Here is the minimal patch:
+
+```diff
+--- a.c
++++ b.c
+@@ -8,7 +8,9 @@
+ 
+ __noinline int helper_a(const struct Item *s)
+ {
+-	return bpf_get_prandom_u32() < s->x;
++	if (!s)
++		return 0;
++	return bpf_get_prandom_u32() < s->x;
+ }
+ 
+ SEC("cgroup_skb/ingress")
+```

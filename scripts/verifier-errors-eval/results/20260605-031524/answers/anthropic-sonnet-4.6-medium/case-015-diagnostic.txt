@@ -1,0 +1,20 @@
+The verifier invalidates packet pointers after calling `helper_a` (which calls `bpf_skb_pull_data`), because that helper can move packet data. After the call, `p` (stored in `r7`) is treated as a scalar, so dereferencing it is invalid.
+
+The fix is to reload and revalidate `p` after the helper call:
+
+```c
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	int *p = (void *)(long)sk->data;
+
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	helper_a(sk, 0);
+	p = (void *)(long)sk->data;
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	*p = 42;
+	return TCX_PASS;
+}
+```

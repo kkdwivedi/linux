@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Release cpumask after __sink(cpumask) if cpumask is non-NULL.",
+    "Transfer the owned cpumask into a kptr/map in a verifier-accepted way so the program no longer owns it."
+  ],
+  "canonical_fix": "After make_object returns a non-NULL cpumask, call bpf_cpumask_release(cpumask) before returning on every path that still owns it.",
+  "case_id": "case-002",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "easy",
+  "expected_explanation": "make_object acquires an owned cpumask reference. The entry program stores/sinks it and returns without releasing or transferring ownership, so one exit path leaks the reference.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-002-diagnostic.txt",
+    "case_id": "case-002",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 5048,
+    "prompt_path": "public/case-002/prompt_diagnostic.md",
+    "prompt_sha256": "63788e59d8129296d6b2d78c878578b65f355ef76b449bf180000c418be58a88",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-002-diagnostic.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "987e3b5d-e413-4cc4-8146-306ca71eaf0f",
+    "started_at": "2026-06-05T03:20:49+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "Looking at the verifier log, the issue is a resource leak. The `bpf_cpumask_create()` function creates a reference-counted object that must be released before the program exits. The verifier tracks that resource ID 2 is acquired at instruction 0 but is never released on the main exit path.\n\nLet me trace the code flow:\n\n1. `make_object()` calls `bpf_cpumask_create()` and stores the result in `cpumask`\n2. If `cpumask` is NULL, it returns NULL (this path releases nothing, which is correct)\n3. If `bpf_cpumask_empty(cast(cpumask))` is false, it releases the cpumask and returns NULL (this path correctly releases)\n4. Otherwise, it returns the cpumask (this is the leak - the caller now owns the reference)\n\nIn the main `entry` function, the returned cpumask from `make_object()` is stored in a local variable but never released. The `__sink(cpumask)` call doesn't release it - it just prevents the compiler from optimizing away the variable.\n\nThe fix is to release the cpumask in the main function after using it:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *cpumask;\n\n\tcpumask = make_object();\n\tif (cpumask)\n\t\tbpf_cpumask_release(cpumask);\n\n\treturn 0;\n}\n```\n\nThis ensures that the cpumask resource is properly released on all paths where it was successfully created, preventing the resource leak that the verifier detected.",
+  "must_mention": [
+    "An owned cpumask reference is acquired",
+    "Every exit path must release or transfer ownership",
+    "The NULL path does not need release"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Removes the acquisition without preserving the intended object use",
+    "Calls release without considering NULL when the API requires non-NULL",
+    "Releases only on an error path and still returns with ownership on success"
+  ]
+}

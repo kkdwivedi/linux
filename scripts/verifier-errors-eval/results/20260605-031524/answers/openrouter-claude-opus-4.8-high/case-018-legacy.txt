@@ -1,0 +1,49 @@
+## What the verifier is complaining about
+
+`bpf_res_spin_lock`/`bpf_res_spin_unlock` are nesting (LIFO) locks. The verifier maintains a stack of currently-held res-spin-locks and requires that each unlock release the lock that is on **top** of that stack — i.e. you must release locks in the exact reverse order in which you acquired them.
+
+In this program the acquire order is:
+
+```
+lock_a      (top after this = a)
+lock_b      (top after this = b)
+```
+
+so the only legal release order is `lock_b` then `lock_a`.
+
+But the success-path code releases them in the *same* order they were taken:
+
+```c
+bpf_res_spin_unlock(&lock_a);   /* a is NOT on top, b is */
+bpf_res_spin_unlock(&lock_b);
+```
+
+Because both branches unlock `lock_a` first, the compiler hoisted/merged that `unlock(&lock_a)` so it executes while `lock_b` is still held on the path where `bpf_res_spin_lock(&lock_b)` succeeded (`R0 == 0`). When the verifier reaches that `unlock(&lock_a)` (insn 10) with `lock_b` on top of the held-lock stack it reports:
+
+```
+bpf_res_spin_unlock cannot be out of order
+```
+
+## The fix
+
+Release the locks in reverse (LIFO) order in the success path: unlock `lock_b` before `lock_a`.
+
+```c
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);   /* only lock_a is held here, OK */
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);           /* release in reverse order */
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```
+
+Only the last two unlock lines are swapped. The error path is already correct: when `bpf_res_spin_lock(&lock_b)` fails, `lock_b` was never acquired, so `lock_a` is on top of the stack and unlocking it there is legal.
+
+With this change every unlock targets the lock currently on top of the held-lock stack, satisfying the verifier's ordering requirement.

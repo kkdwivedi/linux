@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Move helper_a(0) after bpf_local_irq_restore(&flags).",
+    "Split helper_a so the IRQ-disabled path calls only a non-sleepable helper.",
+    "Avoid disabling IRQs around the call if the critical section is not needed."
+  ],
+  "canonical_fix": "Restore IRQ state before calling the sleepable subprogram, or remove/replace the sleepable helper from the subprogram used in the IRQ-disabled region.",
+  "case_id": "case-012",
+  "category": "Execution Context Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The entry program disables IRQs and then calls a global subprogram that can call a sleepable helper. The verifier treats the sleepable call through the subprogram as occurring inside the IRQ-disabled region.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-r1-0528/case-012-legacy.txt",
+    "case_id": "case-012",
+    "model": "deepseek/deepseek-r1-0528",
+    "profile": "openrouter-deepseek-r1-0528",
+    "prompt_bytes": 1526,
+    "prompt_path": "public/case-012/prompt_legacy.md",
+    "prompt_sha256": "3c7396a0a94e22b4ffa05f47bf695c68faeca27ec07a26da548d621cb3473cdb",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-r1-0528/case-012-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "106015dd-81c7-4f69-b41c-59f35d72a424",
+    "started_at": "2026-06-05T03:19:12+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "The verifier error occurs because the `helper_a` function is sleepable due to its call to `bpf_copy_from_user`, and it's called within an IRQ-disabled region created by `bpf_local_irq_save`. Sleepable functions cannot be called in IRQ-disabled contexts.\n\nThe minimal fix is to move the call to `helper_a` outside the IRQ-disabled section. Here's the patch:\n\n```diff\n--- a.c\n+++ b.c\n@@ -16,8 +16,8 @@\n int entry(void *ctx)\n {\n \tunsigned long flags;\n-\n \tbpf_local_irq_save(&flags);\n-\thelper_a(0);\n \tbpf_local_irq_restore(&flags);\n+\thelper_a(0);\n \treturn 0;\n }\n```\n\nFixed source:\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nint __noinline helper_a(int i)\n{\n\tchar data[8];\n\n\tif (!i)\n\t\tbpf_copy_from_user(data, sizeof(data), NULL);\n\treturn i;\n}\n\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\tbpf_local_irq_save(&flags);\n\tbpf_local_irq_restore(&flags);\n\thelper_a(0);\n\treturn 0;\n}\n```\n\nThis change ensures the sleepable function is called only after IRQs are re-enabled, satisfying the verifier's requirements while maintaining the original functionality. Note that the NULL pointer issue in `bpf_copy_from_user` remains but wasn't flagged in the provided log.",
+  "must_mention": [
+    "A sleepable operation is reached through a global subprogram",
+    "IRQs are disabled at that point",
+    "The call must be outside the IRQ-disabled region"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes helper_a's argument value",
+    "Moves bpf_local_irq_restore after the return",
+    "Adds a NULL check for the local buffer"
+  ]
+}

@@ -1,0 +1,31 @@
+`bpf_cpumask_create()` returns a **refcounted kptr**.  
+In your program, `make_object()` returns that live reference on the success path, and `entry()` exits without releasing it.
+
+Verifier log confirms exactly that:
+
+- insn 0: `bpf_cpumask_create` => `trusted_ptr_or_null_bpf_cpumask ... refs=2`
+- success path reaches exit with `R6=trusted_ptr_bpf_cpumask(id=2) refs=2`
+- error: `Unreleased reference id=2 ... BPF_EXIT ... reference leak`
+
+`__sink(cpumask)` does not consume/release the reference; it only keeps the value “used”.
+
+## Smallest fix
+
+Release in `entry()` when non-NULL:
+
+```diff
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+ 	struct bpf_cpumask *cpumask;
+
+ 	cpumask = make_object();
+ 	__sink(cpumask);
++	if (cpumask)
++		bpf_cpumask_release(cpumask);
+
+ 	return 0;
+ }
+```
+
+This balances the reference acquired by `bpf_cpumask_create()` on the successful return path from `make_object()`.

@@ -1,0 +1,79 @@
+{
+  "answer_text": "## Explanation of the Verifier Failure\n\nThe BPF verifier is enforcing a **512-byte stack limit across the entire call chain**. The problem is:\n\n1. Each function allocates a 260-byte local buffer (`volatile char buf[MAX_STACK]`)\n2. The call chain `entry -> helper_c -> helper_b -> helper_a` has **3 nested function calls**\n3. Combined stack usage: 3 functions \u00d7 260 bytes = **780 bytes** (worst case along some paths)\n4. This exceeds the 512-byte kernel limit\n\nThe verifier specifically identifies that the chain `entry -> helper_c -> helper_b` reaches **544 bytes**, which is already over the limit.\n\n## Root Cause\n\nThe issue is the **large stack allocation (260 bytes) replicated across multiple nested calls**. The `MAX_STACK` value of 260 is too large for a program with this call depth.\n\n## Solution\n\nThe smallest fix is to **reduce `MAX_STACK` to a value that allows the deepest call chain to stay under 512 bytes**. \n\nThe deepest chain appears to be: `entry -> helper_c -> helper_b -> helper_a` (3 nested calls with buffers)\n- 512 / 3 \u2248 170 bytes per function maximum\n- Using a safe margin: 160 bytes\n\nAlternatively, if 260 bytes is truly necessary, we could reduce call depth, but reducing the buffer size is simpler and more direct.\n\n## Patch\n\n```c\n#define MAX_STACK 160\n```\n\n**Why this works:** \n- 3 calls \u00d7 160 bytes = 480 bytes, which is under the 512-byte limit\n- This allows all nested call chains to pass verification while maintaining reasonable buffer sizes\n\nIf 260 bytes is critical, the alternative would be to inline some functions or restructure the call graph to reduce nesting depth, but reducing `MAX_STACK` to 160 is the minimal, most direct fix.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-013-diagnostic.txt",
+    "case_id": "case-013",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 2658,
+    "prompt_path": "public/case-013/prompt_diagnostic.md",
+    "prompt_sha256": "044070894a5a67f43ab32448001b1bd67c0db88fee4087d1bb67f71a9273513d",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-013-diagnostic.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "0ae7114b-f5cf-4c0c-aace-84f43eda4b6a",
+    "started_at": "2026-06-05T04:22:41+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000987,
+    "output_cost_usd": 0.00234,
+    "total_cost_usd": 0.003327
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 987,
+    "output_tokens": 468,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 987,
+      "output_tokens": 468,
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1455
+  },
+  "raw_response": {
+    "content": [
+      {
+        "text": "## Explanation of the Verifier Failure\n\nThe BPF verifier is enforcing a **512-byte stack limit across the entire call chain**. The problem is:\n\n1. Each function allocates a 260-byte local buffer (`volatile char buf[MAX_STACK]`)\n2. The call chain `entry -> helper_c -> helper_b -> helper_a` has **3 nested function calls**\n3. Combined stack usage: 3 functions \u00d7 260 bytes = **780 bytes** (worst case along some paths)\n4. This exceeds the 512-byte kernel limit\n\nThe verifier specifically identifies that the chain `entry -> helper_c -> helper_b` reaches **544 bytes**, which is already over the limit.\n\n## Root Cause\n\nThe issue is the **large stack allocation (260 bytes) replicated across multiple nested calls**. The `MAX_STACK` value of 260 is too large for a program with this call depth.\n\n## Solution\n\nThe smallest fix is to **reduce `MAX_STACK` to a value that allows the deepest call chain to stay under 512 bytes**. \n\nThe deepest chain appears to be: `entry -> helper_c -> helper_b -> helper_a` (3 nested calls with buffers)\n- 512 / 3 \u2248 170 bytes per function maximum\n- Using a safe margin: 160 bytes\n\nAlternatively, if 260 bytes is truly necessary, we could reduce call depth, but reducing the buffer size is simpler and more direct.\n\n## Patch\n\n```c\n#define MAX_STACK 160\n```\n\n**Why this works:** \n- 3 calls \u00d7 160 bytes = 480 bytes, which is under the 512-byte limit\n- This allows all nested call chains to pass verification while maintaining reasonable buffer sizes\n\nIf 260 bytes is critical, the alternative would be to inline some functions or restructure the call graph to reduce nesting depth, but reducing `MAX_STACK` to 160 is the minimal, most direct fix.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_017hxWv4DHqrXQQroN4ttJtL",
+    "model": "claude-haiku-4-5-20251001",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 987,
+      "output_tokens": 468,
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

@@ -1,0 +1,70 @@
+The verifier loses the pointer type because the program partially overwrites the spilled pointer.
+
+Step-by-step:
+
+```asm
+*(u64*)(r10 - 8) = r1;
+```
+
+This spills `r1`, the context pointer, to stack slot `fp-8..fp-1`. The verifier records that stack slot as containing a spilled `ctx` pointer.
+
+```asm
+*(u8*)(r10 - 7) = r0;
+```
+
+This writes one byte into the middle of that same 8-byte stack slot. A partial overwrite of a spilled pointer invalidates the verifier’s pointer metadata for the whole slot. That is why the log changes the slot to `mmmmmmmm`:
+
+```text
+fp-8=mmmmmmmm
+```
+
+Then:
+
+```asm
+r0 = *(u64*)(r10 - 8);
+```
+
+Because the spill was corrupted, the verifier reloads it as a plain scalar, not as `ctx`:
+
+```text
+R0=scalar()
+```
+
+Finally:
+
+```asm
+r0 = *(u64*)(r0 + 8);
+```
+
+tries to dereference that scalar, so the verifier rejects it:
+
+```text
+R0 invalid mem access 'scalar'
+```
+
+The smallest fix for the reported failure is to make the byte store not overlap the spilled pointer, e.g. store it at `r10 - 16` instead of `r10 - 7`.
+
+For a normal `SEC("socket")` program, `ctx + 8` is also a 32-bit `__sk_buff` field, so using a 32-bit load is safer than a 64-bit load.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -8,9 +8,9 @@ __naked void entry(void)
+ 	asm volatile ("					\
+ 	*(u64*)(r10 - 8) = r1;				\
+ 	r0 = 0x23;					\
+-	*(u8*)(r10 - 7) = r0;				\
++	*(u8*)(r10 - 16) = r0;				\
+ 	r0 = *(u64*)(r10 - 8);				\
+-	r0 = *(u64*)(r0 + 8);				\
++	r0 = *(u32*)(r0 + 8);				\
+ 	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+The essential verifier fix is the stack offset change: it preserves the spilled `ctx` pointer metadata so the reload gives `R0=ctx()` instead of `R0=scalar()`. The `u32` context load makes the final context access match the socket context field size.

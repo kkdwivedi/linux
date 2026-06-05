@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Explanation of the Verifier Failure\n\nThe verifier is enforcing a **LIFO (Last-In-First-Out) ordering constraint** for `bpf_local_irq_save()` and `bpf_local_irq_restore()` pairs. This is a safety mechanism to prevent IRQ state corruption.\n\nThe issue:\n1. `bpf_local_irq_save(&flags1)` is called first (insn 3), acquiring IRQ state with id=1\n2. `bpf_local_irq_save(&flags2)` is called second (insn 7), acquiring IRQ state with id=2\n3. `bpf_local_irq_restore(&flags1)` is called next (insn 9), trying to restore id=1\n\nThis violates LIFO ordering because id=2 (the most recently acquired state) must be restored before id=1. The verifier rejects this with: \"cannot restore irq state out of order, expected id=2 acquired at insn_idx=7\"\n\n## Fix\n\nThe smallest fix is to **reverse the order of the restore calls** to match LIFO semantics:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);  // Restore in reverse order\n\tbpf_local_irq_restore(&flags1);\n\treturn 0;\n}\n```\n\n**Why this works:** By restoring `flags2` before `flags1`, we restore in LIFO order (most recently acquired state is restored first), which satisfies the verifier's ordering constraint.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-017-legacy.txt",
+    "case_id": "case-017",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 1745,
+    "prompt_path": "public/case-017/prompt_legacy.md",
+    "prompt_sha256": "7fc465b0f01c16b7f076395e6776f54156c97eb932b04d9dd1f878444e3ec702",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-017-legacy.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "342e9494-b80a-490b-859f-349e8b2ade7d",
+    "started_at": "2026-06-05T03:19:05+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000809,
+    "output_cost_usd": 0.002295,
+    "total_cost_usd": 0.003104
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 809,
+    "output_tokens": 459,
+    "raw_usage": {
+      "completion_tokens": 459,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.003104,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002295,
+        "upstream_inference_cost": 0.003104,
+        "upstream_inference_prompt_cost": 0.000809
+      },
+      "is_byok": false,
+      "prompt_tokens": 809,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1268
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1268
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation of the Verifier Failure\n\nThe verifier is enforcing a **LIFO (Last-In-First-Out) ordering constraint** for `bpf_local_irq_save()` and `bpf_local_irq_restore()` pairs. This is a safety mechanism to prevent IRQ state corruption.\n\nThe issue:\n1. `bpf_local_irq_save(&flags1)` is called first (insn 3), acquiring IRQ state with id=1\n2. `bpf_local_irq_save(&flags2)` is called second (insn 7), acquiring IRQ state with id=2\n3. `bpf_local_irq_restore(&flags1)` is called next (insn 9), trying to restore id=1\n\nThis violates LIFO ordering because id=2 (the most recently acquired state) must be restored before id=1. The verifier rejects this with: \"cannot restore irq state out of order, expected id=2 acquired at insn_idx=7\"\n\n## Fix\n\nThe smallest fix is to **reverse the order of the restore calls** to match LIFO semantics:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);  // Restore in reverse order\n\tbpf_local_irq_restore(&flags1);\n\treturn 0;\n}\n```\n\n**Why this works:** By restoring `flags2` before `flags1`, we restore in LIFO order (most recently acquired state is restored first), which satisfies the verifier's ordering constraint.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629545,
+    "id": "gen-1780629545-jObZYJPrNnA48BDXAhm0",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 459,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.003104,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002295,
+        "upstream_inference_cost": 0.003104,
+        "upstream_inference_prompt_cost": 0.000809
+      },
+      "is_byok": false,
+      "prompt_tokens": 809,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1268
+    }
+  },
+  "reasoning_content": ""
+}

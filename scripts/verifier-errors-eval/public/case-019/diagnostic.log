@@ -1,0 +1,21 @@
+recursive call from helper_a() to helper_a()
+
+Verification failed: Program Structure: Recursive subprogram call
+
+Reason:
+  This bpf2bpf call would make the subprogram call graph recursive. The verifier requires a finite, acyclic call graph
+  so it can bound stack depth and analysis.
+
+At:
+  helper_a @ case.c:154:2
+      152 | ...                                                                                  5 | (a5) if r1 < 0x4 goto pc+1
+      153 | ...                                                                                  6 | (95) exit
+  >>> 154 |         asm volatile ("                                 \                        >>> 7 | (85) call pc-5
+          |         ^-- error: recursive subprogram call
+      155 | ...                                                                                  8 | (95) exit
+      156 | ...
+
+Suggestion:
+  Rewrite the recursion as an explicit bounded loop, or split the logic so subprogram calls do not form a cycle.
+
+processed 0 insns (limit 1000000) max_states_per_insn 0 total_states 0 peak_states 0 mark_read 0

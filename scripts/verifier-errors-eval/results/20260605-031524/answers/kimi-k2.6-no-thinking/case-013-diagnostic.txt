@@ -1,0 +1,56 @@
+I'll analyze this verifier failure and propose a fix.
+
+## Verifier Failure Explanation
+
+The error is clear: **combined stack size exceeds the 512-byte limit**.
+
+Looking at the call chain `entry -> helper_c -> helper_b`:
+- `entry` calls `helper_c`
+- `helper_c` calls `helper_b`
+- `helper_b` calls `helper_a`
+
+Each of these functions allocates `MAX_STACK = 260` bytes on the stack with `volatile char buf[MAX_STACK] = {}`.
+
+The verifier calculates combined stack usage across the **worst-case call chain**. Let's trace:
+
+- `helper_b`: 260 bytes (its own `buf`)
+- `helper_c`: 260 bytes (its own `buf`) + calls `helper_b` (260 bytes) = but wait, they don't overlap
+
+Actually, the issue is that `helper_c` calls both `helper_b` AND `helper_d`. When `helper_c` calls `helper_b`, the stack contains:
+- `helper_c`'s frame with its 260-byte `buf`
+- Then `helper_b` is called, which has its own 260-byte `buf`
+
+But the verifier reports **544 bytes** for `entry -> helper_c -> helper_b`. Let me check: 260 + 260 = 520, plus some overhead for saved registers/return addresses = 544.
+
+The limit is **512 bytes**, so 544 > 512 fails.
+
+The key insight: `helper_b` itself uses 260 bytes, and when called from `helper_c`, `helper_c`'s 260 bytes are also on the stack simultaneously = 520+ bytes.
+
+## The Fix
+
+We need to reduce stack usage. The smallest fix is to **reduce `MAX_STACK`** so that the combined usage stays under 512 bytes.
+
+If we use `MAX_STACK = 240`:
+- 240 + 240 = 480, plus ~24 bytes overhead = 504 (under 512) ✓
+
+But let's be safer. The verifier says 544 with MAX_STACK=260. The overhead is 544 - 520 = 24 bytes.
+
+So we need: `2 * MAX_STACK + 24 <= 512`
+Thus: `MAX_STACK <= 244`
+
+Using `MAX_STACK = 240` gives comfortable margin: 480 + 24 = 504 < 512.
+
+Alternatively, we could make some functions not use large stack buffers, or remove the `volatile` + `__sink` pattern from some helpers. But the smallest change is reducing the constant.
+
+## Patch
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+#define MAX_STACK 240
+```
+
+This reduces each stack allocation from 260 to 240 bytes, making the worst-case chain `entry -> helper_c -> helper_b` use approximately `240 + 240 + 24 = 504` bytes, which is under the 512-byte limit.
+
+If 240 still fails (due to alignment or other overhead), we could try `MAX_STACK = 232` for more margin: `232 + 232 + 24 = 488`.

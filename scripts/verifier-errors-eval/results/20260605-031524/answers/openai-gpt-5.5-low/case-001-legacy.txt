@@ -1,0 +1,50 @@
+The verifier rejects the program before it can test the helper’s runtime error path:
+
+```text
+2: r1 = 1193046
+4: call bpf_cpumask_populate
+R1 type=scalar expected=fp
+```
+
+`bpf_cpumask_populate()` expects its first argument to be a verifier-known writable memory pointer, in this case a stack pointer (`fp`). But the program passes:
+
+```c
+(struct bpf_cpumask *)0x123456
+```
+
+The verifier represents that as a plain scalar constant, not as a valid pointer, so the call is rejected.
+
+There is also a second likely issue hidden behind the first failure: `bits` is passed as an input buffer but is uninitialized. Once the first argument is fixed, the verifier may complain about reading uninitialized stack memory unless `bits` is initialized.
+
+Smallest source-level fix: use a real stack `struct cpumask` and initialize `bits`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -8,12 +8,12 @@ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+-	u64 bits;
++	struct cpumask mask;
++	u64 bits = 0;
+ 	int ret;
+ 
+-	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
++	ret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));
+ 	if (!ret)
+ 		return 2;
+ 
+ 	return 0;
+ }
+```
+
+Why this should pass:
+
+- `&mask` is a verifier-tracked stack pointer, satisfying the helper’s first argument requirement.
+- `&bits` points to initialized stack memory, satisfying the helper’s input buffer requirement.
+- `sizeof(bits)` remains a constant `8`, as before.

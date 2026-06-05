@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Add bpf_ringbuf_discard_dynptr(&ptr2, 0) before the final return.",
+    "Submit ptr2 too, if the program actually initializes and intends to publish it.",
+    "Restructure cleanup so both ptr1 and ptr2 are released on all exits after reservation."
+  ],
+  "canonical_fix": "Submit or discard ptr2 on every path after it is reserved, including the path where ptr1 is submitted successfully.",
+  "case_id": "case-011",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The program reserves two ringbuf dynptrs. On the success path it submits/releases only ptr1 and returns while ptr2 is still live.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-011-diagnostic.txt",
+    "case_id": "case-011",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 5553,
+    "prompt_path": "public/case-011/prompt_diagnostic.md",
+    "prompt_sha256": "c4e9b1631d514a5b5c9e921fc3dfd8dc5de6eebfbb59913cb9ede46e6625c9ef",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-011-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "c8e1a96d-b8bc-4627-bcb1-3bf1259e44c3",
+    "started_at": "2026-06-05T03:19:02+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation of the Verifier Failure\n\nThe verifier is detecting a **resource leak** of the second dynptr (`ptr2`). Here's what happens:\n\n1. **Line 100**: `ptr1` is reserved (resource id=2)\n2. **Line 101**: `ptr2` is reserved (resource id=3)\n3. **Line 103**: `bpf_dynptr_data(&ptr1, ...)` is called\n4. **Line 104**: If `sample` is NULL, both `ptr1` and `ptr2` are discarded in the error path\n5. **Line 110**: `ptr1` is submitted in the success path\n6. **Problem**: `ptr2` is never released in the success path (lines 110-111)\n\nThe verifier tracks that `ptr2` (id=3) was acquired at instruction 14 but is never released before the program exits at instruction 34. The success path only submits `ptr1` but leaves `ptr2` unreleased.\n\n## Fix\n\nThe smallest fix is to discard `ptr2` in the success path before returning:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nstruct sample {\n\t__u64 value;\n};\n\nstruct {\n\t__uint(type, BPF_MAP_TYPE_RINGBUF);\n\t__uint(max_entries, 4096);\n} ringbuf SEC(\".maps\");\n\nSEC(\"?raw_tp\")\nint entry(void *ctx)\n{\n\tstruct bpf_dynptr ptr1, ptr2;\n\tstruct sample *sample;\n\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n\n\tsample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));\n\tif (!sample) {\n\t\tbpf_ringbuf_discard_dynptr(&ptr1, 0);\n\t\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\t\treturn 0;\n\t}\n\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\n\treturn 0;\n}\n```\n\n**Change**: Add `bpf_ringbuf_discard_dynptr(&ptr2, 0);` after the `bpf_ringbuf_submit_dynptr(&ptr1, 0);` call (line 110).\n\n**Why this works**: Every code path now properly releases both dynptrs:\n- Error path: both discarded\n- Success path: `ptr1` submitted, `ptr2` discarded",
+  "must_mention": [
+    "The second dynptr reservation is leaked",
+    "Every reserved dynptr must be submitted or discarded",
+    "The successful ptr1 path still needs ptr2 cleanup"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only releases ptr1",
+    "Adds cleanup only in the !sample branch, which already releases both",
+    "Calls a non-dynptr ringbuf cleanup API on the dynptr"
+  ]
+}

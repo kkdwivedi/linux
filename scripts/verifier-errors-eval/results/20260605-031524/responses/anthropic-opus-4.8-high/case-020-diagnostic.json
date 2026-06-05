@@ -1,0 +1,92 @@
+{
+  "answer_text": "## What the verifier is complaining about\n\nThis isn't a \"bad instruction\" or \"unbounded loop\" error. The program is a deliberately fan\u2011out call tree:\n\n```\nentry \u2192 helper_a (\u00d750) \u2192 helper_b (\u00d750) \u2192 helper_c (\u00d750)\n       \u2192 helper_d (\u00d750) \u2192 helper_e (\u00d750) \u2192 helper_f (\u00d750) \u2192 helper_g (\u00d750)\n```\n\nEach `CALLS_50()` expands to 50 `call` instructions, and the helpers are chained 7 deep (`a\u2192b\u2192c\u2192d\u2192e\u2192f\u2192g`). Because the verifier's **liveness analysis** recomputes each subprogram's stack/register read information for every distinct *call path* that reaches it, the work grows multiplicatively:\n\n```\n50 + 50^2 + 50^3 + ... + 50^7   \u2248  50^7\n```\n\nThat is astronomically larger than the verifier's cap, so it bails out:\n\n```\nliveness analysis exceeded complexity limit (10001 calls)\nVerification failed: Verifier Limit: Limit exceeded\n```\n\nThe log shows `helper_g` (the deepest leaf) being re-analyzed over and over (`subprog#7: analyzing (depth 7)...`) \u2014 exactly the symptom of the same leaf being reached through exponentially many call paths.\n\nSo the failure is purely a *complexity / scalability* limit, not a logic bug. The fix is to keep the same structure but cut the branching factor so the total number of liveness recomputations stays under the 10001 limit.\n\n## Smallest fix\n\nReduce the per\u2011level fan\u2011out. With branching factor `b` over 7 levels you need\n\n```\nb + b^2 + ... + b^7  <  10001\n```\n\n`b = 3` gives `3+9+27+81+243+729+2187 = 3279`, comfortably under the limit, while `b = 4` already overflows. So shrink each level to 3 calls (any value \u22643 works).\n\nThe minimal one\u2011line edit is to redefine the fan\u2011out macro:\n\n```c\n/* was: 50 calls per level -> 50^7 liveness recomputations */\n#undef CALLS_50\n#define CALLS_50(fn) CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)\n```\n\ni.e. replace\n\n```c\n#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n```\n\nwith a definition that expands to only 3 (or fewer) `CALL_AT(...)` invocations.\n\n### Why this satisfies the verifier\nThe call graph (entry + 7 helper levels, each `__noinline`) is preserved, so the test still exercises deep nested subprogram calls and liveness propagation across many call paths. But by dropping the branching factor from 50 to 3, the number of liveness recomputations drops from ~`50^7` to ~`3^7`, which is below the 10001\u2011call complexity cap, letting verification complete.\n\n(Equivalently, you could keep 50 calls per level but drop several of the helper levels so the depth is small enough; the key is the product of branching\u00d7depth, not any single instruction.)",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-020-diagnostic.txt",
+    "case_id": "case-020",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 4110,
+    "prompt_path": "public/case-020/prompt_diagnostic.md",
+    "prompt_sha256": "cb7344658f86bd080c64c73a9c8ee3095a7de5b045356c00872dce60afb5bfb8",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-020-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "dbf483e0-ff7c-463a-b4a4-9282265bc0d5",
+    "started_at": "2026-06-05T03:17:47+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.01072,
+    "output_cost_usd": 0.075925,
+    "total_cost_usd": 0.086645
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 2144,
+    "output_tokens": 3037,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 2144,
+      "output_tokens": 3037,
+      "output_tokens_details": {
+        "thinking_tokens": 1977
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 5181
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "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",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## What the verifier is complaining about\n\nThis isn't a \"bad instruction\" or \"unbounded loop\" error. The program is a deliberately fan\u2011out call tree:\n\n```\nentry \u2192 helper_a (\u00d750) \u2192 helper_b (\u00d750) \u2192 helper_c (\u00d750)\n       \u2192 helper_d (\u00d750) \u2192 helper_e (\u00d750) \u2192 helper_f (\u00d750) \u2192 helper_g (\u00d750)\n```\n\nEach `CALLS_50()` expands to 50 `call` instructions, and the helpers are chained 7 deep (`a\u2192b\u2192c\u2192d\u2192e\u2192f\u2192g`). Because the verifier's **liveness analysis** recomputes each subprogram's stack/register read information for every distinct *call path* that reaches it, the work grows multiplicatively:\n\n```\n50 + 50^2 + 50^3 + ... + 50^7   \u2248  50^7\n```\n\nThat is astronomically larger than the verifier's cap, so it bails out:\n\n```\nliveness analysis exceeded complexity limit (10001 calls)\nVerification failed: Verifier Limit: Limit exceeded\n```\n\nThe log shows `helper_g` (the deepest leaf) being re-analyzed over and over (`subprog#7: analyzing (depth 7)...`) \u2014 exactly the symptom of the same leaf being reached through exponentially many call paths.\n\nSo the failure is purely a *complexity / scalability* limit, not a logic bug. The fix is to keep the same structure but cut the branching factor so the total number of liveness recomputations stays under the 10001 limit.\n\n## Smallest fix\n\nReduce the per\u2011level fan\u2011out. With branching factor `b` over 7 levels you need\n\n```\nb + b^2 + ... + b^7  <  10001\n```\n\n`b = 3` gives `3+9+27+81+243+729+2187 = 3279`, comfortably under the limit, while `b = 4` already overflows. So shrink each level to 3 calls (any value \u22643 works).\n\nThe minimal one\u2011line edit is to redefine the fan\u2011out macro:\n\n```c\n/* was: 50 calls per level -> 50^7 liveness recomputations */\n#undef CALLS_50\n#define CALLS_50(fn) CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)\n```\n\ni.e. replace\n\n```c\n#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n```\n\nwith a definition that expands to only 3 (or fewer) `CALL_AT(...)` invocations.\n\n### Why this satisfies the verifier\nThe call graph (entry + 7 helper levels, each `__noinline`) is preserved, so the test still exercises deep nested subprogram calls and liveness propagation across many call paths. But by dropping the branching factor from 50 to 3, the number of liveness recomputations drops from ~`50^7` to ~`3^7`, which is below the 10001\u2011call complexity cap, letting verification complete.\n\n(Equivalently, you could keep 50 calls per level but drop several of the helper levels so the depth is small enough; the key is the product of branching\u00d7depth, not any single instruction.)",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01Gwt1yvv6oEQiQg5PrXN8Sh",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 2144,
+      "output_tokens": 3037,
+      "output_tokens_details": {
+        "thinking_tokens": 1977
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

@@ -1,0 +1,117 @@
+{
+  "answer_text": "The verifier error occurs because the program fails to release a reserved ring buffer dynptr (`ptr2`) in the non-NULL sample path. Specifically:\n\n1. `ptr2` is acquired via `bpf_ringbuf_reserve_dynptr()` at instruction 14\n2. When `sample != NULL`, the program submits `ptr1` but never releases `ptr2`\n3. The verifier detects an unreleased resource (id=3) at program exit\n\nThe fix ensures both dynptrs are properly released in all paths. In the non-NULL case, after submitting `ptr1`, we now discard `ptr2` since it's unused.\n\nPatch:\n```diff\n--- a.c\n+++ b.c\n@@ -18,6 +18,7 @@\n \t}\n \n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n \n \treturn 0;\n }\n```\n\nFixed code:\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nstruct sample {\n\t__u64 value;\n};\n\nstruct {\n\t__uint(type, BPF_MAP_TYPE_RINGBUF);\n\t__uint(max_entries, 4096);\n} ringbuf SEC(\".maps\");\n\nSEC(\"?raw_tp\")\nint entry(void *ctx)\n{\n\tstruct bpf_dynptr ptr1, ptr2;\n\tstruct sample *sample;\n\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n\n\tsample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));\n\tif (!sample) {\n\t\tbpf_ringbuf_discard_dynptr(&ptr1, 0);\n\t\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\t\treturn 0;\n\t}\n\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\n\treturn 0;\n}\n```",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-r1-0528/case-011-diagnostic.txt",
+    "case_id": "case-011",
+    "model": "deepseek/deepseek-r1-0528",
+    "profile": "openrouter-deepseek-r1-0528",
+    "prompt_bytes": 5553,
+    "prompt_path": "public/case-011/prompt_diagnostic.md",
+    "prompt_sha256": "c4e9b1631d514a5b5c9e921fc3dfd8dc5de6eebfbb59913cb9ede46e6625c9ef",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-r1-0528/case-011-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "608ac2fe-def8-4748-b140-d6fd0d1454b6",
+    "started_at": "2026-06-05T03:19:12+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.0009685,
+    "output_cost_usd": 0.00410435,
+    "total_cost_usd": 0.005072849999999999
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1937,
+    "output_tokens": 1909,
+    "raw_usage": {
+      "completion_tokens": 1909,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 1437
+      },
+      "cost": 0.0051697,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.00410435,
+        "upstream_inference_cost": 0.0051697,
+        "upstream_inference_prompt_cost": 0.00106535
+      },
+      "is_byok": false,
+      "prompt_tokens": 1937,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 3846
+    },
+    "reasoning_content_chars": 4971,
+    "reasoning_tokens": 1437,
+    "total_tokens": 3846
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "The verifier error occurs because the program fails to release a reserved ring buffer dynptr (`ptr2`) in the non-NULL sample path. Specifically:\n\n1. `ptr2` is acquired via `bpf_ringbuf_reserve_dynptr()` at instruction 14\n2. When `sample != NULL`, the program submits `ptr1` but never releases `ptr2`\n3. The verifier detects an unreleased resource (id=3) at program exit\n\nThe fix ensures both dynptrs are properly released in all paths. In the non-NULL case, after submitting `ptr1`, we now discard `ptr2` since it's unused.\n\nPatch:\n```diff\n--- a.c\n+++ b.c\n@@ -18,6 +18,7 @@\n \t}\n \n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n \n \treturn 0;\n }\n```\n\nFixed code:\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nstruct sample {\n\t__u64 value;\n};\n\nstruct {\n\t__uint(type, BPF_MAP_TYPE_RINGBUF);\n\t__uint(max_entries, 4096);\n} ringbuf SEC(\".maps\");\n\nSEC(\"?raw_tp\")\nint entry(void *ctx)\n{\n\tstruct bpf_dynptr ptr1, ptr2;\n\tstruct sample *sample;\n\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n\n\tsample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));\n\tif (!sample) {\n\t\tbpf_ringbuf_discard_dynptr(&ptr1, 0);\n\t\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\t\treturn 0;\n\t}\n\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\n\treturn 0;\n}\n```",
+          "reasoning": "We are given a BPF program that uses the ring buffer via dynptrs. The verifier log indicates an unreleased resource (id=3) that was acquired at instruction 14 (corresponding to the second call to `bpf_ringbuf_reserve_dynptr` for `ptr2`).\n\nLooking at the source, we reserve two dynptrs: `ptr1` and `ptr2`. Then, we check if the data pointer for `ptr1` (assigned to `sample`) is NULL. If it is, we discard both `ptr1` and `ptr2` and return. Otherwise, we submit `ptr1` and return.\n\nHowever, note that in the non-NULL case (when `sample` is not NULL), we only submit `ptr1` and do nothing with `ptr2`. The verifier is complaining that the resource (dynptr) for `ptr2` (with id=3) is not released.\n\nTherefore, the problem is that we are leaking the reserved ring buffer entry for `ptr2` in the success path (when `sample` is not NULL). We must release `ptr2` in that path as well.\n\nBut note: we cannot submit `ptr2` because we haven't written anything to it? However, the verifier requires that we either submit or discard every reserved dynptr.\n\nIn the failure path (when `sample` is NULL), we discard both. In the success path, we submit `ptr1` but leave `ptr2` reserved.\n\nThe fix: In the success path, we should discard `ptr2` because we are not using it? Or submit if we intended to use it? The program doesn't use `ptr2` at all in the success path. Since we are reserving it and then not using it, we should discard it.\n\nSo, after submitting `ptr1`, we should discard `ptr2`.\n\nHowever, note that the verifier log shows that the error is at the exit path (instruction 34) and the resource was acquired at instruction 14 (the second reserve). The causal path shows that in the non-NULL branch (which is the branch we are taking in the log? Actually, the log shows the branch for the NULL case was taken? Let me clarify:\n\nThe verifier log says:\n  At instruction 19: (55) if r0 != 0x0 goto pc+9\n  Then it shows the branch: explored as true, goto followed -> meaning the condition is true (r0 != 0) so we jump to pc+9 (which is instruction 29).\n\nBut then the log shows:\n  29: (bf) r1 = r10\n  30: (07) r1 += -16\n  31: (b7) r2 = 0\n  32: (85) call bpf_ringbuf_submit_dynptr#199   ; for ptr1\n  33: (b4) w0 = 0\n  34: (95) exit\n\nSo the non-NULL branch (the success path) is taken and then we exit without releasing ptr2.\n\nTherefore, we need to release ptr2 in the success path.\n\nWe can do:\n\nAfter submitting ptr1, we discard ptr2.\n\nSo the fixed code would be:\n\n```c\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n```\n\nBut note: the verifier requires that we release every reserved dynptr. We have two dynptrs: ptr1 and ptr2.\n\nIn the failure branch, we discard both. In the success branch, we submit ptr1 and then discard ptr2.\n\nAlternatively, we might want to submit both? But the program doesn't write to ptr2. It's unclear from the context, but the verifier only cares about releasing the resource.\n\nSo the minimal fix is to add a discard for ptr2 in the success path.\n\nLet's write the patch:\n\n```diff\n--- original\n+++ fixed\n@@ -19,6 +19,7 @@\n \t}\n \n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n \n \treturn 0;\n }\n```\n\nBut note: the verifier log also shows that the dynptr for ptr1 is being submitted (so released) and then we are about to exit without releasing ptr2. So adding the discard for ptr2 should fix the leak.\n\nHowever, what if the bpf_ringbuf_submit_dynptr fails? Actually, the function bpf_ringbuf_submit_dynptr doesn't fail (it's a void function in the helper). But note: the verifier might track that after submitting ptr1, the dynptr is no longer valid. Then we must not use it again. But we are not using it again. We are only discarding ptr2.\n\nTherefore, the above fix should work.\n\nBut note: the verifier log also shows that the resource id=3 (ptr2) is acquired at instruction 14 and then not released until we add the discard. We are adding the discard in the success path.\n\nWe must ensure that in both paths (failure and success) we release both dynptrs.\n\nIn the failure path (if (!sample)), we release both. In the success path, we now release both (ptr1 by submit, ptr2 by discard).\n\nSo the program becomes:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nstruct sample {\n\t__u64 value;\n};\n\nstruct {\n\t__uint(type, BPF_MAP_TYPE_RINGBUF);\n\t__uint(max_entries, 4096);\n} ringbuf SEC(\".maps\");\n\nSEC(\"?raw_tp\")\nint entry(void *ctx)\n{\n\tstruct bpf_dynptr ptr1, ptr2;\n\tstruct sample *sample;\n\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n\n\tsample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));\n\tif (!sample) {\n\t\tbpf_ringbuf_discard_dynptr(&ptr1, 0);\n\t\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\t\treturn 0;\n\t}\n\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\n\treturn 0;\n}\n```\n\nThis should satisfy the verifier.\n\nTherefore, the fix is to add a discard for `ptr2` in the success branch.\n",
+          "reasoning_details": [
+            {
+              "format": "unknown",
+              "index": 0,
+              "text": "We are given a BPF program that uses the ring buffer via dynptrs. The verifier log indicates an unreleased resource (id=3) that was acquired at instruction 14 (corresponding to the second call to `bpf_ringbuf_reserve_dynptr` for `ptr2`).\n\nLooking at the source, we reserve two dynptrs: `ptr1` and `ptr2`. Then, we check if the data pointer for `ptr1` (assigned to `sample`) is NULL. If it is, we discard both `ptr1` and `ptr2` and return. Otherwise, we submit `ptr1` and return.\n\nHowever, note that in the non-NULL case (when `sample` is not NULL), we only submit `ptr1` and do nothing with `ptr2`. The verifier is complaining that the resource (dynptr) for `ptr2` (with id=3) is not released.\n\nTherefore, the problem is that we are leaking the reserved ring buffer entry for `ptr2` in the success path (when `sample` is not NULL). We must release `ptr2` in that path as well.\n\nBut note: we cannot submit `ptr2` because we haven't written anything to it? However, the verifier requires that we either submit or discard every reserved dynptr.\n\nIn the failure path (when `sample` is NULL), we discard both. In the success path, we submit `ptr1` but leave `ptr2` reserved.\n\nThe fix: In the success path, we should discard `ptr2` because we are not using it? Or submit if we intended to use it? The program doesn't use `ptr2` at all in the success path. Since we are reserving it and then not using it, we should discard it.\n\nSo, after submitting `ptr1`, we should discard `ptr2`.\n\nHowever, note that the verifier log shows that the error is at the exit path (instruction 34) and the resource was acquired at instruction 14 (the second reserve). The causal path shows that in the non-NULL branch (which is the branch we are taking in the log? Actually, the log shows the branch for the NULL case was taken? Let me clarify:\n\nThe verifier log says:\n  At instruction 19: (55) if r0 != 0x0 goto pc+9\n  Then it shows the branch: explored as true, goto followed -> meaning the condition is true (r0 != 0) so we jump to pc+9 (which is instruction 29).\n\nBut then the log shows:\n  29: (bf) r1 = r10\n  30: (07) r1 += -16\n  31: (b7) r2 = 0\n  32: (85) call bpf_ringbuf_submit_dynptr#199   ; for ptr1\n  33: (b4) w0 = 0\n  34: (95) exit\n\nSo the non-NULL branch (the success path) is taken and then we exit without releasing ptr2.\n\nTherefore, we need to release ptr2 in the success path.\n\nWe can do:\n\nAfter submitting ptr1, we discard ptr2.\n\nSo the fixed code would be:\n\n```c\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n```\n\nBut note: the verifier requires that we release every reserved dynptr. We have two dynptrs: ptr1 and ptr2.\n\nIn the failure branch, we discard both. In the success branch, we submit ptr1 and then discard ptr2.\n\nAlternatively, we might want to submit both? But the program doesn't write to ptr2. It's unclear from the context, but the verifier only cares about releasing the resource.\n\nSo the minimal fix is to add a discard for ptr2 in the success path.\n\nLet's write the patch:\n\n```diff\n--- original\n+++ fixed\n@@ -19,6 +19,7 @@\n \t}\n \n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n \n \treturn 0;\n }\n```\n\nBut note: the verifier log also shows that the dynptr for ptr1 is being submitted (so released) and then we are about to exit without releasing ptr2. So adding the discard for ptr2 should fix the leak.\n\nHowever, what if the bpf_ringbuf_submit_dynptr fails? Actually, the function bpf_ringbuf_submit_dynptr doesn't fail (it's a void function in the helper). But note: the verifier might track that after submitting ptr1, the dynptr is no longer valid. Then we must not use it again. But we are not using it again. We are only discarding ptr2.\n\nTherefore, the above fix should work.\n\nBut note: the verifier log also shows that the resource id=3 (ptr2) is acquired at instruction 14 and then not released until we add the discard. We are adding the discard in the success path.\n\nWe must ensure that in both paths (failure and success) we release both dynptrs.\n\nIn the failure path (if (!sample)), we release both. In the success path, we now release both (ptr1 by submit, ptr2 by discard).\n\nSo the program becomes:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nstruct sample {\n\t__u64 value;\n};\n\nstruct {\n\t__uint(type, BPF_MAP_TYPE_RINGBUF);\n\t__uint(max_entries, 4096);\n} ringbuf SEC(\".maps\");\n\nSEC(\"?raw_tp\")\nint entry(void *ctx)\n{\n\tstruct bpf_dynptr ptr1, ptr2;\n\tstruct sample *sample;\n\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n\n\tsample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));\n\tif (!sample) {\n\t\tbpf_ringbuf_discard_dynptr(&ptr1, 0);\n\t\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\t\treturn 0;\n\t}\n\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\n\treturn 0;\n}\n```\n\nThis should satisfy the verifier.\n\nTherefore, the fix is to add a discard for `ptr2` in the success branch.\n",
+              "type": "reasoning.text"
+            }
+          ],
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "stop"
+      }
+    ],
+    "created": 1780629552,
+    "id": "gen-1780629552-DPcip83kQkx7K62oiDph",
+    "model": "deepseek/deepseek-r1-0528",
+    "object": "chat.completion",
+    "provider": "AtlasCloud",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1909,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 1437
+      },
+      "cost": 0.0051697,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.00410435,
+        "upstream_inference_cost": 0.0051697,
+        "upstream_inference_prompt_cost": 0.00106535
+      },
+      "is_byok": false,
+      "prompt_tokens": 1937,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 3846
+    }
+  },
+  "reasoning_content": "We are given a BPF program that uses the ring buffer via dynptrs. The verifier log indicates an unreleased resource (id=3) that was acquired at instruction 14 (corresponding to the second call to `bpf_ringbuf_reserve_dynptr` for `ptr2`).\n\nLooking at the source, we reserve two dynptrs: `ptr1` and `ptr2`. Then, we check if the data pointer for `ptr1` (assigned to `sample`) is NULL. If it is, we discard both `ptr1` and `ptr2` and return. Otherwise, we submit `ptr1` and return.\n\nHowever, note that in the non-NULL case (when `sample` is not NULL), we only submit `ptr1` and do nothing with `ptr2`. The verifier is complaining that the resource (dynptr) for `ptr2` (with id=3) is not released.\n\nTherefore, the problem is that we are leaking the reserved ring buffer entry for `ptr2` in the success path (when `sample` is not NULL). We must release `ptr2` in that path as well.\n\nBut note: we cannot submit `ptr2` because we haven't written anything to it? However, the verifier requires that we either submit or discard every reserved dynptr.\n\nIn the failure path (when `sample` is NULL), we discard both. In the success path, we submit `ptr1` but leave `ptr2` reserved.\n\nThe fix: In the success path, we should discard `ptr2` because we are not using it? Or submit if we intended to use it? The program doesn't use `ptr2` at all in the success path. Since we are reserving it and then not using it, we should discard it.\n\nSo, after submitting `ptr1`, we should discard `ptr2`.\n\nHowever, note that the verifier log shows that the error is at the exit path (instruction 34) and the resource was acquired at instruction 14 (the second reserve). The causal path shows that in the non-NULL branch (which is the branch we are taking in the log? Actually, the log shows the branch for the NULL case was taken? Let me clarify:\n\nThe verifier log says:\n  At instruction 19: (55) if r0 != 0x0 goto pc+9\n  Then it shows the branch: explored as true, goto followed -> meaning the condition is true (r0 != 0) so we jump to pc+9 (which is instruction 29).\n\nBut then the log shows:\n  29: (bf) r1 = r10\n  30: (07) r1 += -16\n  31: (b7) r2 = 0\n  32: (85) call bpf_ringbuf_submit_dynptr#199   ; for ptr1\n  33: (b4) w0 = 0\n  34: (95) exit\n\nSo the non-NULL branch (the success path) is taken and then we exit without releasing ptr2.\n\nTherefore, we need to release ptr2 in the success path.\n\nWe can do:\n\nAfter submitting ptr1, we discard ptr2.\n\nSo the fixed code would be:\n\n```c\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n```\n\nBut note: the verifier requires that we release every reserved dynptr. We have two dynptrs: ptr1 and ptr2.\n\nIn the failure branch, we discard both. In the success branch, we submit ptr1 and then discard ptr2.\n\nAlternatively, we might want to submit both? But the program doesn't write to ptr2. It's unclear from the context, but the verifier only cares about releasing the resource.\n\nSo the minimal fix is to add a discard for ptr2 in the success path.\n\nLet's write the patch:\n\n```diff\n--- original\n+++ fixed\n@@ -19,6 +19,7 @@\n \t}\n \n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n \n \treturn 0;\n }\n```\n\nBut note: the verifier log also shows that the dynptr for ptr1 is being submitted (so released) and then we are about to exit without releasing ptr2. So adding the discard for ptr2 should fix the leak.\n\nHowever, what if the bpf_ringbuf_submit_dynptr fails? Actually, the function bpf_ringbuf_submit_dynptr doesn't fail (it's a void function in the helper). But note: the verifier might track that after submitting ptr1, the dynptr is no longer valid. Then we must not use it again. But we are not using it again. We are only discarding ptr2.\n\nTherefore, the above fix should work.\n\nBut note: the verifier log also shows that the resource id=3 (ptr2) is acquired at instruction 14 and then not released until we add the discard. We are adding the discard in the success path.\n\nWe must ensure that in both paths (failure and success) we release both dynptrs.\n\nIn the failure path (if (!sample)), we release both. In the success path, we now release both (ptr1 by submit, ptr2 by discard).\n\nSo the program becomes:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nstruct sample {\n\t__u64 value;\n};\n\nstruct {\n\t__uint(type, BPF_MAP_TYPE_RINGBUF);\n\t__uint(max_entries, 4096);\n} ringbuf SEC(\".maps\");\n\nSEC(\"?raw_tp\")\nint entry(void *ctx)\n{\n\tstruct bpf_dynptr ptr1, ptr2;\n\tstruct sample *sample;\n\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n\n\tsample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));\n\tif (!sample) {\n\t\tbpf_ringbuf_discard_dynptr(&ptr1, 0);\n\t\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\t\treturn 0;\n\t}\n\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\n\treturn 0;\n}\n```\n\nThis should satisfy the verifier.\n\nTherefore, the fix is to add a discard for `ptr2` in the success branch.\n"
+}

@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Rewrite the recursion as a bounded loop in the same function.",
+    "Manually unroll the small fixed number of iterations.",
+    "Split helpers so calls form a directed acyclic graph."
+  ],
+  "canonical_fix": "Remove the recursive bpf2bpf call and express the repeated work as a verifier-bounded loop or as an acyclic/unrolled call sequence.",
+  "case_id": "case-019",
+  "category": "Program Structure",
+  "difficulty": "hard",
+  "expected_explanation": "helper_a contains a bpf2bpf call to itself, creating a recursive subprogram call graph. The verifier requires an acyclic finite call graph even if the source-level branch appears bounded.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-opus-4.8-high/case-019-legacy.txt",
+    "case_id": "case-019",
+    "model": "anthropic/claude-opus-4.8",
+    "profile": "openrouter-claude-opus-4.8-high",
+    "prompt_bytes": 1084,
+    "prompt_path": "public/case-019/prompt_legacy.md",
+    "prompt_sha256": "c56d2c6e4bb69291f472e6afb890014cb9c5bba47608e3e1c0192e7f6f0ff6aa",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-opus-4.8-high/case-019-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "717cd47e-5cd4-4ead-b65f-e19c23f07969",
+    "started_at": "2026-06-05T03:18:32+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Explanation\n\nThe verifier rejects the program with:\n\n```\nrecursive call from helper_a() to helper_a()\n```\n\nThe eBPF verifier does **not** allow recursion between BPF subprograms. It needs to statically bound the call chain (and stack usage) for every program, so any function that (directly or indirectly) calls itself is rejected outright \u2014 note that `processed 0 insns`, meaning verification was refused before any instruction was even analyzed.\n\nIn `helper_a`, the line\n\n```asm\nl0_%=:\tcall helper_a;\n```\n\nis a direct self-call. That is the recursion the verifier complains about.\n\n## Fix\n\nThe recursion is just being used as a loop: increment `r1`, copy it into `r0`, and repeat while `r1 < 4`. We can express the same logic with a backward branch instead of a recursive call, which the verifier accepts (bounded loops are allowed; recursion is not).\n\n```c\nstatic __naked __noinline __attribute__((used))\nvoid helper_a(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\nl0_%=:\tr1 += 1;\t\t\t\t\t\\\n\tr0 = r1;\t\t\t\t\t\\\n\tif r1 < 4 goto l0_%=;\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\nHere the label `l0_%=` is placed at the top of the loop body and the conditional branch jumps back to it instead of calling the function again. This produces equivalent behavior (loop while `r1 < 4`, leaving `r0 == r1`) without any recursion, so the verifier no longer rejects it.\n\nThis is the minimal change: it only converts the single recursive `call helper_a` into a backward `goto` to a label at the loop head, removing the self-recursion that triggered the failure.",
+  "must_mention": [
+    "The bpf2bpf call graph is recursive",
+    "Verifier requires no recursive subprogram calls",
+    "A bounded loop or acyclic rewrite is needed"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes the branch bound from 4 to another number",
+    "Adds a runtime recursion depth counter but keeps the self-call",
+    "Treats the failure as stack memory bounds"
+  ]
+}

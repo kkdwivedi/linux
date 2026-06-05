@@ -1,0 +1,51 @@
+The verifier failure is due to a direct recursive BPF-to-BPF subprogram call:
+
+```asm
+l0_%=: call helper_a;
+```
+
+inside `helper_a()` itself. The verifier rejects recursive subprogram call graphs outright, even if the recursion appears bounded by a condition like:
+
+```asm
+if r1 < 4 goto l0_%=;
+```
+
+So it fails during call graph validation before normal instruction/state exploration, which is why the log says:
+
+```text
+recursive call from helper_a() to helper_a()
+processed 0 insns
+```
+
+The smallest fix is to remove the self-call and make that branch return normally. Since `r0` is already initialized before the branch:
+
+```asm
+r0 = r1;
+```
+
+both paths can safely `exit`.
+
+Patch:
+
+```diff
+--- a/test.c
++++ b/test.c
+@@ -18,8 +18,7 @@ void helper_a(void)
+ 	r1 += 1;					\
+ 	r0 = r1;					\
+ 	if r1 < 4 goto l0_%=;				\
+ 	exit;						\
+-l0_%=:	call helper_a;					\
+-	exit;						\
++l0_%=:	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+After this change, the call graph is acyclic:
+
+```text
+entry -> helper_a
+```
+
+and `helper_a()` always exits with `r0` initialized, so this should satisfy the verifier.

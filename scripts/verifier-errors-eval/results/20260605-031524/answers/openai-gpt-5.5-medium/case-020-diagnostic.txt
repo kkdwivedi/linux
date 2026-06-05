@@ -1,0 +1,102 @@
+The program is verifier-pathological: every function contains 50 BPF-to-BPF calls to the next helper, and the call chain is deep:
+
+```text
+entry -> helper_a -> helper_b -> helper_c -> helper_d -> helper_e -> helper_f -> helper_g
+```
+
+Each call also passes a different stack pointer value in `r1`:
+
+```asm
+r1 = r10;
+r1 += -off;
+call helper_x;
+```
+
+So the verifier’s subprogram liveness analysis ends up recomputing liveness for the same lower subprograms through many distinct call paths / argument states. By the time it repeatedly reaches `helper_g`, it exceeds the verifier’s liveness-complexity cap:
+
+```text
+liveness analysis exceeded complexity limit (10001 calls)
+```
+
+This is not an instruction-count failure; it happens before normal state exploration:
+
+```text
+processed 0 insns ...
+```
+
+### Smallest likely source-level fix
+
+Make the helper subprograms global instead of `static`.
+
+For BPF, non-static/global subprograms are verified more like independent global functions instead of being context-sensitively re-analyzed through every caller path. Since these helpers take no declared arguments and ignore `r1`, making them global should avoid the exponential liveness recomputation while preserving the actual instruction structure.
+
+Patch:
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -9,7 +9,7 @@
+ 
+ __naked __noinline __used
+-static unsigned long helper_g(void)
++unsigned long helper_g(void)
+ {
+ 	asm volatile (
+ 		"r0 = 0;"
+@@ -20,7 +20,7 @@ static unsigned long helper_g(void)
+ }
+ 
+ __naked __noinline __used
+-static unsigned long helper_f(void)
++unsigned long helper_f(void)
+ {
+ 	asm volatile (
+ 		CALLS_50(helper_g)
+@@ -31,7 +31,7 @@ static unsigned long helper_f(void)
+ }
+ 
+ __naked __noinline __used
+-static unsigned long helper_e(void)
++unsigned long helper_e(void)
+ {
+ 	asm volatile (
+ 		CALLS_50(helper_f)
+@@ -42,7 +42,7 @@ static unsigned long helper_e(void)
+ }
+ 
+ __naked __noinline __used
+-static unsigned long helper_d(void)
++unsigned long helper_d(void)
+ {
+ 	asm volatile (
+ 		CALLS_50(helper_e)
+@@ -53,7 +53,7 @@ static unsigned long helper_d(void)
+ }
+ 
+ __naked __noinline __used
+-static unsigned long helper_c(void)
++unsigned long helper_c(void)
+ {
+ 	asm volatile (
+ 		CALLS_50(helper_d)
+@@ -64,7 +64,7 @@ static unsigned long helper_c(void)
+ }
+ 
+ __naked __noinline __used
+-static unsigned long helper_b(void)
++unsigned long helper_b(void)
+ {
+ 	asm volatile (
+ 		CALLS_50(helper_c)
+@@ -75,7 +75,7 @@ static unsigned long helper_b(void)
+ }
+ 
+ __naked __noinline __used
+-static unsigned long helper_a(void)
++unsigned long helper_a(void)
+ {
+ 	asm volatile (
+ 		CALLS_50(helper_b)
+```
+
+If the test specifically requires these helpers to remain local/static, then the alternative is to reduce the fanout drastically, e.g. redefine `CALLS_50()` to only emit three calls, because `50^7` possible paths is far beyond the verifier’s liveness-analysis limit. But the smallest semantic-preserving fix is to remove `static` from the helper subprograms.

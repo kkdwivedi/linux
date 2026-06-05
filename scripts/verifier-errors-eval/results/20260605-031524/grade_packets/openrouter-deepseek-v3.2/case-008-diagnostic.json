@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Change char buffer[8] to char buffer[9] or larger.",
+    "Change the bpf_dynptr_slice length argument from 9 to sizeof(buffer) or 8."
+  ],
+  "canonical_fix": "Make the fallback buffer at least 9 bytes or reduce the requested slice length to 8 bytes.",
+  "case_id": "case-008",
+  "category": "Call Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The fallback stack buffer is 8 bytes, but bpf_dynptr_slice is asked to use 9 bytes. The memory/length pair therefore describes a read beyond the stack object.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-v3.2/case-008-diagnostic.txt",
+    "case_id": "case-008",
+    "model": "deepseek/deepseek-v3.2",
+    "profile": "openrouter-deepseek-v3.2",
+    "prompt_bytes": 3876,
+    "prompt_path": "public/case-008/prompt_diagnostic.md",
+    "prompt_sha256": "6473479527e9eaa1732d9224d382c7fc572786756d22aa3518774f108c567394",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-v3.2/case-008-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "5bf834b7-f4cc-4256-8f67-e7431393d6c4",
+    "started_at": "2026-06-05T03:20:15+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier error occurs because `bpf_dynptr_slice` is called with a length of 9 bytes, but the provided stack buffer `buffer` is only 8 bytes. The verifier enforces that the memory region (third argument) must be at least as large as the requested length (fourth argument). Since the buffer is allocated as `char buffer[8]`, accessing 9 bytes would overflow into adjacent stack memory (specifically into the `struct bpf_dynptr ptr` at offset `fp-16`), which is invalid.\n\nThe smallest fix is to adjust the length argument to match the buffer size, changing `9` to `8`. This ensures the memory/length pair satisfies the verifier's safety checks.\n\nPatch:\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -7,7 +7,7 @@ int entry(struct __sk_buff *skb)\n \tif (bpf_dynptr_from_skb(skb, 0, &ptr))\n \t\treturn 1;\n \n-\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 9);\n+\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 8);\n \n \treturn !!data;\n }\n```",
+  "must_mention": [
+    "Requested length is 9",
+    "Buffer size is 8",
+    "The memory/length pair must fit"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks data for NULL after the call",
+    "Changes the dynptr initialization but leaves 9 against an 8-byte buffer",
+    "Treats the problem as a ringbuf capacity issue"
+  ]
+}

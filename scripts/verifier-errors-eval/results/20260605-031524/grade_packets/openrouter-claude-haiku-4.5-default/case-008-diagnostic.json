@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Change char buffer[8] to char buffer[9] or larger.",
+    "Change the bpf_dynptr_slice length argument from 9 to sizeof(buffer) or 8."
+  ],
+  "canonical_fix": "Make the fallback buffer at least 9 bytes or reduce the requested slice length to 8 bytes.",
+  "case_id": "case-008",
+  "category": "Call Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The fallback stack buffer is 8 bytes, but bpf_dynptr_slice is asked to use 9 bytes. The memory/length pair therefore describes a read beyond the stack object.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-008-diagnostic.txt",
+    "case_id": "case-008",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 3876,
+    "prompt_path": "public/case-008/prompt_diagnostic.md",
+    "prompt_sha256": "6473479527e9eaa1732d9224d382c7fc572786756d22aa3518774f108c567394",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-008-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "7d09ca2d-3ae3-464a-9278-10dc1a629bdc",
+    "started_at": "2026-06-05T03:19:01+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation of the Verifier Failure\n\nThe verifier is rejecting the call to `bpf_dynptr_slice` because of a memory safety violation:\n\n1. **Buffer size mismatch**: The `buffer` array is declared as `char buffer[8]`, which is 8 bytes.\n2. **Requested length too large**: The call passes `9` as the fourth argument (the length), requesting 9 bytes.\n3. **Stack access violation**: R3 points to `buffer` at offset -24 from fp, and the verifier calculates that reading 9 bytes from a stack location that only has 8 bytes allocated is invalid: \"invalid read from stack R3 off -24+8 size 9\".\n\nThe `bpf_dynptr_slice` function signature expects:\n- R1: dynptr pointer\n- R2: offset\n- R3: buffer pointer (with R4 specifying the buffer size)\n- R4: buffer size\n\nThe verifier enforces that the buffer size (R4) must not exceed the actual allocated size at the stack location pointed to by R3.\n\n## Fix\n\nThe smallest fix is to change the buffer size argument from `9` to `8` to match the actual buffer allocation:\n\n```c\ndata = bpf_dynptr_slice(&ptr, 0, buffer, 8);\n```\n\n**Why this works**: The verifier will now see that we're requesting 8 bytes from an 8-byte buffer, which is within bounds and satisfies the memory safety contract for the `bpf_dynptr_slice` call.",
+  "must_mention": [
+    "Requested length is 9",
+    "Buffer size is 8",
+    "The memory/length pair must fit"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks data for NULL after the call",
+    "Changes the dynptr initialization but leaves 9 against an 8-byte buffer",
+    "Treats the problem as a ringbuf capacity issue"
+  ]
+}

@@ -1,0 +1,46 @@
+## What the verifier is complaining about
+
+```
+sleepable global function helper_a() called in IRQ-disabled region
+```
+
+Two facts combine to produce this error:
+
+1. **`helper_a` is a *global* (non‑static, `__noinline`) function.** Global subprograms are verified independently of their caller, and the verifier records a summary of their properties — in particular whether the function *may sleep*. Because `helper_a` calls `bpf_copy_from_user()`, which is a sleepable (`may_sleep`) helper, the whole of `helper_a` is marked **sleepable**. (Note that the verifier verifies the global function with unknown arguments, so it cannot use the fact that you only pass `0`; the `bpf_copy_from_user` path is considered reachable.)
+
+2. **The call to `helper_a` sits inside an IRQ‑disabled region.** `bpf_local_irq_save(&flags)` disables interrupts and `bpf_local_irq_restore(&flags)` re‑enables them. Anything that can sleep is forbidden while IRQs are disabled, so the verifier rejects the call:
+
+```
+3: (85) call bpf_local_irq_save#62664   ; refs=1   <-- IRQ disabled here
+...
+5: (85) call pc+4                        <-- call to sleepable helper_a -> rejected
+```
+
+So the program is rejected not because of a bad pointer or size, but because a *possibly‑sleeping* function is invoked between `irq_save` and `irq_restore`.
+
+(The first line, `arg#0 reference type('UNKNOWN ') size cannot be determined: -22`, is a separate informational/BTF message about the `NULL` argument to `bpf_copy_from_user`; it is not the cause of the rejection.)
+
+## Smallest fix
+
+Move the `helper_a()` call out of the IRQ‑disabled region — i.e. call it before `bpf_local_irq_save()` (or after `bpf_local_irq_restore()`), where sleeping is allowed:
+
+```c
+SEC("?syscall")
+int entry(void *ctx)
+{
+	unsigned long flags;
+
+	helper_a(0);                      /* sleepable call, now outside IRQ region */
+	bpf_local_irq_save(&flags);
+	bpf_local_irq_restore(&flags);
+	return 0;
+}
+```
+
+This satisfies the verifier because the sleepable global function is no longer invoked while interrupts are disabled; inside the IRQ‑disabled region there is now nothing that may sleep.
+
+### Alternative fixes (same idea)
+
+If the intent is specifically to keep `helper_a` *inside* the IRQ region, then `helper_a` must not be sleepable. You can achieve that by removing the sleepable helper from it (e.g. drop the `bpf_copy_from_user` call, or replace it with a non‑sleepable operation). Making `helper_a` `static` does **not** help — it would be inlined and the sleepable `bpf_copy_from_user` would still end up inside the IRQ‑disabled region, producing an equivalent rejection.
+
+The minimal, behavior‑preserving change is the relocation of the `helper_a(0)` call shown above.

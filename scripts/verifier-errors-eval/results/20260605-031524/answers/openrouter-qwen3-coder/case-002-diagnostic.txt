@@ -1,0 +1,28 @@
+Looking at the verifier log, the issue is a resource leak. The `bpf_cpumask_create()` function creates a reference-counted object that must be released before the program exits. The verifier tracks that resource ID 2 is acquired at instruction 0 but is never released on the main exit path.
+
+Let me trace the code flow:
+
+1. `make_object()` calls `bpf_cpumask_create()` and stores the result in `cpumask`
+2. If `cpumask` is NULL, it returns NULL (this path releases nothing, which is correct)
+3. If `bpf_cpumask_empty(cast(cpumask))` is false, it releases the cpumask and returns NULL (this path correctly releases)
+4. Otherwise, it returns the cpumask (this is the leak - the caller now owns the reference)
+
+In the main `entry` function, the returned cpumask from `make_object()` is stored in a local variable but never released. The `__sink(cpumask)` call doesn't release it - it just prevents the compiler from optimizing away the variable.
+
+The fix is to release the cpumask in the main function after using it:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *cpumask;
+
+	cpumask = make_object();
+	if (cpumask)
+		bpf_cpumask_release(cpumask);
+
+	return 0;
+}
+```
+
+This ensures that the cpumask resource is properly released on all paths where it was successfully created, preventing the resource leak that the verifier detected.

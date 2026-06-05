@@ -1,0 +1,38 @@
+The verifier error is a classic **refcount leak**:
+
+- `bpf_sk_lookup_tcp()` returns `PTR_TO_SOCKET_OR_NULL` with a held reference when non-NULL.
+- In your program, right after the lookup you do:
+
+```asm
+if r6 == 0 goto l1;
+exit;              // <-- can exit with live socket ref in r0
+l1: if r0 == 0 goto l2;
+    r1 = r0;
+    call bpf_sk_release;
+l2: exit;
+```
+
+So on the `r6 != 0` branch, you exit before attempting `bpf_sk_release()`.  
+Verifier reports exactly that: `Unreleased reference id=2 ... BPF_EXIT ... reference leak`.
+
+## Smallest likely fix
+
+Ensure `r0` is released (if non-NULL) **before any exit path**. Since both branches end in `exit` anyway, the simplest is to always do conditional release and then exit.
+
+### Patch
+
+```diff
+@@
+ 	r4 = 0;						\
+ 	r5 = 0;						\
+ 	call %[bpf_sk_lookup_tcp];			\
+-	if r6 == 0 goto l1_%=;				\
+-	exit;						\
+-l1_%=:	if r0 == 0 goto l2_%=;				\
++	if r0 == 0 goto l2_%=;				\
+ 	r1 = r0;					\
+ 	call %[bpf_sk_release];				\
+ l2_%=:	exit;						\
+```
+
+This satisfies the verifier requirement that all live references from `bpf_sk_lookup_tcp` are released on all reachable exit paths.

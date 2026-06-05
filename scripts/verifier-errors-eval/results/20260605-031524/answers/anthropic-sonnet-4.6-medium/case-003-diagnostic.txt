@@ -1,0 +1,24 @@
+## Explanation
+
+The verifier failure occurs because writing `*(u8*)(r10 - 7)` **partially overlaps** the 8-byte slot `*(u64*)(r10 - 8)`.
+
+- `*(u64*)(r10 - 8)` occupies bytes `[fp-8 … fp-1]`.
+- `*(u8*)(r10 - 7)` writes byte `fp-7`, which falls **inside** that same 8-byte region.
+
+After the byte write the verifier marks the entire 8-byte slot as "mixed/unknown" (`fp-8=mmmmmmmm`). When the code reloads `r0 = *(u64*)(r10 - 8)`, the verifier sees a plain scalar instead of a pointer, so dereferencing it with `*(u64*)(r0 + 8)` is rejected.
+
+## Fix
+
+Move the 64-bit store to a slot that does **not** overlap `fp-7`. Using `fp-16` keeps the pointer in `[fp-16 … fp-9]`, completely separate from `fp-7`.
+
+```diff
+-	*(u64*)(r10 - 8) = r1;				\
++	*(u64*)(r10 - 16) = r1;				\
+ 	r0 = 0x23;					\
+ 	*(u8*)(r10 - 7) = r0;				\
+-	r0 = *(u64*)(r10 - 8);				\
++	r0 = *(u64*)(r10 - 16);				\
+ 	r0 = *(u64*)(r0 + 8);				\
+```
+
+With this change the pointer is stored in `fp-16…fp-9`, the byte write to `fp-7` is in a different, non-overlapping slot, so the verifier still tracks `fp-16` as `ctx()` when it is reloaded into `r0`, and the subsequent dereference is valid.

@@ -1,0 +1,84 @@
+The verifier failure is caused by this sequence:
+
+```c
+int *p = (void *)(long)sk->data;
+
+if ((void *)(p + 1) > (void *)(long)sk->data_end)
+	return TCX_DROP;
+
+helper_a(sk, 0);
+
+*p = 42;
+```
+
+`p` is a packet-data pointer derived from `sk->data`. The bounds check proves that `p + 1` is within `sk->data_end`, so `*p` would be safe at that point.
+
+However, `helper_a()` calls `helper_b()`, which calls:
+
+```c
+bpf_skb_pull_data(sk, len);
+```
+
+`bpf_skb_pull_data()` is a helper that may move or reallocate skb packet data. Because of that, the verifier invalidates all previously derived packet pointers after the call, even when `len == 0`.
+
+So after:
+
+```c
+helper_a(sk, 0);
+```
+
+the old `p`/`r7` is no longer considered a valid packet pointer. The verifier turns it into a scalar, and then rejects:
+
+```c
+*p = 42;
+```
+
+with:
+
+```text
+R7 invalid mem access 'scalar'
+```
+
+The smallest reliable fix is to reload `sk->data` and `sk->data_end` after the helper call and redo the bounds check before writing.
+
+Patch:
+
+```diff
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ 
+ __noinline long helper_b(struct __sk_buff *sk, __u32 len)
+ {
+ 	return bpf_skb_pull_data(sk, len);
+ }
+ 
+ __noinline long helper_a(struct __sk_buff *sk, __u32 len)
+ {
+ 	return helper_b(sk, len);
+ }
+ 
+ SEC("tc")
+ int entry(struct __sk_buff *sk)
+ {
+ 	int *p = (void *)(long)sk->data;
+ 
+ 	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+ 		return TCX_DROP;
+ 	helper_a(sk, 0);
++
++	p = (void *)(long)sk->data;
++	if ((void *)(p + 1) > (void *)(long)sk->data_end)
++		return TCX_DROP;
++
+ 	*p = 42;
+ 	return TCX_PASS;
+ }
+```
+
+Why this should pass:
+
+- The first check proves the initial packet has at least 4 bytes before the helper call.
+- The helper call may invalidate/move packet data.
+- Reloading `sk->data` after the helper gives the verifier a fresh packet pointer.
+- Rechecking against the fresh `sk->data_end` proves the new pointer is safe.
+- The final `*p = 42` then uses a currently valid, bounds-checked packet pointer.

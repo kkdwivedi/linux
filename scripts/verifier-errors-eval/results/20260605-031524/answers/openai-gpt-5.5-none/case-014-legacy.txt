@@ -1,0 +1,83 @@
+The program looks up a hash-map value:
+
+```c
+struct value {
+	__u32 offset;
+	__u8 data[44];
+};              /* total value size = 48 */
+```
+
+After lookup, `r0` is a pointer to a 48-byte map value. The program then does:
+
+```asm
+r1 = r0
+r3 = *(u32 *)(r0 + 0)   ; r3 = value->offset, unconstrained u32
+r1 += r3               ; r1 = value + offset
+r2 = 1
+r3 = 0
+call bpf_probe_read_kernel
+```
+
+The verifier rejects this because `offset` is loaded from the map and has no bounds check. It can be any `u32` value from `0` to `0xffffffff`, so `r1 = map_value + offset` may point outside the 48-byte map value. Passing that unbounded pointer as the destination buffer to `bpf_probe_read_kernel()` is unsafe.
+
+The smallest fix is to bound-check `offset` before using it. Since the helper writes `r2 = 1` byte to `r1`, the offset must be within the map value such that one byte is valid. For a 48-byte map value, valid byte offsets are `0..47`. So reject/exit when `offset >= 48`.
+
+A minimal assembly-level patch:
+
+```diff
+@@
+ 	r1 = r0;					\
+ 	r3 = *(u32*)(r0 + 0);				\
++	if r3 >= 48 goto l0_%=;				\
+ 	r1 += r3;					\
+ 	r2 = 1;						\
+ 	r3 = 0;						\
+ 	call %[bpf_probe_read_kernel];			\
+```
+
+Complete patched source:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+struct value {
+	__u32 offset;
+	__u8 data[44];
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1);
+	__type(key, __u64);
+	__type(value, struct value);
+} map_a SEC(".maps");
+
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = 0;						\
+	*(u64*)(r2 + 0) = r1;				\
+	r1 = %[map_a] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l0_%=;				\
+	r1 = r0;					\
+	r3 = *(u32*)(r0 + 0);				\
+	if r3 >= 48 goto l0_%=;				\
+	r1 += r3;					\
+	r2 = 1;						\
+	r3 = 0;						\
+	call %[bpf_probe_read_kernel];			\
+l0_%=:	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm(bpf_probe_read_kernel),
+	  __imm_addr(map_a)
+	: __clobber_all);
+}
+```
+
+Why this should satisfy the verifier: after `if r3 >= 48 goto exit`, on the fallthrough path the verifier can infer `r3 <= 47`. Therefore `r1 = map_value + r3` points somewhere inside the 48-byte map value. Because the helper size argument is `1`, the write range `[r1, r1 + 1)` is within bounds.

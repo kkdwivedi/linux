@@ -1,0 +1,33 @@
+## Explanation
+
+The failure has nothing to do with register state or memory safety. It is a **helper-allowlist (policy) rejection**:
+
+```
+program of this type cannot use helper bpf_ktime_get_coarse_ns#160
+```
+
+`bpf_ktime_get_coarse_ns()` is deliberately **not** exposed to tracing program types such as `kprobe` (also kretprobe, tracepoint, perf_event, raw_tp). The kernel restricts it (and the `bpf_timer_*` helpers) for tracing programs because these can fire from NMI/arbitrary contexts and the coarse-time read path uses a seqlock that could deadlock. So `get_func_proto` for the kprobe program type simply doesn’t return a proto for this helper, and the verifier rejects the `call` at insn 0.
+
+This is not a bug in the verifier logic you can satisfy with extra checks — the helper is fundamentally disallowed for `SEC("kprobe")`.
+
+## Fix
+
+Run the program under a program type that *is* allowed to call `bpf_ktime_get_coarse_ns()` (e.g. networking program types like `tc`/`socket`, or `syscall`). The smallest source change is the section name:
+
+```c
+SEC("tc")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_coarse_ns];		\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_coarse_ns)
+	: __clobber_all);
+}
+```
+
+(Equivalently `SEC("socket")` or `SEC("syscall")`.) These program types include `bpf_ktime_get_coarse_ns` in their helper set, so the policy check passes and the trivial body (`r0 = 0; exit;`) verifies cleanly.
+
+If the intent of the test is specifically to verify behavior *under a tracing program*, then the correct expectation is that this helper is rejected — in that case the test harness should mark it as an expected-failure rather than changing the code. But to make the program **pass verification**, switch it to a compatible program type as shown.

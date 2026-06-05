@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Explanation of the Verifier Failure\n\nThe verifier is rejecting the program because at line 42 in the main program:\n\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\nThe pointer `value->task` has type `rcu_ptr_or_null_task_struct`, meaning it **may be NULL**. However, `bpf_task_acquire()` is a kfunc that requires a **trusted, non-NULL pointer** as its first argument.\n\nThe issue occurs because:\n1. `value` is checked for NULL (line 38: `if (!value)`)\n2. But `value->task` is a kptr field that was stored in the map with `NULL` value initially (line 53: `local.task = NULL`)\n3. Even though `bpf_kptr_xchg()` was called in `map_insert()`, the verifier cannot guarantee that the value returned from `bpf_map_lookup_elem()` in `helper_a()` has a non-NULL `task` field\n4. The verifier sees `value->task` as `rcu_ptr_or_null_task_struct` and rejects the call\n\n## The Fix\n\nAdd a NULL check on `value->task` before calling `bpf_task_acquire()`:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n\tif (!value->task)\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(value->task);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\n**Why this works:** The added NULL check on `value->task` (line 11 in the fixed version) narrows the type from `rcu_ptr_or_null_task_struct` to `rcu_ptr_task_struct` (non-NULL), which satisfies the kfunc's requirement for a trusted, non-NULL pointer.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-009-diagnostic.txt",
+    "case_id": "case-009",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 9539,
+    "prompt_path": "public/case-009/prompt_diagnostic.md",
+    "prompt_sha256": "b18a80e715b0997c1feba2b4b098abd71869a9fb867ace1b91abe52c1a1cab07",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-009-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "47213f49-3214-4ecc-806a-741d70376d32",
+    "started_at": "2026-06-05T03:19:01+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.004047,
+    "output_cost_usd": 0.00266,
+    "total_cost_usd": 0.006707
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 4047,
+    "output_tokens": 532,
+    "raw_usage": {
+      "completion_tokens": 532,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.006707,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.00266,
+        "upstream_inference_cost": 0.006707,
+        "upstream_inference_prompt_cost": 0.004047
+      },
+      "is_byok": false,
+      "prompt_tokens": 4047,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 4579
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 4579
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation of the Verifier Failure\n\nThe verifier is rejecting the program because at line 42 in the main program:\n\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\nThe pointer `value->task` has type `rcu_ptr_or_null_task_struct`, meaning it **may be NULL**. However, `bpf_task_acquire()` is a kfunc that requires a **trusted, non-NULL pointer** as its first argument.\n\nThe issue occurs because:\n1. `value` is checked for NULL (line 38: `if (!value)`)\n2. But `value->task` is a kptr field that was stored in the map with `NULL` value initially (line 53: `local.task = NULL`)\n3. Even though `bpf_kptr_xchg()` was called in `map_insert()`, the verifier cannot guarantee that the value returned from `bpf_map_lookup_elem()` in `helper_a()` has a non-NULL `task` field\n4. The verifier sees `value->task` as `rcu_ptr_or_null_task_struct` and rejects the call\n\n## The Fix\n\nAdd a NULL check on `value->task` before calling `bpf_task_acquire()`:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n\tif (!value->task)\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(value->task);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\n**Why this works:** The added NULL check on `value->task` (line 11 in the fixed version) narrows the type from `rcu_ptr_or_null_task_struct` to `rcu_ptr_task_struct` (non-NULL), which satisfies the kfunc's requirement for a trusted, non-NULL pointer.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629541,
+    "id": "gen-1780629541-g4xoYs0tXFdY3NkaSOLp",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 532,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.006707,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.00266,
+        "upstream_inference_cost": 0.006707,
+        "upstream_inference_prompt_cost": 0.004047
+      },
+      "is_byok": false,
+      "prompt_tokens": 4047,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 4579
+    }
+  },
+  "reasoning_content": ""
+}

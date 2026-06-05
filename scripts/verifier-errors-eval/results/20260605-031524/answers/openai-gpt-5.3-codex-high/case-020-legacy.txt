@@ -1,0 +1,33 @@
+The failure is **not** a normal instruction-safety rejection; it dies during **subprog liveness analysis**:
+
+- Log ends with: `liveness analysis exceeded complexity limit (10001 calls)`
+- `processed 0 insns` confirms it failed before main per-insn verification.
+- Repeated re-analysis of `helper_g` shows call-graph/liveness explosion.
+
+### Why this explodes
+
+Each call site does:
+
+```c
+r1 = r10;
+r1 += -off;   // off varies
+call helper_x;
+```
+
+So every nested bpf2bpf call passes a different stack pointer state. With 50 calls per level and 7 levels, liveness keeps revisiting subprogs in many contexts and hits the 10k-call complexity cap.
+
+But none of these functions actually read arguments; they just call the next subprog and return 0. So passing stack pointers is unnecessary.
+
+---
+
+### Smallest likely fix
+
+Make `CALL_AT` stop passing stack pointers; pass a simple constant arg (or no arg setup).  
+Safest minimal edit: set `r1 = 0` before each call.
+
+```diff
+-#define CALL_AT(fn, off) "r1 = r10;" "r1 += -" #off ";" "call " #fn ";"
++#define CALL_AT(fn, off) "r1 = 0;" "call " #fn ";"
+```
+
+This keeps program structure intact but removes stack-liveness context explosion, which should let verifier liveness converge and pass.

@@ -1,0 +1,50 @@
+### Verifier Failure Explanation
+
+The verifier is rejecting the eBPF program because of a **context safety violation**:
+
+1. The program calls `bpf_local_irq_save()` at line 498, which enters an **IRQ-disabled region** (critical section).
+2. Inside this critical section, it calls `helper_a(0)` at line 499.
+3. The function `helper_a` is marked as **sleepable** (global function with potential for sleeping behavior).
+4. The verifier disallows calling **sleepable functions** while in an **IRQ-disabled context**, since such functions might sleep and cause system deadlock or latency issues.
+
+This leads to the error message:
+```
+sleepable global function helper_a() called in IRQ-disabled region
+```
+
+---
+
+### Proposed Fix
+
+To resolve this issue, we must ensure that `helper_a()` is **not called within the IRQ-disabled region**. The smallest change would be to move the call to `helper_a(0)` **outside** the critical section — either before `bpf_local_irq_save()` or after `bpf_local_irq_restore()`.
+
+Since the logic does not appear to require `helper_a()` to be inside the critical section, moving it after `bpf_local_irq_restore()` is safe and logical.
+
+#### Patch
+
+```diff
+--- a/source.c
++++ b/source.c
+@@ -495,9 +495,9 @@ int entry(void *ctx)
+ {
+        unsigned long flags;
+
+        bpf_local_irq_save(&flags);
+-       helper_a(0);
+        bpf_local_irq_restore(&flags);
++       helper_a(0);
+        return 0;
+ }
+```
+
+---
+
+### Why This Fixes It
+
+By moving `helper_a(0)` **after** `bpf_local_irq_restore()`, we ensure that:
+
+- The IRQs are re-enabled when `helper_a()` is invoked.
+- No sleepable operations occur inside the IRQ-disabled critical section.
+- The program complies with execution context safety rules enforced by the verifier.
+
+This minimal edit resolves the context safety violation without altering program semantics significantly.

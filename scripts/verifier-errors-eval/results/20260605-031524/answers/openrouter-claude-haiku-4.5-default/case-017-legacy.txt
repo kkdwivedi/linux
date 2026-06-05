@@ -1,0 +1,33 @@
+## Explanation of the Verifier Failure
+
+The verifier is enforcing a **LIFO (Last-In-First-Out) ordering constraint** for `bpf_local_irq_save()` and `bpf_local_irq_restore()` pairs. This is a safety mechanism to prevent IRQ state corruption.
+
+The issue:
+1. `bpf_local_irq_save(&flags1)` is called first (insn 3), acquiring IRQ state with id=1
+2. `bpf_local_irq_save(&flags2)` is called second (insn 7), acquiring IRQ state with id=2
+3. `bpf_local_irq_restore(&flags1)` is called next (insn 9), trying to restore id=1
+
+This violates LIFO ordering because id=2 (the most recently acquired state) must be restored before id=1. The verifier rejects this with: "cannot restore irq state out of order, expected id=2 acquired at insn_idx=7"
+
+## Fix
+
+The smallest fix is to **reverse the order of the restore calls** to match LIFO semantics:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	unsigned long flags1, flags2;
+
+	bpf_local_irq_save(&flags1);
+	bpf_local_irq_save(&flags2);
+	bpf_local_irq_restore(&flags2);  // Restore in reverse order
+	bpf_local_irq_restore(&flags1);
+	return 0;
+}
+```
+
+**Why this works:** By restoring `flags2` before `flags1`, we restore in LIFO order (most recently acquired state is restored first), which satisfies the verifier's ordering constraint.

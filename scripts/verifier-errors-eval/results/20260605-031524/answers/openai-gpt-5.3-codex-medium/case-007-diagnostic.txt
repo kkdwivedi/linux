@@ -1,0 +1,48 @@
+The failure is due to the **length argument** to `bpf_dynptr_slice()` being verifier-unknown.
+
+### Why verifier rejects it
+
+At the call:
+
+```c
+hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
+```
+
+- `R3` = `buffer` (stack pointer, `fp-32`)
+- `R4` = `slice_len`
+
+But `slice_len` is a writable global (`__u32 slice_len = ...`), which is emitted as a `.data` map load, so verifier sees it as:
+
+- scalar range: `0 .. 0xffffffff` (unbounded)
+
+For a `(ptr,len)` memory pair, verifier must prove `len` fits the pointed object (`buffer`, size 14). It can’t, so it reports:
+
+- `R4 unbounded memory access`
+- `R3 and R4 memory, len pair leads to invalid memory access`
+
+---
+
+### Smallest likely fix
+
+Use a verifier-known constant/bounded length for the stack buffer, e.g. `sizeof(buffer)`.
+
+#### Patch
+
+```diff
+@@
+-__u32 slice_len = sizeof(struct ethhdr);
+-
+ SEC("?tc")
+ int entry(struct __sk_buff *skb)
+ {
+ 	struct bpf_dynptr ptr;
+ 	struct ethhdr *hdr;
+ 	char buffer[sizeof(*hdr)] = {};
+@@
+-	hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
++	hdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+ 	if (!hdr)
+ 		return SK_DROP;
+```
+
+This gives verifier a fixed len (14), matching the stack object size, satisfying helper arg constraints.

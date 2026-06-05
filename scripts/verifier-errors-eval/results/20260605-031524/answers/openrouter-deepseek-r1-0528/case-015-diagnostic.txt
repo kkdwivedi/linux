@@ -1,0 +1,33 @@
+The verifier failure occurs because the helper function `helper_a` (which calls `bpf_skb_pull_data`) may invalidate packet pointers. After the helper call, register `R7` (holding pointer `p`) becomes a scalar (integer) instead of a valid packet pointer, causing the `*p = 42` dereference to fail.
+
+**Fix explanation**: The pointer `p` must be reloaded from `sk->data` after the helper call since packet data pointers can change. The bounds check must also be repeated after reloading to ensure safe access.
+
+**Patch**:
+```diff
+--- a.c
++++ b.c
+@@ -15,11 +15,11 @@
+ 
+ SEC("tc")
+ int entry(struct __sk_buff *sk)
+-{
+-	int *p = (void *)(long)sk->data;
++{	
++	helper_a(sk, 0);
+ 
++	int *p = (void *)(long)sk->data;
+ 	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+ 		return TCX_DROP;
+-	helper_a(sk, 0);
+ 	*p = 42;
+ 	return TCX_PASS;
+ }
+```
+
+**Reason**:
+1. Moves `helper_a` call before pointer initialization
+2. Reloads `p` from `sk->data` after the helper call
+3. Repeats bounds check with the reloaded pointer
+4. Maintains original write logic with validated pointer
+
+This ensures the pointer is fresh after any potential packet buffer changes from `bpf_skb_pull_data`, satisfying the verifier's safety checks.

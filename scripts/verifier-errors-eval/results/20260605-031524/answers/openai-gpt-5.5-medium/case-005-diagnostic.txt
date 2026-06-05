@@ -1,0 +1,41 @@
+The verifier is rejecting this because `bpf_copy_from_user()` is a sleepable helper. The program enters a non-preemptible region with:
+
+```c
+bpf_preempt_disable();
+```
+
+and then, while the verifier’s tracked preempt-disable depth is still `1`, calls:
+
+```c
+bpf_copy_from_user(&data, sizeof(data), NULL);
+```
+
+A sleepable helper cannot be called while preemption is disabled, because code in a non-preemptible region must not sleep. The later `bpf_preempt_enable()` does not help because the invalid helper call happens before it.
+
+The smallest fix is to move `bpf_copy_from_user()` outside the preempt-disabled region.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -9,8 +9,8 @@ int entry(void *ctx)
+ 	u32 data;
+ 
+ 	bpf_preempt_disable();
+-	bpf_copy_from_user(&data, sizeof(data), NULL);
+ 	bpf_preempt_enable();
++	bpf_copy_from_user(&data, sizeof(data), NULL);
+ 	return 0;
+ }
+```
+
+After this change, the verifier should see:
+
+1. enter non-preemptible region,
+2. leave non-preemptible region,
+3. call the sleepable helper with preemption enabled again.
+
+That satisfies the execution-context rule reported in the log.

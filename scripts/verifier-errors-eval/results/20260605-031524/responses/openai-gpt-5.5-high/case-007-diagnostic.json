@@ -1,0 +1,130 @@
+{
+  "answer_text": "The failure is caused by `slice_len` being a mutable global in `.data`.\n\nEven though it is initialized as:\n\n```c\n__u32 slice_len = sizeof(struct ethhdr);\n```\n\nthe verifier cannot assume it is always `sizeof(struct ethhdr)`. In the log, it loads it as:\n\n```text\nR4=scalar(smin=0,smax=umax=0xffffffff)\n```\n\nSo for the helper call:\n\n```c\nbpf_dynptr_slice(&ptr, 0, buffer, slice_len);\n```\n\nthe verifier sees:\n\n- `R3 = buffer`, a stack pointer to `char buffer[14]`\n- `R4 = slice_len`, an unbounded `u32`\n\n`bpf_dynptr_slice()` treats args 3/4 as a memory/length pair. Since `R4` could be larger than 14, the helper could access past the end of the stack buffer, so verification fails.\n\nThe smallest fix, if the intended length is always the Ethernet header size, is to pass a compile-time bounded size:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -19,7 +19,7 @@ int entry(struct __sk_buff *skb)\n \n \tbpf_dynptr_from_skb(skb, 0, &ptr);\n \n-\thdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);\n+\thdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));\n \tif (!hdr)\n \t\treturn SK_DROP;\n \n```\n\nThat should make `R4` a verifier-known constant `14`, matching the size of `buffer`.\n\nIf `slice_len` must remain mutable, then bound a local copy before the call instead:\n\n```c\n__u32 len;\n\nbpf_dynptr_from_skb(skb, 0, &ptr);\n\nlen = slice_len;\nif (len > sizeof(buffer))\n\treturn SK_DROP;\n\nhdr = bpf_dynptr_slice(&ptr, 0, buffer, len);\n```\n\nThe key requirement is that the length passed with `buffer` must have verifier-known upper bound `<= sizeof(buffer)`.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-high/case-007-diagnostic.txt",
+    "case_id": "case-007",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-high",
+    "prompt_bytes": 4340,
+    "prompt_path": "public/case-007/prompt_diagnostic.md",
+    "prompt_sha256": "d1d8d7dccaad3f83ecae6c603310091500168180bae26b21eb757e9dd3d1640d",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-high/case-007-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "c1d769cc-02dd-4eb3-ab9f-ef9261dc7774",
+    "started_at": "2026-06-05T03:15:54+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.007,
+    "output_cost_usd": 0.29043,
+    "total_cost_usd": 0.29743
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1400,
+    "output_tokens": 9681,
+    "raw_usage": {
+      "input_tokens": 1400,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 9681,
+      "output_tokens_details": {
+        "reasoning_tokens": 9200
+      },
+      "total_tokens": 11081
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 9200,
+    "total_tokens": 11081
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629569,
+    "created_at": 1780629354,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_04f11a1516db5d11006a223f6af190819d9ec8386bdeeeb63a",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_04f11a1516db5d11006a223f6b84b0819d86f1f7c0c9ff4a10",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is caused by `slice_len` being a mutable global in `.data`.\n\nEven though it is initialized as:\n\n```c\n__u32 slice_len = sizeof(struct ethhdr);\n```\n\nthe verifier cannot assume it is always `sizeof(struct ethhdr)`. In the log, it loads it as:\n\n```text\nR4=scalar(smin=0,smax=umax=0xffffffff)\n```\n\nSo for the helper call:\n\n```c\nbpf_dynptr_slice(&ptr, 0, buffer, slice_len);\n```\n\nthe verifier sees:\n\n- `R3 = buffer`, a stack pointer to `char buffer[14]`\n- `R4 = slice_len`, an unbounded `u32`\n\n`bpf_dynptr_slice()` treats args 3/4 as a memory/length pair. Since `R4` could be larger than 14, the helper could access past the end of the stack buffer, so verification fails.\n\nThe smallest fix, if the intended length is always the Ethernet header size, is to pass a compile-time bounded size:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -19,7 +19,7 @@ int entry(struct __sk_buff *skb)\n \n \tbpf_dynptr_from_skb(skb, 0, &ptr);\n \n-\thdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);\n+\thdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));\n \tif (!hdr)\n \t\treturn SK_DROP;\n \n```\n\nThat should make `R4` a verifier-known constant `14`, matching the size of `buffer`.\n\nIf `slice_len` must remain mutable, then bound a local copy before the call instead:\n\n```c\n__u32 len;\n\nbpf_dynptr_from_skb(skb, 0, &ptr);\n\nlen = slice_len;\nif (len > sizeof(buffer))\n\treturn SK_DROP;\n\nhdr = bpf_dynptr_slice(&ptr, 0, buffer, len);\n```\n\nThe key requirement is that the length passed with `buffer` must have verifier-known upper bound `<= sizeof(buffer)`.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_04f11a1516db5d11006a224039c19c819dacc905ef3280a610",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1400,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 9681,
+      "output_tokens_details": {
+        "reasoning_tokens": 9200
+      },
+      "total_tokens": 11081
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

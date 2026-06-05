@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Guard helper_a with if (!s) return 0; before s->x.",
+    "Make the function pattern local/static only if that changes verifier validation so the argument is proven non-NULL, without hiding an unsafe dereference."
+  ],
+  "canonical_fix": "Add a NULL check in helper_a before reading s->x, returning a safe value on the NULL path.",
+  "case_id": "case-004",
+  "category": "Register Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The global subprogram dereferences its pointer argument directly. The verifier validates global subprograms for any argument state matching the prototype, including NULL-like memory arguments, so the callee must prove the pointer is non-NULL before dereferencing.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-no-thinking/case-004-legacy.txt",
+    "case_id": "case-004",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-no-thinking",
+    "prompt_bytes": 1415,
+    "prompt_path": "public/case-004/prompt_legacy.md",
+    "prompt_sha256": "5122475504cbe77965669ffc9de4273ee4a86feb8b73ecbb090ea008b68a08ae",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-no-thinking/case-004-legacy.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "disabled"
+    },
+    "run_id": "78285b53-b3fb-41e2-9157-163f96268ee9",
+    "started_at": "2026-06-05T03:18:00+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "Looking at the verifier log, I can see the issue clearly.\n\n## Verifier Failure Explanation\n\nThe verifier is rejecting the program because of a **null pointer check failure** when accessing `s->x` in `helper_a()`.\n\nLet's trace through the states:\n- At instruction 7: `R1=mem_or_null(id=1,sz=4)` - this means R1 could be either valid memory OR null\n- After `r6 = r1`: `R6=mem_or_null(id=1,sz=4)` - same type, still potentially null\n- At instruction 10: `r2 = *(u32 *)(r6 +0)` - the verifier rejects this because R6 has type `mem_or_null`, not confirmed non-null memory\n\nThe root cause is that **BPF subprograms with pointer arguments must perform null checks before dereferencing**, even when the caller always passes a valid stack address. The verifier analyzes `helper_a()` independently and sees that `s` (in R1/R6) has type `mem_or_null` because the verifier conservatively marks pointer arguments to subprograms as potentially null.\n\nThe caller passes `&s` where `s` is a stack variable, which is always valid memory. However, the subprogram's standalone verification doesn't know this - it must defend against being called with NULL.\n\n## The Fix\n\nThe smallest fix is to add a **null check** at the beginning of `helper_a()` before dereferencing `s`. This is standard practice for BPF subprograms with pointer arguments.\n\n```patch\n--- a/case.c\n+++ b/case.c\n@@ -9,6 +9,9 @@ struct Item {\n \n __noinline int helper_a(const struct Item *s)\n {\n+\tif (!s)\n+\t\treturn 0;\n+\n \treturn bpf_get_prandom_u32() < s->x;\n }\n```\n\nThis satisfies the verifier because:\n1. After the `if (!s) return 0;` check, the verifier refines R6's type from `mem_or_null` to just `mem` (confirmed non-null) on the fall-through path\n2. The subsequent `s->x` dereference is then valid\n3. The `return 0` for the null case provides a safe fallback\n\nThis is the idiomatic pattern for BPF subprograms that accept pointer arguments - always null-check before dereferencing, even if you believe the caller never passes NULL.",
+  "must_mention": [
+    "The callee argument may be NULL",
+    "The dereference is inside helper_a",
+    "The fix belongs before s->x is read"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check after dereferencing s",
+    "Checks the address of the local object in entry but leaves helper_a unsafe for verifier validation",
+    "Changes the comparison but not the dereference"
+  ]
+}

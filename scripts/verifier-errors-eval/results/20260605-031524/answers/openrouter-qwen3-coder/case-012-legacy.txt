@@ -1,0 +1,36 @@
+Looking at the verifier log, I can see the issue:
+
+The error message "sleepable global function helper_a() called in IRQ-disabled region" indicates that the verifier is rejecting the call to `helper_a()` because it's being called while interrupts are disabled (between `bpf_local_irq_save()` and `bpf_local_irq_restore()`), but `helper_a()` is marked as a sleepable function.
+
+The problem is that `helper_a()` contains a call to `bpf_copy_from_user()`, which is a sleepable helper function. When a function contains sleepable helpers, the verifier marks the entire function as sleepable, meaning it cannot be called in atomic contexts like IRQ-disabled regions.
+
+The smallest fix is to avoid calling `helper_a()` while interrupts are disabled. We can do this by reordering the operations:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+int __noinline helper_a(int i)
+{
+	char data[8];
+
+	if (!i)
+		bpf_copy_from_user(data, sizeof(data), NULL);
+	return i;
+}
+
+SEC("?syscall")
+int entry(void *ctx)
+{
+	unsigned long flags;
+
+	helper_a(0);
+	bpf_local_irq_save(&flags);
+	bpf_local_irq_restore(&flags);
+	return 0;
+}
+```
+
+The fix moves the call to `helper_a(0)` outside the IRQ-disabled region, calling it before `bpf_local_irq_save()` instead of after. This way, the sleepable function is called in a context where sleeping is allowed, while still maintaining the IRQ protection for any code that might need it (though in this simple example, there's no actual code between the save/restore calls).

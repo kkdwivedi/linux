@@ -1,0 +1,65 @@
+... 69249 earlier verifier log lines omitted ...
+subprog#7 helper_g:
+1064: (b7) r0 = 0
+1065: (95) exit
+subprog#7: analyzing (depth 7)...
+subprog#7 helper_g:
+1064: (b7) r0 = 0
+1065: (95) exit
+subprog#7: analyzing (depth 7)...
+subprog#7 helper_g:
+1064: (b7) r0 = 0
+1065: (95) exit
+subprog#7: analyzing (depth 7)...
+subprog#7 helper_g:
+1064: (b7) r0 = 0
+1065: (95) exit
+subprog#7: analyzing (depth 7)...
+subprog#7 helper_g:
+1064: (b7) r0 = 0
+1065: (95) exit
+subprog#7: analyzing (depth 7)...
+subprog#7 helper_g:
+1064: (b7) r0 = 0
+1065: (95) exit
+subprog#7: analyzing (depth 7)...
+subprog#7 helper_g:
+1064: (b7) r0 = 0
+1065: (95) exit
+subprog#7: analyzing (depth 7)...
+subprog#7 helper_g:
+1064: (b7) r0 = 0
+1065: (95) exit
+subprog#7: analyzing (depth 7)...
+subprog#7 helper_g:
+1064: (b7) r0 = 0
+1065: (95) exit
+subprog#7: analyzing (depth 7)...
+subprog#7 helper_g:
+1064: (b7) r0 = 0
+1065: (95) exit
+subprog#7: analyzing (depth 7)...
+subprog#7 helper_g:
+1064: (b7) r0 = 0
+1065: (95) exit
+liveness analysis exceeded complexity limit (10001 calls)
+
+Verification failed: Verifier Limit: Limit exceeded
+
+Reason:
+  The liveness analysis complexity limit was exceeded: The verifier recomputed subprogram liveness too many times while
+  tracking stack and register reads across call paths..
+
+At:
+  helper_g @ case.c:52:2
+      50 | ...                                                                                   1062 | (b7) r0 = 0
+      51 | ...                                                                                   1063 | (95) exit
+  >>> 52 |         asm volatile (                                                            >>> 1064 | (b7) r0 = 0
+         |         ^-- error: limit exceeded: liveness analysis complexity
+      53 | ...                                                                                   1065 | (95) exit
+      54 | ...
+
+Suggestion:
+  Reduce the number of distinct call paths or argument patterns reaching these subprograms.
+
+processed 0 insns (limit 1000000) max_states_per_insn 0 total_states 0 peak_states 0 mark_read 0

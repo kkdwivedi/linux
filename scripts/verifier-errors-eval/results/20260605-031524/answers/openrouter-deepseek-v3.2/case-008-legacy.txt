@@ -1,0 +1,20 @@
+The verifier error occurs because `bpf_dynptr_slice` attempts to read 9 bytes from a stack buffer that is only 8 bytes (`char buffer[8]`). This causes an out-of-bounds memory access, as the verifier detects an invalid read from offset `-24` (the buffer start) with size 9, exceeding the buffer's bounds.
+
+The minimal fix is to change the size argument from 9 to 8, ensuring the requested slice fits within the buffer.
+
+```diff
+--- original.c
++++ fixed.c
+@@ -10,7 +10,7 @@
+ 	char buffer[8] = {};
+ 	__u64 *data;
+ 
+ 	if (bpf_dynptr_from_skb(skb, 0, &ptr))
+ 		return 1;
+ 
+-	data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
++	data = bpf_dynptr_slice(&ptr, 0, buffer, 8);
+ 
+ 	return !!data;
+ }
+```

@@ -1,0 +1,58 @@
+The verifier is rejecting the program because `bpf_cpumask_create()` returns an owned reference, and on the successful path that reference is never released.
+
+In `make_object()`:
+
+```c
+cpumask = bpf_cpumask_create();
+if (!cpumask)
+	return NULL;
+...
+return cpumask;
+```
+
+The success path returns the owned `struct bpf_cpumask *` to the caller. That is allowed, but then the caller becomes responsible for either:
+
+1. releasing it with `bpf_cpumask_release()`, or
+2. transferring ownership somewhere the verifier recognizes, e.g. into an owning kptr/map field if supported.
+
+In `entry()`:
+
+```c
+cpumask = make_object();
+__sink(cpumask);
+
+return 0;
+```
+
+`__sink(cpumask)` only prevents the compiler from optimizing the value away; it does not release or transfer ownership. So the verifier reaches `exit` with reference id `2` still live:
+
+```text
+Unreleased reference id=2 alloc_insn=0
+Owned resource (id=2) was acquired at instruction 0 and still needs to be released before this exit path.
+```
+
+The smallest source-level fix is to release the cpumask in `entry()` if `make_object()` succeeded.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -31,6 +31,8 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ 
+ 	cpumask = make_object();
+ 	__sink(cpumask);
++	if (cpumask)
++		bpf_cpumask_release(cpumask);
+ 
+ 	return 0;
+ }
+```
+
+This should satisfy the verifier because every path is then balanced:
+
+- `bpf_cpumask_create()` returns `NULL`: no reference acquired, no release needed.
+- `bpf_cpumask_create()` succeeds but `bpf_cpumask_empty()` fails: `make_object()` already releases before returning `NULL`.
+- `bpf_cpumask_create()` succeeds and `make_object()` returns the object: `entry()` releases it before exiting.

@@ -1,0 +1,55 @@
+## What the verifier is telling you
+
+The program deliberately fabricates a pointer:
+
+```c
+struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+...
+ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
+```
+
+`0x123456` is just an integer constant, so the compiler materializes it as a plain scalar:
+
+```
+2: (b7) r1 = 1193046            ; R1=0x123456   <-- scalar, not a pointer
+...
+4: (85) call bpf_cpumask_populate#61745
+R1 type=scalar expected=fp
+```
+
+`bpf_cpumask_populate()` requires its argument to be a *real pointer* (the verifier prints the allowed pointer kind as `fp`, i.e. a stack/frame pointer). A bare scalar can never be accepted there, so the verifier rejects the call with:
+
+```
+R1 type=scalar expected=fp
+```
+
+This rejection is **exactly the intended behavior** — the program is a *negative* test whose whole point is to prove that the kfunc refuses a bogus (scalar) pointer. The C code itself is fine; nothing in the body should be changed, because changing it (e.g. handing it a valid cpumask) would destroy what the test is supposed to check.
+
+## Why the case is "failing"
+
+For a `__failure` selftest, "passing" means the verifier rejects the program **with the expected message string**. The case is failing only because the `__msg(...)` annotation no longer matches the text the verifier actually emits (`type=scalar expected=fp`).
+
+## The fix
+
+Make the expected-message annotation match the verifier output. The smallest source-level change is the `__msg` string on this test:
+
+```c
+SEC("tp_btf/task_newtask")
+__failure __msg("type=scalar expected=fp")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+	u64 bits;
+	int ret;
+
+	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
+	if (!ret)
+		return 2;
+
+	return 0;
+}
+```
+
+The substring `type=scalar expected=fp` is the stable part of the verifier diagnostic (the leading `R1 ` register number can vary), so matching on that text makes the negative test report success.
+
+If instead the goal really were to make this program *load* successfully (a `__success` test), the body would have to be rewritten to pass a genuine, verifier-trusted `struct cpumask *` (e.g. one obtained from `bpf_cpumask_create()`/an allocated `bpf_cpumask`) and an initialized source buffer — but that contradicts the obvious intent (`(struct bpf_cpumask *)0x123456` plus `if (!ret) return 2;`), which is to confirm the kfunc rejects an invalid pointer.

@@ -1,0 +1,85 @@
+## Explanation
+
+The verifier performs liveness analysis (tracking which registers/stack slots are live across call paths) and enforces a limit of **10 001** such analyses. The program builds a call tree of depth 8 (entry → a → b → c → d → e → f → g), with each level calling the next **50 times**. The total number of distinct call paths reaching `helper_g` is 50⁷ ≈ 7.8 × 10¹¹, which vastly exceeds the limit.
+
+The fix is to reduce the call depth so that the total number of liveness-analysis passes stays below 10 001. With a branching factor of 50:
+
+| Depth (levels of CALLS_50) | Max paths |
+|---|---|
+| 2 | 50² = 2 500 ✔ |
+| 3 | 50³ = 125 000 ✖ |
+
+So we need **at most 2** levels of 50-call functions (plus a leaf that just exits).
+
+## Minimal Patch
+
+Keep `entry → helper_a → helper_b`, make `helper_b` a plain leaf, and remove `helper_c` through `helper_g`.
+
+```diff
+-__naked __noinline __used
+-static unsigned long helper_g(void)
+-{
+-	asm volatile (
+-		"r0 = 0;"
+-		"exit;"
+-		::: __clobber_all);
+-}
+-
+-__naked __noinline __used
+-static unsigned long helper_f(void)
+-{
+-	asm volatile (
+-		CALLS_50(helper_g)
+-		"r0 = 0;"
+-		"exit;"
+-		::: __clobber_all);
+-}
+-
+-__naked __noinline __used
+-static unsigned long helper_e(void)
+-{
+-	asm volatile (
+-		CALLS_50(helper_f)
+-		"r0 = 0;"
+-		"exit;"
+-		::: __clobber_all);
+-}
+-
+-__naked __noinline __used
+-static unsigned long helper_d(void)
+-{
+-	asm volatile (
+-		CALLS_50(helper_e)
+-		"r0 = 0;"
+-		"exit;"
+-		::: __clobber_all);
+-}
+-
+-__naked __noinline __used
+-static unsigned long helper_c(void)
+-{
+-	asm volatile (
+-		CALLS_50(helper_d)
+-		"r0 = 0;"
+-		"exit;"
+-		::: __clobber_all);
+-}
+-
+ __naked __noinline __used
+ static unsigned long helper_b(void)
+ {
+ 	asm volatile (
+-		CALLS_50(helper_c)
+ 		"r0 = 0;"
+ 		"exit;"
+ 		::: __clobber_all);
+ }
+```
+
+This leaves the call graph as:
+
+```
+entry --50x--> helper_a --50x--> helper_b (leaf)
+```
+
+Total liveness passes ≤ 50 × 50 = 2 500, well below the 10 001 limit.

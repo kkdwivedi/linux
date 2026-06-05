@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Change char buffer[8] to char buffer[9] or larger.",
+    "Change the bpf_dynptr_slice length argument from 9 to sizeof(buffer) or 8."
+  ],
+  "canonical_fix": "Make the fallback buffer at least 9 bytes or reduce the requested slice length to 8 bytes.",
+  "case_id": "case-008",
+  "category": "Call Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The fallback stack buffer is 8 bytes, but bpf_dynptr_slice is asked to use 9 bytes. The memory/length pair therefore describes a read beyond the stack object.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-no-thinking/case-008-diagnostic.txt",
+    "case_id": "case-008",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-no-thinking",
+    "prompt_bytes": 3876,
+    "prompt_path": "public/case-008/prompt_diagnostic.md",
+    "prompt_sha256": "6473479527e9eaa1732d9224d382c7fc572786756d22aa3518774f108c567394",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-no-thinking/case-008-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "disabled"
+    },
+    "run_id": "f7bedd4b-926a-4d0b-9e22-4ad488d63931",
+    "started_at": "2026-06-05T03:18:00+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "Looking at this verifier failure, I need to understand what's happening with `bpf_dynptr_slice`.\n\n## Verifier Failure Explanation\n\nThe error is:\n```\ninvalid read from stack R3 off -24+8 size 9\n```\n\nThe issue is with the `buffer` argument to `bpf_dynptr_slice`. Let's trace through:\n\n1. `char buffer[8] = {};` - allocates 8 bytes on the stack (at `fp-24`)\n2. `bpf_dynptr_slice(&ptr, 0, buffer, 9)` - passes `buffer` with length `9`\n\nThe verifier tracks that `buffer` is only 8 bytes, but the call requests 9 bytes (`r4 = 9`). This is a **buffer overflow** - we're asking `bpf_dynptr_slice` to potentially write up to 9 bytes into an 8-byte buffer.\n\nThe `bpf_dynptr_slice` helper takes:\n- `struct bpf_dynptr *ptr` (the dynptr)\n- `__u32 offset` (offset into the dynptr)\n- `void *buffer` (a buffer to copy into, or NULL)\n- `__u32 len` (length to slice)\n\nWhen `buffer` is non-NULL, the verifier checks that `buffer` has at least `len` bytes available. Here, `buffer` is 8 bytes but `len` is 9.\n\n## The Fix\n\nThe smallest fix is to make the `buffer` size match the length parameter, or reduce the length parameter to match the buffer. Since the code likely intends to read 8 bytes (the buffer size), the length should be `8`, not `9`.\n\n```patch\n--- a/case.c\n+++ b/case.c\n@@ -2007,7 +2007,7 @@ int entry(struct __sk_buff *skb)\n \tif (bpf_dynptr_from_skb(skb, 0, &ptr))\n \t\treturn 1;\n \n-\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 9);\n+\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 8);\n \n \treturn !!data;\n }\n```\n\nThis changes the length parameter from `9` to `8`, matching the actual size of `buffer[8]`. The verifier will then see that `R3` points to 8 bytes of stack memory and `R4` requests 8 bytes, which satisfies the memory/length pair contract.",
+  "must_mention": [
+    "Requested length is 9",
+    "Buffer size is 8",
+    "The memory/length pair must fit"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks data for NULL after the call",
+    "Changes the dynptr initialization but leaves 9 against an 8-byte buffer",
+    "Treats the problem as a ringbuf capacity issue"
+  ]
+}

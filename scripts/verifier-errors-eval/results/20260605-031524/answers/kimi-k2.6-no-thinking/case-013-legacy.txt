@@ -1,0 +1,85 @@
+Looking at this verifier failure, I need to analyze the stack usage and call chain.
+
+## Verifier Failure Analysis
+
+The error message is clear: `combined stack size of 3 calls is 544. Too large`
+
+Let me trace through the stack usage:
+
+**Individual function stack frames:**
+- `helper_a`: No local stack variables (just returns `skb->len`)
+- `helper_b`: `volatile char buf[MAX_STACK]` = 260 bytes
+- `helper_c`: `volatile char buf[MAX_STACK]` = 260 bytes
+- `helper_d`: `volatile char buf[MAX_STACK]` = 260 bytes
+
+**Call chain from `entry`:**
+```
+entry()
+├── helper_a(1, skb)           [0 bytes stack]
+├── helper_b(skb)              [260 bytes stack]
+│   └── helper_a(0, skb)       [0 bytes stack, but called from within helper_b]
+└── helper_c(2, skb)           [260 bytes stack]
+    ├── helper_b(skb)          [260 bytes stack]
+    └── helper_d(3, skb, 4)    [260 bytes stack]
+```
+
+Wait, let me re-read. The verifier is complaining about "3 calls" with combined stack 544. Let me check: 260 + 260 + 24 (some overhead?) or perhaps it's `helper_c` → `helper_b` → `helper_a` or `helper_c` → `helper_d` with `helper_b` also on the path.
+
+Actually, looking more carefully at the call graph from `entry`:
+- `entry` calls `helper_a`, `helper_b`, `helper_c`, `helper_d` sequentially (not nested)
+
+But `helper_c` calls both `helper_b` and `helper_d`. So the deepest call chain is:
+- `entry` → `helper_c` (260 bytes) → `helper_b` (260 bytes) → `helper_a` (0 bytes) = 520 bytes
+- Or `entry` → `helper_c` (260 bytes) → `helper_d` (260 bytes) = 520 bytes
+
+Or with some alignment: 260 + 260 + 24 padding = 544? The verifier counts combined stack size across the call chain.
+
+The BPF stack limit is 512 bytes. With 260 + 260 = 520 bytes from just two nested calls with large buffers, we exceed this.
+
+## The Fix
+
+The smallest fix is to reduce `MAX_STACK` so that two nested calls with large buffers don't exceed 512 bytes.
+
+If `MAX_STACK = 256`, then 256 + 256 = 512, which should fit (though there might be minor overhead).
+
+Actually, let me check: 544 / 2 = 272, so maybe there's some per-function overhead. If we need 3 calls worth: the message says "3 calls" - so perhaps `entry` counts too, or there's a different chain.
+
+Looking at `helper_b` → `helper_a`: that's helper_b (260) + helper_a (0) = 260
+Looking at `helper_c` → `helper_b` → `helper_a`: 260 + 260 + 0 = 520, plus alignment = 544?
+
+With `MAX_STACK = 256`: 256 + 256 = 512. But if there's 24 bytes of overhead/alignment, we might still exceed.
+
+Let me try `MAX_STACK = 240`: 240 + 240 = 480, giving more headroom.
+
+Or we could make it `252` to maximize while staying under: 252 + 252 = 504, plus ~24 = 528? Still might be tight.
+
+Actually re-reading: "combined stack size of 3 calls is 544". If 3 calls: perhaps `entry` + `helper_c` + `helper_b` = 0 + 260 + 260 + overhead = 544? Or maybe the count includes something else.
+
+To be safe, I'll reduce `MAX_STACK` to 256 or less. Given 544/2 = 272 per frame with overhead, or 544/3 ≈ 181 if evenly split. 
+
+Since two frames of 260 = 520, and we need to get under 512, let's use `MAX_STACK = 256` which gives 512 for two frames, or be safer with `252` or `240`.
+
+Actually, the issue might be that `entry` itself has some stack, plus two callees. Let me try `MAX_STACK = 252` to leave room.
+
+But wait - the smallest change that fixes this: we need to ensure no call chain exceeds 512 bytes. The deepest chain with large frames is `helper_c` → `helper_b` (both have 260-byte buffers).
+
+If we reduce `MAX_STACK` to `256`: chain is 256 + 256 = 512. This might pass if no extra overhead is counted, or might fail.
+
+Given 544 with 260+260, the ratio is 544/520 = 1.046, so overhead factor. Applying to 256: 256 * 2 * 1.046 ≈ 535. Still over 512!
+
+So we need: `MAX_STACK * 2 * (544/520) <= 512`, thus `MAX_STACK <= 512 * 520 / (2 * 544) = 266240 / 1088 ≈ 244.7`
+
+So `MAX_STACK = 244` or less to be safe. Or simply `240` for round number.
+
+Actually let me just use `MAX_STACK = 252` and see... no, calculation says ~245 max.
+
+Let me use `MAX_STACK = 240` to be comfortably safe.
+
+## Patch
+
+```c
+-#define MAX_STACK 260
++#define MAX_STACK 240
+```
+
+This reduces each large stack allocation from 260 to 240 bytes. The deepest call chain (`helper_c` → `helper_b` or similar two-level nesting with large buffers) will then use at most 480 bytes for the buffers, leaving headroom for any frame overhead while staying under the 512-byte BPF stack limit.

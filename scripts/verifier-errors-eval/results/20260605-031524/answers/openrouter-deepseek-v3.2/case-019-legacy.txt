@@ -1,0 +1,40 @@
+The verifier rejects the program due to a recursive call from `helper_a` to itself. Recursion is not allowed in eBPF because the verifier cannot prove termination or stack safety. The program uses recursion to implement a loop that runs until `r1 >= 4`. 
+
+The fix replaces the recursive call with a bounded loop inside `helper_a`, preserving the original behavior while eliminating recursion. The loop increments `r1` and sets `r0 = r1` until `r1 >= 4`, then exits.
+
+Here is the minimal source-level fix:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r1 = 0;						\
+	call helper_a;					\
+	exit;						\
+"	::: __clobber_all);
+}
+
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+	r1 += 1;					\
+l0_%=:	r0 = r1;					\
+	if r1 >= 4 goto l1_%=;				\
+	r1 += 1;					\
+	goto l0_%=;					\
+l1_%=:	exit;						\
+"	::: __clobber_all);
+}
+```
+
+The changes are confined to `helper_a`:
+- Removed the recursive `call helper_a`.
+- Added a loop that increments `r1` and checks the condition `r1 >= 4`.
+- Used unique labels (`l0_%=`, `l1_%=`) to avoid symbol conflicts.
+
+This transforms the recursion into a verifier-safe bounded loop.

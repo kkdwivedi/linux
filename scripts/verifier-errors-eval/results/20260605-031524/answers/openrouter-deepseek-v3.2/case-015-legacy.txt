@@ -1,0 +1,25 @@
+The verifier error occurs because the program uses a packet pointer `p` derived from `sk->data` before calling `helper_a`, which eventually calls `bpf_skb_pull_data(sk, 0)`. Even with `len=0`, this helper may reallocate the packet buffer, invalidating any previously derived packet pointers. After the call, the verifier marks `p` (stored in `r7`) as a scalar value rather than a valid packet pointer, leading to the "invalid mem access" error when trying to write via `*p`.
+
+The smallest fix is to move the pointer derivation and bounds check after the helper call, ensuring we use a fresh packet pointer that reflects any potential changes from `bpf_skb_pull_data`. This avoids using a stale pointer.
+
+Here is the patch:
+
+```diff
+ SEC("tc")
+ int entry(struct __sk_buff *sk)
+ {
+-	int *p = (void *)(long)sk->data;
++	int *p;
+ 
+-	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+-		return TCX_DROP;
+ 	helper_a(sk, 0);
++	p = (void *)(long)sk->data;
++	if ((void *)(p + 1) > (void *)(long)sk->data_end)
++		return TCX_DROP;
+ 	*p = 42;
+ 	return TCX_PASS;
+ }
+```
+
+This change preserves the original logic while ensuring the packet pointer is valid at the time of the write. The helper functions remain unchanged.

@@ -1,0 +1,43 @@
+## Explanation
+
+The verifier is checking the global function `helper_b()` in isolation. Inside it, the call is:
+
+```c
+return helper_a(skb) + helper_c(val, skb + 1);
+```
+
+The expression `skb + 1` advances the `struct __sk_buff *` context pointer by `sizeof(struct __sk_buff)` (192 bytes — note `r6 += 192` in the log). The result is a **modified context pointer** (`R6=ctx(imm=192)`).
+
+When a `ctx` pointer is passed as an argument to another global function (`helper_c`, whose prototype declares a `struct __sk_buff *`), the verifier requires it to be an *unmodified* context pointer, because callees may dereference it at fixed offsets. A ctx pointer with a nonzero offset cannot be safely validated:
+
+```
+dereference of modified ctx ptr R2 off=192 disallowed
+Caller passes invalid args into func#3 ('helper_c')
+```
+
+So the failure is caused purely by the `skb + 1` pointer arithmetic on the ctx pointer.
+
+## Fix
+
+Pass the unmodified `skb` pointer to `helper_c`:
+
+```c
+__attribute__((noinline))
+int helper_b(int val, struct __sk_buff *skb)
+{
+	return helper_a(skb) + helper_c(val, skb);
+}
+```
+
+### Patch
+
+```diff
+ __attribute__((noinline))
+ int helper_b(int val, struct __sk_buff *skb)
+ {
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+ }
+```
+
+This removes the offset on the context pointer, so the argument passed to `helper_c` is an unmodified `ctx()` pointer that the verifier accepts as a valid `struct __sk_buff *` argument.

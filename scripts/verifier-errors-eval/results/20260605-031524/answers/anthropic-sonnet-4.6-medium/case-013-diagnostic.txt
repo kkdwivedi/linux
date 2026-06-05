@@ -1,0 +1,20 @@
+## Explanation
+
+The verifier enforces a **512-byte combined call-stack limit** across nested BPF-to-BPF calls. The deepest call chain here is:
+
+```
+entry → helper_c → helper_b → helper_a
+```
+
+The verifier reports the 3-frame window `entry → helper_c → helper_b` already uses **544 bytes** of combined stack space. With `MAX_STACK = 260`, both `helper_c` and `helper_b` allocate 260-byte `buf` arrays, plus the small `entry` frame, totalling 544 > 512.
+
+## Fix
+
+Reduce `MAX_STACK` so that the two large frames (helper_c + helper_b) plus the entry frame stay within 512 bytes. Setting it to **248** gives 248 + 248 = 496, leaving enough headroom for the entry frame.
+
+```diff
+-#define MAX_STACK 260
++#define MAX_STACK 248
+```
+
+This keeps the structure of the test intact while ensuring no 3-deep call chain exceeds the 512-byte combined stack limit.

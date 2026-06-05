@@ -1,0 +1,29 @@
+The verifier error indicates that the program acquires a `bpf_cpumask` reference via `bpf_cpumask_create()` but fails to release it before exiting. The reference (id=2) is created in `make_object()` and returned to the main program, but the main program never calls `bpf_cpumask_release()` on it.
+
+**Root cause**: When `make_object()` succeeds (returns a non-NULL cpumask), the main program stores it on the stack via `__sink()` but doesn't release it before returning. The verifier tracks this reference and requires it to be released on all exit paths.
+
+**Fix**: Release the cpumask in the main program if it's non-NULL. The smallest fix is to add a release call after `__sink()`.
+
+Here's the patch:
+
+```diff
+--- a/prog.c
++++ b/prog.c
+@@ -36,6 +36,8 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+ 	struct bpf_cpumask *cpumask;
+ 
+ 	cpumask = make_object();
+ 	__sink(cpumask);
++	if (cpumask)
++		bpf_cpumask_release(cpumask);
+ 	return 0;
+ }
+```
+
+**Why this works**:
+1. The `if (cpumask)` check handles the NULL case from `make_object()` (when creation fails or cpumask isn't empty).
+2. `bpf_cpumask_release()` properly releases the reference, satisfying the verifier's resource lifetime requirements.
+3. The release happens on the only exit path of the program, ensuring no reference leak.
+
+Note: The `__sink()` macro prevents compiler optimization but doesn't affect runtime behavior or reference counting.

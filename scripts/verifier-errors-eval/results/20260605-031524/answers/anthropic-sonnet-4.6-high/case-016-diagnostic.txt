@@ -1,0 +1,36 @@
+## Explanation of the Failure
+
+After `bpf_sk_lookup_tcp` (instruction 19), the verifier tracks the returned socket as an **owned reference** (id=2). The program then checks:
+
+```
+if r6 == 0 goto l1_%=;   // if mark != 0, fall through
+exit;                     // ← BUG: exits with reference still held
+```
+
+When `r6 != 0`, the branch is **not** taken and the program exits at instruction 21 without calling `bpf_sk_release`. The verifier correctly rejects this as a reference leak.
+
+The `l1_%=` / `l2_%=` block correctly handles the release when `r6 == 0`, but there is no equivalent release logic on the `r6 != 0` early-exit path.
+
+## Fix
+
+Add the same release-before-exit logic to the early exit path (when `r6 != 0`):
+
+```c
+	call %[bpf_sk_lookup_tcp];			\
+	if r6 == 0 goto l1_%=;				\
+	if r0 == 0 goto l_early_exit_%=;		\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l_early_exit_%=: exit;					\
+l1_%=:	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+```
+
+### Why this works
+
+- When `r6 != 0` (early exit): we now check if `r0` (the socket) is non-NULL; if so, release it before exiting. If NULL, jump straight to exit. Either way the reference is properly disposed of.
+- When `r6 == 0`: the existing `l1_%=` path handles the release exactly as before.
+
+Every path through the program now either releases the socket reference (if non-NULL) or exits with a NULL reference — satisfying the verifier's resource lifetime safety check.

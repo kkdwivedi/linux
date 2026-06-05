@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Replace slice_len with sizeof(buffer) or sizeof(*hdr) at the call site.",
+    "Add if (slice_len > sizeof(buffer)) return ...; before bpf_dynptr_slice.",
+    "Clamp or mask slice_len so the verifier proves it cannot exceed the stack buffer."
+  ],
+  "canonical_fix": "Make the slice length verifier-bounded to the fallback buffer size before the call, or pass a compile-time constant size that is no larger than the buffer.",
+  "case_id": "case-007",
+  "category": "Memory Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The dynptr slice fallback buffer is stack memory, but the length comes from a variable global value with no verifier-proven upper bound. The verifier cannot prove the memory/length pair stays within the fallback buffer.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-v3.2/case-007-diagnostic.txt",
+    "case_id": "case-007",
+    "model": "deepseek/deepseek-v3.2",
+    "profile": "openrouter-deepseek-v3.2",
+    "prompt_bytes": 4340,
+    "prompt_path": "public/case-007/prompt_diagnostic.md",
+    "prompt_sha256": "d1d8d7dccaad3f83ecae6c603310091500168180bae26b21eb757e9dd3d1640d",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-v3.2/case-007-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "147d6215-c5f0-4f50-af63-bf20d11da856",
+    "started_at": "2026-06-05T03:20:13+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier fails because the `slice_len` parameter passed to `bpf_dynptr_slice` is an unbounded scalar loaded from a global variable. The verifier cannot guarantee that this value (which could be any 32-bit number) fits within the stack-allocated `buffer` of fixed size `sizeof(struct ethhdr)`. This violates the verifier's requirement that memory-length pairs must be provably safe.\n\nThe simplest fix is to replace the dynamic `slice_len` with the compile-time constant `sizeof(buffer)`, which the verifier can directly validate against the buffer size.\n\n```diff\n--- original.c\n+++ fixed.c\n@@ -12,7 +12,7 @@ __u32 slice_len = sizeof(struct ethhdr);\n SEC(\"?tc\")\n int entry(struct __sk_buff *skb)\n {\n \tstruct bpf_dynptr ptr;\n \tstruct ethhdr *hdr;\n \tchar buffer[sizeof(*hdr)] = {};\n \n \tbpf_dynptr_from_skb(skb, 0, &ptr);\n \n-\thdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);\n+\thdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));\n \tif (!hdr)\n \t\treturn SK_DROP;\n \n \treturn SK_PASS;\n }\n```",
+  "must_mention": [
+    "R4/length is variable or unbounded",
+    "The fallback buffer has fixed stack size",
+    "Verifier needs a length upper bound before the call"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks the returned hdr pointer",
+    "Increases unrelated ringbuf size",
+    "Changes the dynptr source but leaves variable length unbounded"
+  ]
+}

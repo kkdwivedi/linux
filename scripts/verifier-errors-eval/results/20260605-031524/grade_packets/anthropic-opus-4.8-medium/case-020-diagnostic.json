@@ -1,0 +1,68 @@
+{
+  "acceptable_fixes": [
+    "Reduce CALLS_50 fan-out or the number of helper layers.",
+    "Pass a stable non-FP-derived argument pattern when possible.",
+    "Replace the generated call tree with a simpler bounded loop or less duplicated call structure."
+  ],
+  "canonical_fix": "Reduce the number of distinct call paths or argument patterns reaching the subprograms, for example by reducing fan-out/depth, consolidating calls, or avoiding many distinct FP-offset arguments.",
+  "case_id": "case-020",
+  "category": "Verifier Limit",
+  "difficulty": "hard",
+  "expected_explanation": "The program creates an enormous number of distinct bpf2bpf call paths and frame-pointer-derived argument patterns. Liveness analysis exceeds its complexity limit while recomputing subprogram liveness across those paths.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-020-diagnostic.txt",
+    "case_id": "case-020",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 4110,
+    "prompt_path": "public/case-020/prompt_diagnostic.md",
+    "prompt_sha256": "cb7344658f86bd080c64c73a9c8ee3095a7de5b045356c00872dce60afb5bfb8",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-020-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "b23835c9-649b-4c4c-ad1c-1ac682f21655",
+    "started_at": "2026-06-05T03:17:27+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## What the verifier is complaining about\n\nThe error is **not** about instruction count or state explosion \u2014 it's a specific limit:\n\n```\nliveness analysis exceeded complexity limit (10001 calls)\nVerification failed: Verifier Limit: Limit exceeded\n```\n\nThis program builds a *call tree*, not a call chain:\n\n- `entry` calls `helper_a` **50** times\n- `helper_a` calls `helper_b` **50** times\n- \u2026 down through `helper_g`\n\nThere are 7 call edges from `entry` down to `helper_g`, each with a fan-out of 50.\nSo the number of distinct call *paths* that reach `helper_g` is roughly:\n\n```\n50^7 \u2248 7.8 \u00d7 10^11\n```\n\nWhen the verifier finishes analyzing a callee it has to propagate stack/register\n**liveness** information back up into the caller frame, and it does this once per\ncall path. The kernel caps the number of these liveness recomputations at\n**10001**. With a fan-out of 50 over 7 levels, that cap is blown almost\nimmediately \u2014 hence the repeated\n\n```\nsubprog#7: analyzing (depth 7)...\n```\nlines followed by the limit error. This is purely a combinatorial-blowup problem\nin the call graph; the actual instructions are trivial (`r0 = 0; exit`).\n\n## Smallest fix\n\nReduce the *fan-out* (or depth) so the number of call paths reaching the deepest\nsubprogram stays under the 10001 liveness-recomputation budget.\n\nWith 7 nested levels you need a branching factor `b` such that `b^7 < 10001`:\n\n- `b = 4` \u2192 `4^7 = 16384` \u274c (still over)\n- `b = 3` \u2192 `3^7 = 2187` \u2705\n\nSo replacing the `CALLS_50` fan-out with a fan-out of 3 is sufficient and is the\nsmallest structural change:\n\n```c\n/* fan-out of 3 instead of 50 keeps liveness recomputations under the limit */\n#define CALLS_3(fn) \\\n\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)\n```\n\nand change every `CALLS_50(...)` to `CALLS_3(...)`, e.g.:\n\n```c\nstatic unsigned long helper_f(void)\n{\n\tasm volatile (\n\t\tCALLS_3(helper_g)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n/* ... same substitution in helper_e, helper_d, helper_c, helper_b, helper_a, entry ... */\n```\n\n(You can delete the now-unused `CALLS_10`/`CALLS_50` macros.)\n\n### Why this works\n- The verification logic and instruction shape are unchanged; only the number of\n  call paths is reduced.\n- `3^7 = 2187` liveness recomputations is comfortably below the `10001` limit, so\n  the liveness analysis completes instead of aborting with \u201cLimit exceeded\u201d.\n\nEquivalent alternatives that achieve the same goal:\n- Keep the larger fan-out but **remove several `helper_*` levels** so the tree is\n  shallower (reduce the exponent rather than the base), or\n- Use any branching factor/depth combination whose product of fan-outs is `< 10001`.\n\nThe key idea the verifier\u2019s suggestion is pointing at \u2014 *\u201cReduce the number of\ndistinct call paths\u201d* \u2014 is exactly what shrinking the fan-out accomplishes.",
+  "must_mention": [
+    "The failure is verifier liveness complexity, not runtime recursion",
+    "Many call paths or distinct FP offsets drive the limit",
+    "The fix is to simplify the call/argument pattern"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only increases a runtime loop bound",
+    "Adds packet or memory bounds checks",
+    "Suggests releasing a resource"
+  ]
+}

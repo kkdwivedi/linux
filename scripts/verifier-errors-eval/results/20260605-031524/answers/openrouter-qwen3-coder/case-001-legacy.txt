@@ -1,0 +1,48 @@
+Looking at the verifier log, the issue is clear:
+
+**Verifier Failure Explanation:**
+The verifier expects the first argument (R1) to `bpf_cpumask_populate` to be a valid pointer type, but it's receiving a scalar value (0x123456). The error message "R1 type=scalar expected=fp" indicates that R1 should be a frame pointer (valid memory address) rather than a raw scalar value.
+
+The problem is in this line:
+```c
+struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+```
+
+This creates a pointer from a raw integer value, which the verifier rejects as unsafe. The verifier requires all pointers to be properly derived from valid memory locations.
+
+**Fix:**
+The smallest fix is to use `bpf_cpumask_create()` to properly allocate a cpumask instead of casting an arbitrary integer to a pointer.
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *valid_mask;
+	u64 bits = 0;
+	int ret;
+
+	valid_mask = bpf_cpumask_create();
+	if (!valid_mask)
+		return 0;
+
+	ret = bpf_cpumask_populate((struct cpumask *)valid_mask, &bits, sizeof(bits));
+	if (!ret)
+		return 2;
+
+	return 0;
+}
+```
+
+The key changes:
+1. Replace the invalid pointer cast with `bpf_cpumask_create()` which returns a properly allocated cpumask
+2. Initialize `bits` to 0 to avoid using uninitialized memory
+3. Add a null check for the created mask
+4. Use the valid pointer instead of the fake one
+
+This satisfies the verifier because `bpf_cpumask_create()` returns a valid pointer that the verifier can track and validate.

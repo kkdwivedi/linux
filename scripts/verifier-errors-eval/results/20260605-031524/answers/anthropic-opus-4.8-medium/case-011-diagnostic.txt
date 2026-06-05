@@ -1,0 +1,29 @@
+## Explanation
+
+The verifier is reporting an **unreleased reference** for the second dynptr (`ptr2`, id=3).
+
+Trace the two paths through the program:
+
+- **`sample == NULL` path (lines 104–107):** both `ptr1` and `ptr2` are released via `bpf_ringbuf_discard_dynptr`. This path is fine.
+- **`sample != NULL` path (the fall-through, lines 110):** only `ptr1` is released (`bpf_ringbuf_submit_dynptr(&ptr1, 0)`). `ptr2` is **never** submitted or discarded before `return 0`.
+
+A ringbuf dynptr reserved with `bpf_ringbuf_reserve_dynptr` is an acquired/owned resource that must be released (submit or discard) on **every** exit path. Since the success path leaks `ptr2`, the verifier rejects the program:
+
+```
+Unreleased reference id=3 alloc_insn=14
+```
+
+## Fix
+
+Release `ptr2` on the success path as well. The smallest change is to discard (or submit) `ptr2` before the final `return`:
+
+```c
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_discard_dynptr(&ptr2, 0);   /* <-- add this */
+
+	return 0;
+```
+
+This guarantees that both reserved dynptrs are released on every path before the program exits, satisfying the verifier's resource-lifetime check.
+
+(If the test intends `ptr2`'s data to be used, you'd submit instead of discard, but functionally either releases the reference and clears the verifier error.)

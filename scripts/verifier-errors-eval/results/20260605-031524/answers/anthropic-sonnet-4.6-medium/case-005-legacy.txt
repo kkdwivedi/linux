@@ -1,0 +1,28 @@
+## Explanation
+
+The verifier error is:
+
+```
+sleepable helper bpf_copy_from_user#148 in non-preemptible region
+```
+
+`bpf_copy_from_user()` is a **sleepable** helper — it may sleep while faulting in user pages. The BPF verifier forbids calling sleepable helpers inside a `bpf_preempt_disable()` / `bpf_preempt_enable()` region because preemption must remain enabled for sleeping to be safe.
+
+## Fix
+
+Move `bpf_copy_from_user()` **outside** the preempt-disabled region:
+
+```c
+SEC("?fentry.s/sys_getpgid")
+int entry(void *ctx)
+{
+	u32 data;
+
+	bpf_copy_from_user(&data, sizeof(data), NULL);
+	bpf_preempt_disable();
+	bpf_preempt_enable();
+	return 0;
+}
+```
+
+This satisfies the verifier because the sleepable helper is no longer called in a non-preemptible region. The `bpf_preempt_disable/enable` pair (now wrapping nothing) remains valid if needed for future non-sleepable critical section work.

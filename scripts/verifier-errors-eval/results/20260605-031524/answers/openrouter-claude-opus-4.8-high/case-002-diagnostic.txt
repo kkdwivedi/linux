@@ -1,0 +1,37 @@
+## Explanation
+
+`make_object()` is a static helper that gets fully inlined into `entry()`. It calls `bpf_cpumask_create()`, which returns an **acquired/owned reference** (a `trusted_ptr_or_null_bpf_cpumask` that the verifier tracks as `refs=2`, id=2).
+
+That reference must be released (via `bpf_cpumask_release()`) or transferred (e.g. stored into a map via `bpf_kptr_xchg()`) on **every** path before the program exits.
+
+In `entry()` the returned cpumask is only passed to `__sink()` (which just forces the compiler to keep the value, it does not consume the reference) and then the program returns 0. So on the success path the reference is still held at `exit`:
+
+```
+Unreleased reference id=2 alloc_insn=0
+```
+
+The verifier correctly reports a resource leak.
+
+## Fix
+
+Release the cpumask in the caller before returning. The smallest change:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *cpumask;
+
+	cpumask = make_object();
+	if (cpumask)
+		bpf_cpumask_release(cpumask);
+
+	return 0;
+}
+```
+
+### Why this satisfies the verifier
+- On the path where `bpf_cpumask_create()` returned NULL (or `bpf_cpumask_empty()` failed and `make_object` already released and returned NULL), `cpumask == NULL`, so we skip the release — and on those paths there is no outstanding reference (the failure path inside `make_object` already calls `bpf_cpumask_release`).
+- On the success path `cpumask` is a valid trusted pointer holding the acquired reference; `bpf_cpumask_release(cpumask)` consumes it.
+
+Thus every exit path either never held a reference or has released it, eliminating the leak. The `__sink()` is no longer needed because `cpumask` is now actually used.

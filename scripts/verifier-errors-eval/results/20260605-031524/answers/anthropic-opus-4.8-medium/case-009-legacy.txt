@@ -1,0 +1,58 @@
+## What the verifier is complaining about
+
+The very last failing instruction is:
+
+```
+3: (79) r1 = *(u64 *)(r0 +0)   ; R1=rcu_ptr_or_null_task_struct(id=10)
+4: (85) call bpf_task_acquire#63762
+Possibly NULL pointer passed to trusted R1
+```
+
+In `BPF_PROG(entry, ...)` you do:
+
+```c
+acquired = bpf_task_acquire(value->task);
+```
+
+`value->task` is a kptr field. When loaded, the verifier types it as
+`rcu_ptr_or_null_task_struct` — i.e. **possibly NULL**. `bpf_task_acquire()`
+requires a *trusted, non‑NULL* pointer argument. Because you pass the loaded
+pointer directly without first checking it for NULL, the verifier rejects the
+call.
+
+(Note the earlier `if (!value)` check only proves that the *map value pointer*
+is non‑NULL; it says nothing about the `task` field stored inside it, which was
+initialized to NULL on insert.)
+
+## Smallest fix
+
+Load the kptr into a local variable and NULL‑check it before acquiring:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct task_struct *acquired, *kptr;
+	struct map_value *value;
+
+	value = helper_a(task);
+	if (!value)
+		return 0;
+
+	kptr = value->task;
+	if (!kptr)
+		return 0;
+
+	acquired = bpf_task_acquire(kptr);
+	if (!acquired)
+		return 0;
+
+	bpf_task_release(acquired);
+	return 0;
+}
+```
+
+The `if (!kptr) return 0;` narrows the type from
+`rcu_ptr_or_null_task_struct` to a non‑NULL `rcu_ptr_task_struct`, which is a
+valid trusted argument for `bpf_task_acquire()`, so the "Possibly NULL pointer
+passed to trusted R1" error goes away.

@@ -1,0 +1,34 @@
+## Explanation
+
+The verifier error is:
+
+```
+program of this type cannot use helper bpf_ktime_get_coarse_ns#160
+```
+
+`bpf_ktime_get_coarse_ns` is **not** available to `kprobe`-type programs. The kernel's helper access control table does not grant kprobes access to this helper. `bpf_ktime_get_ns` (the "precise" variant) *is* allowed for kprobe programs.
+
+## Fix
+
+Replace `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns` in both the inline assembly call and the `__imm` constraint:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("kprobe")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_ns];			\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+```
+
+`bpf_ktime_get_ns` is permitted for `BPF_PROG_TYPE_KPROBE` programs and is the appropriate monotonic clock helper to use here. The coarse variant (`bpf_ktime_get_coarse_ns`) is restricted to a narrower set of program types (e.g., certain cgroup and socket programs).

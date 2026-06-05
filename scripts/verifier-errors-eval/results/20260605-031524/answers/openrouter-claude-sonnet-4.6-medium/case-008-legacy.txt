@@ -1,0 +1,29 @@
+## Explanation of the Verifier Failure
+
+The error message is:
+```
+invalid read from stack R3 off -24+8 size 9
+R3 and R4 memory, len pair leads to invalid memory access
+```
+
+The call is:
+```c
+data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
+```
+
+`bpf_dynptr_slice` receives the stack buffer (`buffer`, R3) and the length (`9`, R4). The verifier checks that the stack buffer pointer is backed by at least `len` bytes. Here:
+- `buffer` is `char buffer[8]` → 8 bytes on the stack
+- The requested length is `9`
+
+`-24 + 8 = -16`, so reading 9 bytes from offset `-24` would access up to `-24 + 9 = -15`, which goes 1 byte past the end of the 8-byte buffer. The verifier rejects this out-of-bounds stack access.
+
+## Fix
+
+Either increase the buffer to match the requested size, or reduce the requested size to match the buffer. The smallest fix is to make `buffer` large enough:
+
+```diff
+-	char buffer[8] = {};
++	char buffer[9] = {};
+```
+
+This ensures the stack buffer is at least as large as the `len` argument passed to `bpf_dynptr_slice`, satisfying the verifier's bounds check.

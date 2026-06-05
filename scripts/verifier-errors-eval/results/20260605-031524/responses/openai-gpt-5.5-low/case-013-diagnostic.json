@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier failure is due to the eBPF per-call-chain stack limit.\n\nEach BPF subprogram gets its own stack frame, but the verifier also enforces a maximum combined stack depth of 512 bytes across nested calls. In this program, both `helper_b()` and `helper_c()` allocate:\n\n```c\nvolatile char buf[MAX_STACK] = {};\n```\n\nwith:\n\n```c\n#define MAX_STACK 260\n```\n\nThat array, plus compiler-generated spills/alignment, makes each of those frames about 272 bytes. The failing call chain is:\n\n```text\nentry -> helper_c -> helper_b\n```\n\nSo the combined stack usage is approximately:\n\n```text\nhelper_c frame: 272 bytes\nhelper_b frame: 272 bytes\ntotal:          544 bytes\n```\n\nwhich exceeds the verifier\u2019s 512-byte combined stack limit.\n\nThe smallest likely source-level fix is to reduce the local buffer size so that each of those frames fits within 256 bytes after compiler spill/alignment overhead. Since there appears to be roughly 8 bytes of extra frame usage, reducing `MAX_STACK` from `260` to `248` should bring each frame down to about 256 bytes, making the worst nested chain:\n\n```text\n256 + 256 = 512\n```\n\nwhich should satisfy the verifier.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -2,7 +2,7 @@\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n \n-#define MAX_STACK 260\n+#define MAX_STACK 248\n \n static __attribute__((noinline))\n int helper_a(int val, struct __sk_buff *skb)\n```\n\nWhy this should pass: it reduces the stack frame size of `helper_b()`, `helper_c()`, and `helper_d()` enough that the deepest relevant nested call chain no longer exceeds the verifier\u2019s 512-byte combined stack depth limit.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-low/case-013-diagnostic.txt",
+    "case_id": "case-013",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-low",
+    "prompt_bytes": 2658,
+    "prompt_path": "public/case-013/prompt_diagnostic.md",
+    "prompt_sha256": "044070894a5a67f43ab32448001b1bd67c0db88fee4087d1bb67f71a9273513d",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-low/case-013-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "low"
+    },
+    "run_id": "9e2bc17a-ce3d-4fc6-b5d7-2309dba36c9c",
+    "started_at": "2026-06-05T03:15:32+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.0038,
+    "output_cost_usd": 0.02826,
+    "total_cost_usd": 0.03206
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 760,
+    "output_tokens": 942,
+    "raw_usage": {
+      "input_tokens": 760,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 942,
+      "output_tokens_details": {
+        "reasoning_tokens": 509
+      },
+      "total_tokens": 1702
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 509,
+    "total_tokens": 1702
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629354,
+    "created_at": 1780629332,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_05f718dbc3fef4ca006a223f54f9b481a09c86cdb02a0b6bb1",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_05f718dbc3fef4ca006a223f558b9c81a097e5fb46bb2022c8",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier failure is due to the eBPF per-call-chain stack limit.\n\nEach BPF subprogram gets its own stack frame, but the verifier also enforces a maximum combined stack depth of 512 bytes across nested calls. In this program, both `helper_b()` and `helper_c()` allocate:\n\n```c\nvolatile char buf[MAX_STACK] = {};\n```\n\nwith:\n\n```c\n#define MAX_STACK 260\n```\n\nThat array, plus compiler-generated spills/alignment, makes each of those frames about 272 bytes. The failing call chain is:\n\n```text\nentry -> helper_c -> helper_b\n```\n\nSo the combined stack usage is approximately:\n\n```text\nhelper_c frame: 272 bytes\nhelper_b frame: 272 bytes\ntotal:          544 bytes\n```\n\nwhich exceeds the verifier\u2019s 512-byte combined stack limit.\n\nThe smallest likely source-level fix is to reduce the local buffer size so that each of those frames fits within 256 bytes after compiler spill/alignment overhead. Since there appears to be roughly 8 bytes of extra frame usage, reducing `MAX_STACK` from `260` to `248` should bring each frame down to about 256 bytes, making the worst nested chain:\n\n```text\n256 + 256 = 512\n```\n\nwhich should satisfy the verifier.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -2,7 +2,7 @@\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n \n-#define MAX_STACK 260\n+#define MAX_STACK 248\n \n static __attribute__((noinline))\n int helper_a(int val, struct __sk_buff *skb)\n```\n\nWhy this should pass: it reduces the stack frame size of `helper_b()`, `helper_c()`, and `helper_d()` enough that the deepest relevant nested call chain no longer exceeds the verifier\u2019s 512-byte combined stack depth limit.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_05f718dbc3fef4ca006a223f63574c81a0824782422027285d",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "low",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 760,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 942,
+      "output_tokens_details": {
+        "reasoning_tokens": 509
+      },
+      "total_tokens": 1702
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

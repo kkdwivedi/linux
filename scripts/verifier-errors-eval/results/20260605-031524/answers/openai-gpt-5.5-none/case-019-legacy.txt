@@ -1,0 +1,69 @@
+The verifier rejects this program because `helper_a()` contains a direct self-call:
+
+```asm
+l0_%=: call helper_a;
+```
+
+Even though the code appears to have a bounded condition:
+
+```asm
+r1 += 1;
+...
+if r1 < 4 goto l0_%=;
+```
+
+the BPF verifier does not allow recursive subprogram calls at all. BPF-to-BPF calls must form an acyclic call graph. The verifier detects that `helper_a()` calls itself and rejects the program immediately with:
+
+```text
+recursive call from helper_a() to helper_a()
+```
+
+This is a structural call-graph rejection, not a failure to prove the loop bound.
+
+The smallest source-level fix is to replace the recursive self-call with an explicit bounded loop using a local jump. That preserves the intended behavior — increment `r1` until it reaches `4`, return that value in `r0` — without using recursion.
+
+Patch:
+
+```diff
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+
+ SEC("tracepoint")
+ __naked void entry(void)
+ {
+ 	asm volatile ("					\
+ 	r1 = 0;						\
+ 	call helper_a;					\
+ 	exit;						\
+ "	::: __clobber_all);
+ }
+
+ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+ 	asm volatile ("					\
++l1_%=:							\
+ 	r1 += 1;					\
+ 	r0 = r1;					\
+ 	if r1 < 4 goto l0_%=;				\
+ 	exit;						\
+-l0_%=:	call helper_a;					\
++l0_%=:	goto l1_%=;					\
+ 	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+After the change, `helper_a()` no longer calls itself. The backward jump forms a bounded loop instead:
+
+```asm
+l1:
+    r1 += 1;
+    r0 = r1;
+    if r1 < 4 goto l0;
+    exit;
+l0:
+    goto l1;
+```
+
+Starting from `r1 = 0`, the loop executes until `r1 == 4`, then exits with `r0 = 4`. Since the verifier can track the scalar induction variable and the loop bound is small and explicit, this is likely to pass verification while preserving the original intent without forbidden recursion.

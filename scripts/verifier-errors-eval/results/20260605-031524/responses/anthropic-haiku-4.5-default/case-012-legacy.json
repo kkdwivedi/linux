@@ -1,0 +1,79 @@
+{
+  "answer_text": "## Verifier Failure Analysis\n\nThe verifier is rejecting this program for two reasons:\n\n1. **\"arg#0 reference type('UNKNOWN') size cannot be determined: -22\"** - The `bpf_local_irq_save()` helper expects a pointer to a known-sized type, but the verifier cannot determine the size of what `&flags` points to in the generated code context.\n\n2. **\"sleepable global function helper_a() called in IRQ-disabled region\"** - The function `helper_a()` is marked `__noinline` and contains `bpf_copy_from_user()`, which is a sleepable operation. However, it's being called after `bpf_local_irq_save()`, which disables interrupts. The verifier tracks IRQ-disabled regions and prevents sleepable helpers from being called within them.\n\n## Root Cause\n\nThe core issue is the mismatch between:\n- Calling a sleepable function (`bpf_copy_from_user`) inside an IRQ-disabled section (between `bpf_local_irq_save` and `bpf_local_irq_restore`)\n- This violates kernel rules because you cannot sleep when IRQs are disabled\n\n## Smallest Fix\n\nMove the `helper_a(0)` call **outside** the IRQ-disabled region:\n\n```c\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\thelper_a(0);\n\tbpf_local_irq_save(&flags);\n\tbpf_local_irq_restore(&flags);\n\treturn 0;\n}\n```\n\n**Why this works:** By moving `helper_a(0)` before `bpf_local_irq_save()`, the sleepable function is no longer called within an IRQ-disabled region, satisfying the verifier's constraint that sleepable operations cannot execute with interrupts disabled.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-012-legacy.txt",
+    "case_id": "case-012",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 1526,
+    "prompt_path": "public/case-012/prompt_legacy.md",
+    "prompt_sha256": "3c7396a0a94e22b4ffa05f47bf695c68faeca27ec07a26da548d621cb3473cdb",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-012-legacy.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "e32523e0-a0eb-41c7-be85-e9f0df286b0c",
+    "started_at": "2026-06-05T04:22:31+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000681,
+    "output_cost_usd": 0.00229,
+    "total_cost_usd": 0.0029709999999999997
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 681,
+    "output_tokens": 458,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 681,
+      "output_tokens": 458,
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1139
+  },
+  "raw_response": {
+    "content": [
+      {
+        "text": "## Verifier Failure Analysis\n\nThe verifier is rejecting this program for two reasons:\n\n1. **\"arg#0 reference type('UNKNOWN') size cannot be determined: -22\"** - The `bpf_local_irq_save()` helper expects a pointer to a known-sized type, but the verifier cannot determine the size of what `&flags` points to in the generated code context.\n\n2. **\"sleepable global function helper_a() called in IRQ-disabled region\"** - The function `helper_a()` is marked `__noinline` and contains `bpf_copy_from_user()`, which is a sleepable operation. However, it's being called after `bpf_local_irq_save()`, which disables interrupts. The verifier tracks IRQ-disabled regions and prevents sleepable helpers from being called within them.\n\n## Root Cause\n\nThe core issue is the mismatch between:\n- Calling a sleepable function (`bpf_copy_from_user`) inside an IRQ-disabled section (between `bpf_local_irq_save` and `bpf_local_irq_restore`)\n- This violates kernel rules because you cannot sleep when IRQs are disabled\n\n## Smallest Fix\n\nMove the `helper_a(0)` call **outside** the IRQ-disabled region:\n\n```c\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\thelper_a(0);\n\tbpf_local_irq_save(&flags);\n\tbpf_local_irq_restore(&flags);\n\treturn 0;\n}\n```\n\n**Why this works:** By moving `helper_a(0)` before `bpf_local_irq_save()`, the sleepable function is no longer called within an IRQ-disabled region, satisfying the verifier's constraint that sleepable operations cannot execute with interrupts disabled.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_017eSAKTCnN1FMST4PnPCabU",
+    "model": "claude-haiku-4-5-20251001",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 681,
+      "output_tokens": 458,
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

@@ -1,0 +1,30 @@
+The verifier rejects the program at:
+
+```text
+5: (85) call bpf_copy_from_user#148
+sleepable helper bpf_copy_from_user#148 in non-preemptible region
+```
+
+`bpf_preempt_disable()` starts a verifier-tracked non-preemptible region. `bpf_copy_from_user()` is a sleepable helper because copying from user memory may fault and sleep. Even though the program is in a sleepable section (`fentry.s`), it is not allowed to call a sleepable helper while preemption is disabled. The later `bpf_preempt_enable()` does not help because the invalid helper call happens before it.
+
+The smallest fix is to ensure `bpf_copy_from_user()` is called outside the preempt-disabled region. For example, move it after `bpf_preempt_enable()`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..1111111 100644
+--- a/case.c
++++ b/case.c
+@@ -9,8 +9,8 @@ int entry(void *ctx)
+ 	u32 data;
+ 
+ 	bpf_preempt_disable();
+-	bpf_copy_from_user(&data, sizeof(data), NULL);
+ 	bpf_preempt_enable();
++	bpf_copy_from_user(&data, sizeof(data), NULL);
+ 	return 0;
+ }
+```
+
+Alternatively, if the preempt-disabled region is not needed, simply remove the `bpf_preempt_disable()` / `bpf_preempt_enable()` calls. The key requirement is that `bpf_copy_from_user()` must not execute while the verifier state is non-preemptible.

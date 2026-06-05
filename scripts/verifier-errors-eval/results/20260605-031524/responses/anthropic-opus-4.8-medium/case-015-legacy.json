@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nThe failure is on this instruction:\n\n```\n10: (63) *(u32 *)(r7 +0) = r1\nR7 invalid mem access 'scalar'\n```\n\n`R7` holds the packet pointer `p` derived from `sk->data` and bounds-checked against `sk->data_end` at insns 3\u20135. At that point it's a valid `pkt` pointer with `r=4`.\n\nBut at insn 8 you call the **global** function `helper_a()`:\n\n```\n8: (85) call pc+4\nFunc#1 ('helper_a') is global and assumed valid.\n```\n\nWhen the verifier encounters a call to a *global* subprogram, it cannot see what that function does to the packet (and indeed `helper_a \u2192 helper_b \u2192 bpf_skb_pull_data` can reallocate/move the packet buffer). To stay sound, the verifier **invalidates all packet pointers** held in registers across such a call. So after the call `R7` is no longer a `pkt` pointer \u2014 it has been demoted to a `scalar`, and writing through it at insn 10 is rejected.\n\nThe earlier bounds check is now stale: it validated the *old* packet pointer, but `bpf_skb_pull_data()` may have changed `data`/`data_end`, so the verifier requires you to re-derive and re-validate the pointer after the call.\n\n## Fix\n\nDerive and bounds-check the packet pointer **after** the function call, so the verifier has a fresh, valid `pkt` pointer when you dereference it:\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p;\n\n\thelper_a(sk, 0);\n\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nHere `p` is loaded from `sk->data` and checked against `sk->data_end` only after `helper_a()` returns, so no packet pointer crosses the global-call boundary. The pointer used for `*p = 42` is a valid `pkt` register again, and the write passes verification.\n\n(Equivalently, you could keep the original order but re-load `p` and repeat the `data_end` bounds check after the call before dereferencing; the reorder above is the smallest change.)",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-015-legacy.txt",
+    "case_id": "case-015",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 1984,
+    "prompt_path": "public/case-015/prompt_legacy.md",
+    "prompt_sha256": "dc0fc1e91b61bdf915966f9cbe5ae652d8b1776a8af859d12e6cd23d52604af2",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-015-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "57ffc947-ba86-484f-a0d8-23f08366ab8a",
+    "started_at": "2026-06-05T03:17:22+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.005745,
+    "output_cost_usd": 0.0293,
+    "total_cost_usd": 0.035045
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1149,
+    "output_tokens": 1172,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1149,
+      "output_tokens": 1172,
+      "output_tokens_details": {
+        "thinking_tokens": 403
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 2321
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EtsJCmMIDhgCKkBSYionbrBqOeCX5hRpkeJn44gpgdma/kcW02sk7MrRXcJBXF+gcnzVLThAMCcqyNgIvF9Gw+zL658pyp35eO1dMg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDBmlsKKoKWCRLkB5xRoMIX2GcjIvWlUZub3bIjChPB342F+bjaW4Thxa6Mez35Ta7NFKkv0jFnARXozhKSnK7lKu6cA1nE5EbimCoIYqpQjeCK6YudsPLj7HBNi959RH57g8rJkLUcrlci/FqGf8F0P83t2d0WwMog3fEVXN3cGMEU7NhfnwhU/U4XUyvEdELgVbY0fAH/N8Rr75YrH5I3vOilz7/xfyNM0LLnY6FN26AC4twLgLHoWjouiPjPzqZ1uMMGrcGYzEMs61pi40BFglUgrZ/99fjDJDKJsWW6ApAoh5cDus6h6+5x19Qj2qLN1mMaIBCqQlu2UlPVD2e3okmqW1+RmH8x+Fp6IrV7PTKjeypW+dhOCAyl0oPmOUR36jM4pe1WHiDaUrwqp4IG3mhtCaLuka4zwgIuYFnTgcEbzRWQ2vSQH2Uet5+NrRErz/UoTEGWz1cB96km1H3rgQo6oZ7hvEV1XxMr7PpikpLKpUeBVJfZX/KAtEgxfxkq+KsvxpqSxhTwukg1uU6Ep21JAfJFTBQ5CSF78zQVTX2Oe/AosAGKdVZ1wuFPOSzVbUSam+5EVjrQdvb3+eyZy9N5fJ3DyDMTogqCpa51OcBtzGoxfRK8BLbpVUHstsl0s3glwfHwKSqchqCaxyYtOS2JzOhwkOWItgLXUHY9Is6vbLCit77t2UU/3FEPs5clUzLdYo+nkvDW28vIWJqnXvLDnFLSodQ72HbsT5eW9c8F5ocTC1ilH72MyryHf2R1HGJPJNev63I2CGGZBagwpru3chRFj2N1BvkmkyAkB9SXqOVLNQC0zSS5uYG+8Ap+lrZH4w7Tz4vL0y/Rq9oMA8A7IfZClXfwnORJ/qKvoKrfBv0mWOD0tQhBBdEvAnrXtyGyk8LEf1OOoW56xOxPI6coqIem2eNE2XkPDBVsNofuU2tkTjHpm2fdCdDM1GB876CnbYflnsAWp6AgrrjjZEouHmL1A0DVA8LI1XxEMCjI0zEjNELDvkX9W2W5yYU6nXK/Z6/vMlWcwuPTvgdPHtJquVuYLWBSTT9yZjSxZu4q01cP0qozYzlJgctMGLWWvMu88E433UxiQqpawLZO6ihKifis0PUD/LbdQblhn/KhcxYU78VEyJFh8BYrIrTillgZI5nGReFz1pwszG5EA3R9L0IlTFLlLYwYdw3/eXspj0v7/tdw2+iZbZmWZ45Js9tbhr0pVyOsgArFnTUgnCXsRiCC0DnlfN1Ya1JD3pKo9mR1D+zNtXmnoaCB4Qg3CScPjSDLmhdRa3Zqio280bZ4oLRf/e+SFzJ0biz4XJ2pBvXe5cSmtu8rkcc8O2h71VmoIvzZo5hbWoavCQecDWweG2R4T7RXXdvj75Ozy5jyQiHxsU9To2zXiEifxjwPIVDHgChnbp9QurAQGWiHM+8mfuZtLq6GAeSj15lhOvelu+VdE5Hwjz14knTowGx6gRQiXkuRP2npEeOhh3KWw3JgE9Crv8qmcyjTFbsNQSULA86hgB",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nThe failure is on this instruction:\n\n```\n10: (63) *(u32 *)(r7 +0) = r1\nR7 invalid mem access 'scalar'\n```\n\n`R7` holds the packet pointer `p` derived from `sk->data` and bounds-checked against `sk->data_end` at insns 3\u20135. At that point it's a valid `pkt` pointer with `r=4`.\n\nBut at insn 8 you call the **global** function `helper_a()`:\n\n```\n8: (85) call pc+4\nFunc#1 ('helper_a') is global and assumed valid.\n```\n\nWhen the verifier encounters a call to a *global* subprogram, it cannot see what that function does to the packet (and indeed `helper_a \u2192 helper_b \u2192 bpf_skb_pull_data` can reallocate/move the packet buffer). To stay sound, the verifier **invalidates all packet pointers** held in registers across such a call. So after the call `R7` is no longer a `pkt` pointer \u2014 it has been demoted to a `scalar`, and writing through it at insn 10 is rejected.\n\nThe earlier bounds check is now stale: it validated the *old* packet pointer, but `bpf_skb_pull_data()` may have changed `data`/`data_end`, so the verifier requires you to re-derive and re-validate the pointer after the call.\n\n## Fix\n\nDerive and bounds-check the packet pointer **after** the function call, so the verifier has a fresh, valid `pkt` pointer when you dereference it:\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p;\n\n\thelper_a(sk, 0);\n\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nHere `p` is loaded from `sk->data` and checked against `sk->data_end` only after `helper_a()` returns, so no packet pointer crosses the global-call boundary. The pointer used for `*p = 42` is a valid `pkt` register again, and the write passes verification.\n\n(Equivalently, you could keep the original order but re-load `p` and repeat the `data_end` bounds check after the call before dereferencing; the reorder above is the smallest change.)",
+        "type": "text"
+      }
+    ],
+    "id": "msg_013yAyRVkTSZiBjvGGr4N4Ti",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1149,
+      "output_tokens": 1172,
+      "output_tokens_details": {
+        "thinking_tokens": 403
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

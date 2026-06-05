@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Before the r6 != 0 exit path, if r0 is non-NULL, release it with bpf_sk_release(r0).",
+    "Move the mark branch before acquiring the socket when possible so no reference exists on that exit path.",
+    "Restructure cleanup with a common release path for all exits after lookup."
+  ],
+  "canonical_fix": "On every path after bpf_sk_lookup_tcp returns a non-NULL reference, call bpf_sk_release before exiting unless ownership is transferred.",
+  "case_id": "case-016",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "hard",
+  "expected_explanation": "bpf_sk_lookup_tcp can return an owned socket reference. One branch exits based on packet mark/r6 after the lookup without releasing the reference if it was acquired.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-glm-5.1-high/case-016-legacy.txt",
+    "case_id": "case-016",
+    "model": "z-ai/glm-5.1",
+    "profile": "openrouter-glm-5.1-high",
+    "prompt_bytes": 3059,
+    "prompt_path": "public/case-016/prompt_legacy.md",
+    "prompt_sha256": "31d64bebee3b4c19aa2fe3161c2814daf2c593074fd789dc1ebc83723ed9f8a8",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-glm-5.1-high/case-016-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "1b3892fb-c58a-4391-afe2-59b9107f6aad",
+    "started_at": "2026-06-05T03:21:37+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Verifier Failure Explanation\n\nThe program calls `bpf_sk_lookup_tcp`, which returns a socket reference (or NULL) tracked by the verifier as reference id=2. After the call, the code checks `r6` (the packet mark):\n\n```\nif r6 == 0 goto l1_%=;   // if mark == 0, go to socket release logic\nexit;                     // mark != 0 \u2192 EXIT WITHOUT RELEASING SOCKET \u2190 BUG\n```\n\nOn the path where `r6 != 0`, the program exits without calling `bpf_sk_release` on the non-null socket returned by `bpf_sk_lookup_tcp`. The verifier correctly detects this as a **reference leak**:\n\n```\nUnreleased reference id=2 alloc_insn=19\nBPF_EXIT instruction in main prog would lead to reference leak\n```\n\n## Fix\n\nThe socket reference must be released on **all** exit paths where `r0` could be non-null. The smallest fix adds a socket release check on the `r6 != 0` path before the early exit:\n\n```c\n\tif r6 == 0 goto l1_%=;\t\t\t\t\\\n\tif r0 == 0 goto l3_%=;\t\t\t\t\\\n\tr1 = r0;\t\t\t\t\t\\\n\tcall %[bpf_sk_release];\t\t\t\t\\\nl3_%=:\texit;\t\t\t\t\t\t\\\nl1_%=:\tif r0 == 0 goto l2_%=;\t\t\t\t\\\n\tr1 = r0;\t\t\t\t\t\\\n\tcall %[bpf_sk_release];\t\t\t\t\\\nl2_%=:\texit;\t\t\t\t\t\t\\\n```\n\nThis replaces just the two lines:\n```\n\tif r6 == 0 goto l1_%=;\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n```\nwith the five lines above. The new `l3_%=` label gets a unique name (different prefix from `l0/l1/l2` but same `%=` suffix), so there's no collision. Now on the `r6 != 0` path, if `r0` is non-null the socket is released before exiting, satisfying the verifier's reference tracking.",
+  "must_mention": [
+    "An owned socket reference is acquired",
+    "The mark/r6 branch exits with the reference live",
+    "Release is needed on that branch"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only releases in the r6 == 0 branch",
+    "Releases before checking that lookup returned non-NULL in a way rejected by the verifier",
+    "Adds packet bounds checks but no reference cleanup"
+  ]
+}

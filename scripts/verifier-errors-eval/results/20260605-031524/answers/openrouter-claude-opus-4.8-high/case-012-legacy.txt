@@ -1,0 +1,58 @@
+## What the verifier is complaining about
+
+The decisive line is:
+
+```
+sleepable global function helper_a() called in IRQ-disabled region
+```
+
+Two facts combine to cause the rejection:
+
+1. **`helper_a()` is a *global* subprogram.** It is declared `int __noinline helper_a(int i)` with external linkage (no `static`). The verifier verifies global subprograms in isolation and treats them conservatively. Because the body contains `bpf_copy_from_user()` — a *sleepable* helper — the whole global function is classified as "sleepable".
+
+2. **The call site is inside an IRQ-disabled critical section.** `bpf_local_irq_save(&flags)` opens a region in which sleeping is forbidden, and it is only closed by `bpf_local_irq_restore(&flags)`. Calling anything that may sleep between them is illegal.
+
+So the verifier sees a "may-sleep" global function being invoked while IRQs are disabled and rejects it before it even looks inside `helper_a`.
+
+Note: simply changing the argument to `helper_a(1)` does **not** help while the function is global, because for a global function the verifier ignores the concrete argument and keeps the conservative "sleepable" classification.
+
+## Smallest fix
+
+Make `helper_a` a `static` subprogram so it is verified *inline* in the caller's context (where the constant argument is tracked), and arrange so that the sleepable `bpf_copy_from_user()` is **not reachable** inside the IRQ-disabled region.
+
+With the call `helper_a(0)` and the guard `if (!i)`, the sleepable branch is taken, so just adding `static` is not enough — the inlined verification would then reject `bpf_copy_from_user()` itself for the same "IRQ-disabled" reason. Flip the guard (or pass a non-zero argument) so the constant argument makes that branch dead:
+
+```c
+static int __noinline helper_a(int i)
+{
+	char data[8];
+
+	if (i)                                   /* was: if (!i) */
+		bpf_copy_from_user(data, sizeof(data), NULL);
+	return i;
+}
+
+SEC("?syscall")
+int entry(void *ctx)
+{
+	unsigned long flags;
+
+	bpf_local_irq_save(&flags);
+	helper_a(0);                             /* i == 0, sleepable path is dead */
+	bpf_local_irq_restore(&flags);
+	return 0;
+}
+```
+
+Why this passes:
+- `static` removes the "global function" classification; the function body is verified inline with the constant `i = 0` propagated in.
+- With `i = 0` and `if (i)`, the `bpf_copy_from_user()` call becomes dead code along the only reachable path, so no sleepable helper is invoked inside the IRQ-disabled region.
+
+### Alternative equally-small fixes
+- If the sleepable call isn't needed for the test's intent, simply drop it (then the global function is non-sleepable and the original code passes):
+  ```c
+  int __noinline helper_a(int i) { return i; }
+  ```
+- Or move `helper_a(0)` outside the `bpf_local_irq_save()`/`bpf_local_irq_restore()` pair so it is no longer in the non-sleepable region.
+
+The key point is: a function that can sleep (directly or by being a conservatively-treated global subprog) must not be called between `bpf_local_irq_save()` and `bpf_local_irq_restore()`.

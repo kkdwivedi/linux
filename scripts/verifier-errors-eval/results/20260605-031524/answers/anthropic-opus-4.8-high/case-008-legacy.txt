@@ -1,0 +1,31 @@
+## Explanation
+
+`bpf_dynptr_slice(&ptr, 0, buffer, len)` copies (or returns a pointer to) `len` bytes, using `buffer` as the fallback storage. The verifier therefore requires that the `buffer`/`len` pair describe a valid memory region — i.e. `len` must not exceed the size of `buffer`.
+
+Here:
+
+```c
+char buffer[8] = {};
+...
+data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
+```
+
+`buffer` is only 8 bytes, but the call asks for 9 bytes. The verifier sees the stack slot at `fp-24` is 8 bytes and the requested length is 9, so the read would run off the end of the buffer:
+
+```
+invalid read from stack R3 off -24+8 size 9
+R3 and R4 memory, len pair leads to invalid memory access
+```
+
+## Fix
+
+Make the length match (or be smaller than) the buffer size. Either shrink the requested length to 8, or enlarge the buffer to 9.
+
+Smallest source-level change — match the length to the buffer:
+
+```c
+-	data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
++	data = bpf_dynptr_slice(&ptr, 0, buffer, 8);
+```
+
+(Equivalently `char buffer[9] = {};` if 9 bytes is actually desired.) After this change the `buffer`/`len` pair stays within the 8-byte stack object, satisfying the verifier's bounds check.

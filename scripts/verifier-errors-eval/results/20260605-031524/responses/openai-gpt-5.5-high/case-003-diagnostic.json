@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier loses the pointer type because the program partially overwrites the stack slot that contains the spilled context pointer.\n\nAfter instruction 0, the 8 bytes at `r10 - 8` through `r10 - 1` contain a spilled `ctx` pointer:\n\n```asm\n*(u64*)(r10 - 8) = r1;   /* fp-8 = ctx */\n```\n\nBut this instruction writes one byte inside that same 8-byte slot:\n\n```asm\n*(u8*)(r10 - 7) = r0;\n```\n\n`r10 - 7` is the second byte of the spilled pointer. The verifier cannot treat a partially overwritten pointer spill as a valid pointer anymore, so it marks the whole slot as miscellaneous/scalar data:\n\n```text\nfp-8=mmmmmmmm\n```\n\nTherefore the later reload:\n\n```asm\nr0 = *(u64*)(r10 - 8);\n```\n\ndoes not restore `R0=ctx`; it produces `R0=scalar()`. Then this dereference is rejected:\n\n```asm\nr0 = *(u64*)(r0 + 8);\n```\n\nbecause scalar integers cannot be dereferenced.\n\nThe smallest fix is to stop writing the byte into the spilled pointer slot. Put the byte in a neighboring stack byte, e.g. `r10 - 9`, which is outside the `r10 - 8` .. `r10 - 1` range.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -8,7 +8,7 @@ __naked void entry(void)\n \tasm volatile (\"\t\t\t\t\t\\\n \t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n \tr0 = 0x23;\t\t\t\t\t\\\n-\t*(u8*)(r10 - 7) = r0;\t\t\t\t\\\n+\t*(u8*)(r10 - 9) = r0;\t\t\t\t\\\n \tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n \tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n```\n\nWith this change, the spill at `fp-8` remains a clean `ctx` pointer spill. The reload should restore `R0` as a pointer-valued register, so the following memory access is no longer rejected as a scalar dereference.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-high/case-003-diagnostic.txt",
+    "case_id": "case-003",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-high",
+    "prompt_bytes": 2939,
+    "prompt_path": "public/case-003/prompt_diagnostic.md",
+    "prompt_sha256": "f0ae7f2740c6566909dcad09724c1c4e67495167ac5f9dff858044543f91e0e9",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-high/case-003-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "b243b23d-0324-4680-a654-1ebf0a40075e",
+    "started_at": "2026-06-05T03:15:47+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.004475,
+    "output_cost_usd": 0.15573,
+    "total_cost_usd": 0.16020500000000001
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 895,
+    "output_tokens": 5191,
+    "raw_usage": {
+      "input_tokens": 895,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 5191,
+      "output_tokens_details": {
+        "reasoning_tokens": 4657
+      },
+      "total_tokens": 6086
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 4657,
+    "total_tokens": 6086
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629461,
+    "created_at": 1780629347,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_08ea2bf9a53b28b3006a223f634bcc819daabfe895e1f9b497",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_08ea2bf9a53b28b3006a223f63ef10819d950245fec56b5861",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier loses the pointer type because the program partially overwrites the stack slot that contains the spilled context pointer.\n\nAfter instruction 0, the 8 bytes at `r10 - 8` through `r10 - 1` contain a spilled `ctx` pointer:\n\n```asm\n*(u64*)(r10 - 8) = r1;   /* fp-8 = ctx */\n```\n\nBut this instruction writes one byte inside that same 8-byte slot:\n\n```asm\n*(u8*)(r10 - 7) = r0;\n```\n\n`r10 - 7` is the second byte of the spilled pointer. The verifier cannot treat a partially overwritten pointer spill as a valid pointer anymore, so it marks the whole slot as miscellaneous/scalar data:\n\n```text\nfp-8=mmmmmmmm\n```\n\nTherefore the later reload:\n\n```asm\nr0 = *(u64*)(r10 - 8);\n```\n\ndoes not restore `R0=ctx`; it produces `R0=scalar()`. Then this dereference is rejected:\n\n```asm\nr0 = *(u64*)(r0 + 8);\n```\n\nbecause scalar integers cannot be dereferenced.\n\nThe smallest fix is to stop writing the byte into the spilled pointer slot. Put the byte in a neighboring stack byte, e.g. `r10 - 9`, which is outside the `r10 - 8` .. `r10 - 1` range.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -8,7 +8,7 @@ __naked void entry(void)\n \tasm volatile (\"\t\t\t\t\t\\\n \t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n \tr0 = 0x23;\t\t\t\t\t\\\n-\t*(u8*)(r10 - 7) = r0;\t\t\t\t\\\n+\t*(u8*)(r10 - 9) = r0;\t\t\t\t\\\n \tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n \tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n```\n\nWith this change, the spill at `fp-8` remains a clean `ctx` pointer spill. The reload should restore `R0` as a pointer-valued register, so the following memory access is no longer rejected as a scalar dereference.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_08ea2bf9a53b28b3006a223fce11fc819d8ef5fdfab189cef2",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 895,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 5191,
+      "output_tokens_details": {
+        "reasoning_tokens": 4657
+      },
+      "total_tokens": 6086
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

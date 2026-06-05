@@ -1,0 +1,64 @@
+The verifier failure is a resource lifetime leak.
+
+`bpf_ringbuf_reserve_dynptr()` creates an owned ringbuf dynptr reference that must be released on every exit path, either by:
+
+- `bpf_ringbuf_submit_dynptr()`, or
+- `bpf_ringbuf_discard_dynptr()`.
+
+Your program reserves two dynptrs:
+
+```c
+bpf_ringbuf_reserve_dynptr(..., &ptr1); // ref id=1
+bpf_ringbuf_reserve_dynptr(..., &ptr2); // ref id=3
+```
+
+On the `!sample` path, both are discarded:
+
+```c
+bpf_ringbuf_discard_dynptr(&ptr1, 0);
+bpf_ringbuf_discard_dynptr(&ptr2, 0);
+return 0;
+```
+
+That path is fine.
+
+But on the success path, only `ptr1` is submitted:
+
+```c
+bpf_ringbuf_submit_dynptr(&ptr1, 0);
+return 0;
+```
+
+`ptr2` is still owned at program exit, so the verifier reports:
+
+```text
+Unreleased reference id=3 alloc_insn=14
+```
+
+`id=3` is the second reservation, `ptr2`.
+
+The smallest fix is to release `ptr2` before returning on the success path. Since `ptr2` is never used, discard it.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -27,6 +27,7 @@ int entry(void *ctx)
+ 	}
+ 
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
++	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+ 
+ 	return 0;
+ }
+```
+
+With that change, both owned dynptr references are released on both paths:
+
+- failure path: discard `ptr1`, discard `ptr2`
+- success path: submit `ptr1`, discard `ptr2`
+
+That should satisfy the verifier’s resource lifetime check.

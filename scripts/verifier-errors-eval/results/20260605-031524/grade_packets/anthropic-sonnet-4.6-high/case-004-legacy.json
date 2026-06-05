@@ -1,0 +1,67 @@
+{
+  "acceptable_fixes": [
+    "Guard helper_a with if (!s) return 0; before s->x.",
+    "Make the function pattern local/static only if that changes verifier validation so the argument is proven non-NULL, without hiding an unsafe dereference."
+  ],
+  "canonical_fix": "Add a NULL check in helper_a before reading s->x, returning a safe value on the NULL path.",
+  "case_id": "case-004",
+  "category": "Register Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The global subprogram dereferences its pointer argument directly. The verifier validates global subprograms for any argument state matching the prototype, including NULL-like memory arguments, so the callee must prove the pointer is non-NULL before dereferencing.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-high/case-004-legacy.txt",
+    "case_id": "case-004",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-high",
+    "prompt_bytes": 1415,
+    "prompt_path": "public/case-004/prompt_legacy.md",
+    "prompt_sha256": "5122475504cbe77965669ffc9de4273ee4a86feb8b73ecbb090ea008b68a08ae",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-high/case-004-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "40fec7b1-f77c-4fb1-b9b7-39c3fd1c2d96",
+    "started_at": "2026-06-05T04:08:42+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Explanation\n\nWhen BPF validates a `__noinline` function, it does so independently of its call sites. The verifier conservatively assigns the pointer parameter `s` the type `mem_or_null` \u2014 meaning it could be null \u2014 regardless of the fact that the caller always passes a valid stack address. The function body then dereferences `r6` (a copy of `s`) at instruction 10 without any prior null check:\n\n```\nR6 invalid mem access 'mem_or_null'\n```\n\nThe verifier refuses to allow a memory load through a pointer that hasn't been proven non-null.\n\n## Fix\n\nAdd a null check for `s` at the start of `helper_a`. This causes the verifier to narrow the type from `mem_or_null` to `mem` before the dereference, satisfying the constraint.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nstruct Item {\n\tint x;\n};\n\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n\nSEC(\"cgroup_skb/ingress\")\nint entry(struct __sk_buff *skb)\n{\n\tconst struct Item s = {.x = skb->len};\n\n\thelper_a(&s);\n\n\treturn 1;\n}\n```\n\nThe added `if (!s) return 0;` guard satisfies the verifier: after the check, on the taken path the function returns immediately, and on the fall-through path `s` is known to be non-null, so `s->x` is a valid access.",
+  "must_mention": [
+    "The callee argument may be NULL",
+    "The dereference is inside helper_a",
+    "The fix belongs before s->x is read"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check after dereferencing s",
+    "Checks the address of the local object in entry but leaves helper_a unsafe for verifier validation",
+    "Changes the comparison but not the dereference"
+  ]
+}

@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Explanation of the Verifier Failure\n\nThe BPF verifier enforces **LIFO (Last-In-First-Out) lock ordering** for resource locks. The error occurs because:\n\n1. `lock_a` is acquired first (instruction 0-2)\n2. `lock_b` is acquired second (instruction 4-6)\n3. In the error path (when `bpf_res_spin_lock(&lock_b)` succeeds), the code attempts to unlock `lock_a` (instruction 10)\n4. However, `lock_b` is still held, violating LIFO ordering\n\nThe verifier requires that locks be released in reverse order of acquisition. Since `lock_b` was acquired after `lock_a`, it must be released before `lock_a`.\n\n## The Fix\n\nThe smallest fix is to swap the unlock order in the error path:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nstruct bpf_res_spin_lock lock_a __hidden SEC(\".data.A\");\nstruct bpf_res_spin_lock lock_b __hidden SEC(\".data.B\");\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tif (bpf_res_spin_lock(&lock_a))\n\t\treturn 0;\n\tif (bpf_res_spin_lock(&lock_b)) {\n\t\tbpf_res_spin_unlock(&lock_b);\n\t\tbpf_res_spin_unlock(&lock_a);\n\t\treturn 0;\n\t}\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n\treturn 0;\n}\n```\n\n**Changes:**\n- Line 184 (in error path): Change `bpf_res_spin_unlock(&lock_a)` to `bpf_res_spin_unlock(&lock_b)`\n- Line 185 (in error path): Add `bpf_res_spin_unlock(&lock_a)` after\n- Lines 188-189 (success path): Swap the unlock order to match LIFO (unlock `lock_b` first, then `lock_a`)\n\nThis ensures locks are always released in reverse order of acquisition, satisfying the verifier's resource lifetime safety requirements.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-018-diagnostic.txt",
+    "case_id": "case-018",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 2550,
+    "prompt_path": "public/case-018/prompt_diagnostic.md",
+    "prompt_sha256": "b2c0e6d8199078791c9358d84b560ed1081e0fd58d1a492ad2d0272f131fa115",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-018-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "6881a318-db82-48e7-98e2-b509e0672347",
+    "started_at": "2026-06-05T03:19:06+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.001072,
+    "output_cost_usd": 0.002805,
+    "total_cost_usd": 0.0038770000000000002
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1072,
+    "output_tokens": 561,
+    "raw_usage": {
+      "completion_tokens": 561,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.003877,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002805,
+        "upstream_inference_cost": 0.003877,
+        "upstream_inference_prompt_cost": 0.001072
+      },
+      "is_byok": false,
+      "prompt_tokens": 1072,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1633
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1633
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation of the Verifier Failure\n\nThe BPF verifier enforces **LIFO (Last-In-First-Out) lock ordering** for resource locks. The error occurs because:\n\n1. `lock_a` is acquired first (instruction 0-2)\n2. `lock_b` is acquired second (instruction 4-6)\n3. In the error path (when `bpf_res_spin_lock(&lock_b)` succeeds), the code attempts to unlock `lock_a` (instruction 10)\n4. However, `lock_b` is still held, violating LIFO ordering\n\nThe verifier requires that locks be released in reverse order of acquisition. Since `lock_b` was acquired after `lock_a`, it must be released before `lock_a`.\n\n## The Fix\n\nThe smallest fix is to swap the unlock order in the error path:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nstruct bpf_res_spin_lock lock_a __hidden SEC(\".data.A\");\nstruct bpf_res_spin_lock lock_b __hidden SEC(\".data.B\");\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tif (bpf_res_spin_lock(&lock_a))\n\t\treturn 0;\n\tif (bpf_res_spin_lock(&lock_b)) {\n\t\tbpf_res_spin_unlock(&lock_b);\n\t\tbpf_res_spin_unlock(&lock_a);\n\t\treturn 0;\n\t}\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n\treturn 0;\n}\n```\n\n**Changes:**\n- Line 184 (in error path): Change `bpf_res_spin_unlock(&lock_a)` to `bpf_res_spin_unlock(&lock_b)`\n- Line 185 (in error path): Add `bpf_res_spin_unlock(&lock_a)` after\n- Lines 188-189 (success path): Swap the unlock order to match LIFO (unlock `lock_b` first, then `lock_a`)\n\nThis ensures locks are always released in reverse order of acquisition, satisfying the verifier's resource lifetime safety requirements.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629546,
+    "id": "gen-1780629546-CbM7ZXwCSqXYbLbo2Iuk",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 561,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.003877,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002805,
+        "upstream_inference_cost": 0.003877,
+        "upstream_inference_prompt_cost": 0.001072
+      },
+      "is_byok": false,
+      "prompt_tokens": 1072,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1633
+    }
+  },
+  "reasoning_content": ""
+}

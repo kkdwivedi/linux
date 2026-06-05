@@ -1,0 +1,49 @@
+The failure is caused by this call in `helper_b()`:
+
+```c
+helper_c(val, skb + 1)
+```
+
+`skb` is a context pointer (`struct __sk_buff *`). Pointer arithmetic on context pointers is not allowed in the way it is for normal memory pointers. In BPF, the verifier tracks `skb` as a special `ctx` pointer, and helpers/subprograms that dereference it must receive the original unmodified context pointer.
+
+The compiler turns `skb + 1` into:
+
+```text
+21: r6 += 192        ; sizeof(struct __sk_buff) == 192
+23: r2 = r6
+24: call helper_c
+```
+
+So `helper_c()` receives `R2=ctx(imm=192)` instead of the original `R2=ctx()`. Inside `helper_c()`, the program dereferences the pointer:
+
+```c
+return skb->ifindex * val;
+```
+
+The verifier rejects that because dereferencing a modified context pointer is disallowed:
+
+```text
+dereference of modified ctx ptr R2 off=192 disallowed
+```
+
+The smallest source-level fix is to pass the original `skb` pointer to `helper_c()` instead of `skb + 1`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -15,7 +15,7 @@ int helper_c(int val, struct __sk_buff *skb);
+ __attribute__((noinline))
+ int helper_b(int val, struct __sk_buff *skb)
+ {
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+ }
+ 
+ __attribute__((noinline))
+```
+
+After this change, `helper_c()` receives the original `ctx` pointer, matching its prototype and allowing the verifier to validate the dereference of `skb->ifindex`.

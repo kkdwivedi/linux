@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier failure is exactly about the pointer type passed into `bpf_task_acquire()` in `entry()`:\n\n- `value` is checked for NULL (`if (!value) return 0;`) \u2705\n- but `value->task` is then loaded and can still be NULL (`rcu_ptr_or_null_task_struct`) \u274c\n- `bpf_task_acquire()` requires a non-NULL task pointer on that path.\n\nFrom log:\n\n- insn 3: `r1 = *(u64 *)(r0 +0)` gives `R1=rcu_ptr_or_null_task_struct`\n- insn 4: `call bpf_task_acquire`\n- reject: \u201cPossibly NULL pointer passed to trusted R1\u201d\n\n### Smallest likely fix\n\nLoad `value->task` into a local variable, NULL-check it, and call `bpf_task_acquire()` only on non-NULL path.\n\n```diff\n@@\n SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n-\tstruct task_struct *acquired;\n+\tstruct task_struct *acquired, *map_task;\n \tstruct map_value *value;\n \n \tvalue = helper_a(task);\n \tif (!value)\n \t\treturn 0;\n \n-\tacquired = bpf_task_acquire(value->task);\n+\tmap_task = value->task;\n+\tif (!map_task)\n+\t\treturn 0;\n+\n+\tacquired = bpf_task_acquire(map_task);\n \tif (!acquired)\n \t\treturn 0;\n \n \tbpf_task_release(acquired);\n \treturn 0;\n }\n```\n\nThis is minimal and matches the verifier\u2019s own suggestion (\u201cAdd a NULL check and call the kfunc only on the non-NULL path.\u201d).",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-009-diagnostic.txt",
+    "case_id": "case-009",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 9539,
+    "prompt_path": "public/case-009/prompt_diagnostic.md",
+    "prompt_sha256": "b18a80e715b0997c1feba2b4b098abd71869a9fb867ace1b91abe52c1a1cab07",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-009-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "ffb2c6ee-f17a-4b09-88c0-21228fc29f2a",
+    "started_at": "2026-06-05T03:16:49+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.0057575,
+    "output_cost_usd": 0.02478,
+    "total_cost_usd": 0.0305375
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 3290,
+    "output_tokens": 1770,
+    "raw_usage": {
+      "input_tokens": 3290,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1770,
+      "output_tokens_details": {
+        "reasoning_tokens": 1394
+      },
+      "total_tokens": 5060
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 1394,
+    "total_tokens": 5060
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629435,
+    "created_at": 1780629409,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0fb5a988d5018042006a223fa1de0881a19c9040a2e59ca1f7",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0fb5a988d5018042006a223fa2408881a1b45a57f0bc3e245a",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier failure is exactly about the pointer type passed into `bpf_task_acquire()` in `entry()`:\n\n- `value` is checked for NULL (`if (!value) return 0;`) \u2705\n- but `value->task` is then loaded and can still be NULL (`rcu_ptr_or_null_task_struct`) \u274c\n- `bpf_task_acquire()` requires a non-NULL task pointer on that path.\n\nFrom log:\n\n- insn 3: `r1 = *(u64 *)(r0 +0)` gives `R1=rcu_ptr_or_null_task_struct`\n- insn 4: `call bpf_task_acquire`\n- reject: \u201cPossibly NULL pointer passed to trusted R1\u201d\n\n### Smallest likely fix\n\nLoad `value->task` into a local variable, NULL-check it, and call `bpf_task_acquire()` only on non-NULL path.\n\n```diff\n@@\n SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n-\tstruct task_struct *acquired;\n+\tstruct task_struct *acquired, *map_task;\n \tstruct map_value *value;\n \n \tvalue = helper_a(task);\n \tif (!value)\n \t\treturn 0;\n \n-\tacquired = bpf_task_acquire(value->task);\n+\tmap_task = value->task;\n+\tif (!map_task)\n+\t\treturn 0;\n+\n+\tacquired = bpf_task_acquire(map_task);\n \tif (!acquired)\n \t\treturn 0;\n \n \tbpf_task_release(acquired);\n \treturn 0;\n }\n```\n\nThis is minimal and matches the verifier\u2019s own suggestion (\u201cAdd a NULL check and call the kfunc only on the non-NULL path.\u201d).",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0fb5a988d5018042006a223fb8a39081a1a850ce60c0cfd3ea",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 3290,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1770,
+      "output_tokens_details": {
+        "reasoning_tokens": 1394
+      },
+      "total_tokens": 5060
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

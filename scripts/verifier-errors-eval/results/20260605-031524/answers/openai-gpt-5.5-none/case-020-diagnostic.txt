@@ -1,0 +1,63 @@
+The program is not failing because of an invalid instruction or unsafe memory access. It is failing because it intentionally creates an enormous number of distinct subprogram call paths.
+
+Each function calls the next one 50 times:
+
+```c
+entry -> helper_a -> helper_b -> helper_c -> helper_d -> helper_e -> helper_f -> helper_g
+```
+
+and every call passes a different stack pointer offset as `r1`:
+
+```c
+r1 = r10;
+r1 += -8;
+call helper_x;
+
+r1 = r10;
+r1 += -16;
+call helper_x;
+
+/* ... */
+```
+
+So the verifier sees many distinct argument patterns and repeatedly recomputes liveness for the same subprograms. By the time it reaches `helper_g`, the liveness analysis has been recomputed too many times:
+
+```text
+liveness analysis exceeded complexity limit (10001 calls)
+```
+
+This is a verifier complexity-limit failure, not a semantic safety failure.
+
+The smallest source-level fix is to reduce the fanout so the total number of distinct call paths stays below the liveness-analysis limit. Since the limit exceeded at `10001` liveness calls, changing the repeated calls from 50 per level to a smaller number should make the verifier pass.
+
+A minimal and clear edit is to reduce `CALLS_50(fn)` to fewer repetitions. For example, make it 10 calls instead of 50:
+
+```diff
+ #define CALLS_10(fn) \
+ 	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \
+ 	CALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)
+-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
++#define CALLS_50(fn) CALLS_10(fn)
+```
+
+With this patch, every function still calls the next subprogram multiple times with distinct stack-pointer offsets, preserving the structure of the test, but the verifier no longer has to analyze the combinatorial explosion caused by `50` calls at each depth.
+
+Complete patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -6,7 +6,7 @@
+ #define CALLS_10(fn) \
+ 	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \
+ 	CALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)
+-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
++#define CALLS_50(fn) CALLS_10(fn)
+ 
+ __naked __noinline __used
+ static unsigned long helper_g(void)
+```
+
+If the test specifically wants more than 10 calls per level, another safe variant would be to define a smaller intermediate macro, e.g. `CALLS_20`, and use that instead. The key requirement is to reduce the number of distinct call paths/argument patterns enough that subprogram liveness analysis does not hit the `10001` call limit.

@@ -1,0 +1,45 @@
+## Explanation
+
+The verifier enforces a **512‑byte limit on the *combined* stack depth of a chain of nested function calls** (not per‑function, but the sum along the deepest call path).
+
+In this program each non‑inlined helper allocates a `volatile char buf[MAX_STACK]` on its stack. With `MAX_STACK = 260`, each such frame is rounded/padded to ~272 bytes of stack:
+
+- `helper_c` allocates `buf[260]` → ~272 bytes
+- `helper_b` allocates `buf[260]` → ~272 bytes
+
+The deepest call chain is:
+
+```
+entry -> helper_c -> helper_b
+```
+
+`helper_c`'s frame (~272) + `helper_b`'s frame (~272) = **544 bytes > 512**, so the verifier rejects it:
+
+```
+combined stack size of 3 calls is 544. Too large
+```
+
+(`helper_a` has no large buffer, and `helper_d` is a leaf, so they don't push the chain over by themselves; the killer is `helper_c → helper_b`, two ~272‑byte frames stacked.)
+
+## Smallest fix
+
+Reduce the per‑frame buffer so that two stacked frames stay within 512 bytes.
+Each frame is `buf` (8‑byte aligned) + ~8 bytes overhead. To keep two frames ≤ 512:
+
+```
+2 * (align8(MAX_STACK) + 8) <= 512
+align8(MAX_STACK) <= 248
+```
+
+So set `MAX_STACK = 248` (already 8‑aligned): each frame becomes 248 + 8 = 256, two frames = 512 ≤ limit.
+
+### Patch
+
+```c
+-#define MAX_STACK 260
++#define MAX_STACK 248
+```
+
+This keeps the same structure and intent of the test (deep nested calls with sizable per‑frame buffers) while bringing the combined `helper_c → helper_b` chain down to exactly the 512‑byte limit so verification passes.
+
+(If a bit more headroom is desired against alignment/spill overhead, use a slightly smaller value such as `240`; the key is `align8(MAX_STACK)+8` for the two stacked frames must not exceed 512.)

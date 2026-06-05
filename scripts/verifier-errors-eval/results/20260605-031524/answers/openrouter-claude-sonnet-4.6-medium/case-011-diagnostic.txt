@@ -1,0 +1,35 @@
+## Explanation of the Failure
+
+The verifier tracks ring-buffer reservations as "owned references" that **must** be released (submitted or discarded) on every control-flow path before the program exits.
+
+The program has two paths:
+
+1. **`!sample` branch (ptr1 NULL):** calls `bpf_ringbuf_discard_dynptr(&ptr1, 0)` and `bpf_ringbuf_discard_dynptr(&ptr2, 0)` → both references released ✔  
+2. **`sample` non-NULL branch:** calls only `bpf_ringbuf_submit_dynptr(&ptr1, 0)` → `ptr2`'s reference (id=3, acquired at insn 14) is **never released** ✗
+
+The verifier reports:  
+```
+Unreleased reference id=3 alloc_insn=14
+```
+
+## Fix
+
+Add a submit (or discard) for `ptr2` on the success path, before `return 0`:
+
+```c
+--- a/case.c
++++ b/case.c
+@@ -109,6 +109,7 @@ int entry(void *ctx)
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
++	bpf_ringbuf_submit_dynptr(&ptr2, 0);
+ 
+ 	return 0;
+ }
+```
+
+### Why this works
+
+Every path through the function must release **both** reservations:
+
+- **NULL path:** discards `ptr1` then `ptr2` (already correct).  
+- **Non-NULL path:** submits `ptr1` then (with the fix) submits `ptr2`, satisfying the verifier's resource-lifetime check.

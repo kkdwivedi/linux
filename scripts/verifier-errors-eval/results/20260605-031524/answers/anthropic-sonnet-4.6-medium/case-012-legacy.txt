@@ -1,0 +1,31 @@
+## Explanation
+
+The verifier fails for two related reasons:
+
+1. **`helper_a` is implicitly sleepable** because it calls `bpf_copy_from_user`, which is a sleepable helper. Since `helper_a` is a global (`__noinline`) function, the verifier marks the entire function as sleepable.
+
+2. **Sleepable functions cannot be called in IRQ-disabled regions.** `helper_a(0)` is invoked between `bpf_local_irq_save` and `bpf_local_irq_restore`, which is an IRQ-disabled critical section. The verifier rejects this with:
+   ```
+   sleepable global function helper_a() called in IRQ-disabled region
+   ```
+
+The first line in the log (`arg#0 reference type('UNKNOWN ') size cannot be determined: -22`) is a secondary diagnostic about `bpf_local_irq_save`'s argument resolution, but the fatal error is the sleepable-in-IRQ-disabled issue.
+
+## Fix
+
+Move the `helper_a(0)` call **outside** the IRQ-disabled critical section:
+
+```c
+SEC("?syscall")
+int entry(void *ctx)
+{
+	unsigned long flags;
+
+	helper_a(0);
+	bpf_local_irq_save(&flags);
+	bpf_local_irq_restore(&flags);
+	return 0;
+}
+```
+
+This ensures the sleepable global function is not called while IRQs are disabled, satisfying the verifier's constraint.

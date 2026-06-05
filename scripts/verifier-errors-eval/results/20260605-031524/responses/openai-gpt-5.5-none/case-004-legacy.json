@@ -1,0 +1,124 @@
+{
+  "answer_text": "The verifier is rejecting `helper_a()` because its argument is inferred as nullable:\n\n```text\nR1=mem_or_null(id=1,sz=4)\n...\nR6=mem_or_null(id=1,sz=4)\n...\nr2 = *(u32 *)(r6 +0)\nR6 invalid mem access 'mem_or_null'\n```\n\n`helper_a()` is a separately validated `__noinline` BPF subprogram. Its parameter:\n\n```c\nconst struct Item *s\n```\n\nis treated by the verifier as a pointer that may be `NULL`. The function immediately dereferences it:\n\n```c\ns->x\n```\n\nwithout first proving `s != NULL`, so the verifier rejects the load.\n\nEven though the caller passes `&s`, which is non-NULL in normal C semantics, the verifier validates the subprogram independently and requires the callee to handle the nullable pointer type.\n\nThe smallest source-level fix is to add an explicit null check in `helper_a()` before dereferencing `s`.\n\nPatch:\n\n```diff\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n\n struct Item {\n \tint x;\n };\n\n __noinline int helper_a(const struct Item *s)\n {\n+\tif (!s)\n+\t\treturn 0;\n+\n \treturn bpf_get_prandom_u32() < s->x;\n }\n\n SEC(\"cgroup_skb/ingress\")\n int entry(struct __sk_buff *skb)\n {\n \tconst struct Item s = {.x = skb->len};\n\n \thelper_a(&s);\n\n \treturn 1;\n }\n```\n\nWith the null check, the verifier can refine `s` from `mem_or_null` to non-null memory on the fallthrough path, making the load from `s->x` valid.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-none/case-004-legacy.txt",
+    "case_id": "case-004",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-none",
+    "prompt_bytes": 1415,
+    "prompt_path": "public/case-004/prompt_legacy.md",
+    "prompt_sha256": "5122475504cbe77965669ffc9de4273ee4a86feb8b73ecbb090ea008b68a08ae",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-none/case-004-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "none"
+    },
+    "run_id": "9d83ef22-8601-402e-aadb-5722d6a9fd8f",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.0027,
+    "output_cost_usd": 0.01122,
+    "total_cost_usd": 0.013920000000000002
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 540,
+    "output_tokens": 374,
+    "raw_usage": {
+      "input_tokens": 540,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 374,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 914
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 914
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629331,
+    "created_at": 1780629324,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_00f1879609e596f2006a223f4ce928819193a68ca441212852",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier is rejecting `helper_a()` because its argument is inferred as nullable:\n\n```text\nR1=mem_or_null(id=1,sz=4)\n...\nR6=mem_or_null(id=1,sz=4)\n...\nr2 = *(u32 *)(r6 +0)\nR6 invalid mem access 'mem_or_null'\n```\n\n`helper_a()` is a separately validated `__noinline` BPF subprogram. Its parameter:\n\n```c\nconst struct Item *s\n```\n\nis treated by the verifier as a pointer that may be `NULL`. The function immediately dereferences it:\n\n```c\ns->x\n```\n\nwithout first proving `s != NULL`, so the verifier rejects the load.\n\nEven though the caller passes `&s`, which is non-NULL in normal C semantics, the verifier validates the subprogram independently and requires the callee to handle the nullable pointer type.\n\nThe smallest source-level fix is to add an explicit null check in `helper_a()` before dereferencing `s`.\n\nPatch:\n\n```diff\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n\n struct Item {\n \tint x;\n };\n\n __noinline int helper_a(const struct Item *s)\n {\n+\tif (!s)\n+\t\treturn 0;\n+\n \treturn bpf_get_prandom_u32() < s->x;\n }\n\n SEC(\"cgroup_skb/ingress\")\n int entry(struct __sk_buff *skb)\n {\n \tconst struct Item s = {.x = skb->len};\n\n \thelper_a(&s);\n\n \treturn 1;\n }\n```\n\nWith the null check, the verifier can refine `s` from `mem_or_null` to non-null memory on the fallthrough path, making the load from `s->x` valid.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_00f1879609e596f2006a223f4d7ee88191b4644d9546904dc8",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "none",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 540,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 374,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 914
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

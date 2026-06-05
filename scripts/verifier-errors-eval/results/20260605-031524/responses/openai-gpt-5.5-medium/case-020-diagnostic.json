@@ -1,0 +1,130 @@
+{
+  "answer_text": "The program is verifier-pathological: every function contains 50 BPF-to-BPF calls to the next helper, and the call chain is deep:\n\n```text\nentry -> helper_a -> helper_b -> helper_c -> helper_d -> helper_e -> helper_f -> helper_g\n```\n\nEach call also passes a different stack pointer value in `r1`:\n\n```asm\nr1 = r10;\nr1 += -off;\ncall helper_x;\n```\n\nSo the verifier\u2019s subprogram liveness analysis ends up recomputing liveness for the same lower subprograms through many distinct call paths / argument states. By the time it repeatedly reaches `helper_g`, it exceeds the verifier\u2019s liveness-complexity cap:\n\n```text\nliveness analysis exceeded complexity limit (10001 calls)\n```\n\nThis is not an instruction-count failure; it happens before normal state exploration:\n\n```text\nprocessed 0 insns ...\n```\n\n### Smallest likely source-level fix\n\nMake the helper subprograms global instead of `static`.\n\nFor BPF, non-static/global subprograms are verified more like independent global functions instead of being context-sensitively re-analyzed through every caller path. Since these helpers take no declared arguments and ignore `r1`, making them global should avoid the exponential liveness recomputation while preserving the actual instruction structure.\n\nPatch:\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -9,7 +9,7 @@\n \n __naked __noinline __used\n-static unsigned long helper_g(void)\n+unsigned long helper_g(void)\n {\n \tasm volatile (\n \t\t\"r0 = 0;\"\n@@ -20,7 +20,7 @@ static unsigned long helper_g(void)\n }\n \n __naked __noinline __used\n-static unsigned long helper_f(void)\n+unsigned long helper_f(void)\n {\n \tasm volatile (\n \t\tCALLS_50(helper_g)\n@@ -31,7 +31,7 @@ static unsigned long helper_f(void)\n }\n \n __naked __noinline __used\n-static unsigned long helper_e(void)\n+unsigned long helper_e(void)\n {\n \tasm volatile (\n \t\tCALLS_50(helper_f)\n@@ -42,7 +42,7 @@ static unsigned long helper_e(void)\n }\n \n __naked __noinline __used\n-static unsigned long helper_d(void)\n+unsigned long helper_d(void)\n {\n \tasm volatile (\n \t\tCALLS_50(helper_e)\n@@ -53,7 +53,7 @@ static unsigned long helper_d(void)\n }\n \n __naked __noinline __used\n-static unsigned long helper_c(void)\n+unsigned long helper_c(void)\n {\n \tasm volatile (\n \t\tCALLS_50(helper_d)\n@@ -64,7 +64,7 @@ static unsigned long helper_c(void)\n }\n \n __naked __noinline __used\n-static unsigned long helper_b(void)\n+unsigned long helper_b(void)\n {\n \tasm volatile (\n \t\tCALLS_50(helper_c)\n@@ -75,7 +75,7 @@ static unsigned long helper_b(void)\n }\n \n __naked __noinline __used\n-static unsigned long helper_a(void)\n+unsigned long helper_a(void)\n {\n \tasm volatile (\n \t\tCALLS_50(helper_b)\n```\n\nIf the test specifically requires these helpers to remain local/static, then the alternative is to reduce the fanout drastically, e.g. redefine `CALLS_50()` to only emit three calls, because `50^7` possible paths is far beyond the verifier\u2019s liveness-analysis limit. But the smallest semantic-preserving fix is to remove `static` from the helper subprograms.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-medium/case-020-diagnostic.txt",
+    "case_id": "case-020",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-medium",
+    "prompt_bytes": 4110,
+    "prompt_path": "public/case-020/prompt_diagnostic.md",
+    "prompt_sha256": "cb7344658f86bd080c64c73a9c8ee3095a7de5b045356c00872dce60afb5bfb8",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-medium/case-020-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "299161e6-180c-462a-b324-2f286a6ad8aa",
+    "started_at": "2026-06-05T03:15:45+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00724,
+    "output_cost_usd": 0.14733,
+    "total_cost_usd": 0.15456999999999999
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1448,
+    "output_tokens": 4911,
+    "raw_usage": {
+      "input_tokens": 1448,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 4911,
+      "output_tokens_details": {
+        "reasoning_tokens": 4142
+      },
+      "total_tokens": 6359
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 4142,
+    "total_tokens": 6359
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629478,
+    "created_at": 1780629345,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_06c90f375c8d6e68006a223f6146dc819ebc924b1262b0d03e",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_06c90f375c8d6e68006a223f61def0819e8466e37ff120b092",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The program is verifier-pathological: every function contains 50 BPF-to-BPF calls to the next helper, and the call chain is deep:\n\n```text\nentry -> helper_a -> helper_b -> helper_c -> helper_d -> helper_e -> helper_f -> helper_g\n```\n\nEach call also passes a different stack pointer value in `r1`:\n\n```asm\nr1 = r10;\nr1 += -off;\ncall helper_x;\n```\n\nSo the verifier\u2019s subprogram liveness analysis ends up recomputing liveness for the same lower subprograms through many distinct call paths / argument states. By the time it repeatedly reaches `helper_g`, it exceeds the verifier\u2019s liveness-complexity cap:\n\n```text\nliveness analysis exceeded complexity limit (10001 calls)\n```\n\nThis is not an instruction-count failure; it happens before normal state exploration:\n\n```text\nprocessed 0 insns ...\n```\n\n### Smallest likely source-level fix\n\nMake the helper subprograms global instead of `static`.\n\nFor BPF, non-static/global subprograms are verified more like independent global functions instead of being context-sensitively re-analyzed through every caller path. Since these helpers take no declared arguments and ignore `r1`, making them global should avoid the exponential liveness recomputation while preserving the actual instruction structure.\n\nPatch:\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -9,7 +9,7 @@\n \n __naked __noinline __used\n-static unsigned long helper_g(void)\n+unsigned long helper_g(void)\n {\n \tasm volatile (\n \t\t\"r0 = 0;\"\n@@ -20,7 +20,7 @@ static unsigned long helper_g(void)\n }\n \n __naked __noinline __used\n-static unsigned long helper_f(void)\n+unsigned long helper_f(void)\n {\n \tasm volatile (\n \t\tCALLS_50(helper_g)\n@@ -31,7 +31,7 @@ static unsigned long helper_f(void)\n }\n \n __naked __noinline __used\n-static unsigned long helper_e(void)\n+unsigned long helper_e(void)\n {\n \tasm volatile (\n \t\tCALLS_50(helper_f)\n@@ -42,7 +42,7 @@ static unsigned long helper_e(void)\n }\n \n __naked __noinline __used\n-static unsigned long helper_d(void)\n+unsigned long helper_d(void)\n {\n \tasm volatile (\n \t\tCALLS_50(helper_e)\n@@ -53,7 +53,7 @@ static unsigned long helper_d(void)\n }\n \n __naked __noinline __used\n-static unsigned long helper_c(void)\n+unsigned long helper_c(void)\n {\n \tasm volatile (\n \t\tCALLS_50(helper_d)\n@@ -64,7 +64,7 @@ static unsigned long helper_c(void)\n }\n \n __naked __noinline __used\n-static unsigned long helper_b(void)\n+unsigned long helper_b(void)\n {\n \tasm volatile (\n \t\tCALLS_50(helper_c)\n@@ -75,7 +75,7 @@ static unsigned long helper_b(void)\n }\n \n __naked __noinline __used\n-static unsigned long helper_a(void)\n+unsigned long helper_a(void)\n {\n \tasm volatile (\n \t\tCALLS_50(helper_b)\n```\n\nIf the test specifically requires these helpers to remain local/static, then the alternative is to reduce the fanout drastically, e.g. redefine `CALLS_50()` to only emit three calls, because `50^7` possible paths is far beyond the verifier\u2019s liveness-analysis limit. But the smallest semantic-preserving fix is to remove `static` from the helper subprograms.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_06c90f375c8d6e68006a223fda9258819eb3c2ec730ad4e0f1",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1448,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 4911,
+      "output_tokens_details": {
+        "reasoning_tokens": 4142
+      },
+      "total_tokens": 6359
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

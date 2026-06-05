@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier failure is due to a size mismatch in the call to `bpf_dynptr_slice()`.\n\n`buffer` is only 8 bytes:\n\n```c\nchar buffer[8] = {};\n```\n\nbut the helper is called with length `9`:\n\n```c\ndata = bpf_dynptr_slice(&ptr, 0, buffer, 9);\n```\n\nThe verifier tracks `buffer` as stack memory at `fp-24` with size 8. Passing `buffer` together with length `9` tells the verifier that the helper may access 9 bytes starting at `fp-24`, which extends one byte past the end of `buffer`. That is why the log says:\n\n```text\ninvalid read from stack R3 off -24+8 size 9\nR3 and R4 memory, len pair leads to invalid memory access\n```\n\n`R3` is the `buffer` pointer, and `R4` is the length `9`.\n\nThe smallest fix is to pass the actual buffer size instead of `9`.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -13,7 +13,7 @@ int entry(struct __sk_buff *skb)\n \tif (bpf_dynptr_from_skb(skb, 0, &ptr))\n \t\treturn 1;\n \n-\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 9);\n+\tdata = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));\n \n \treturn !!data;\n }\n```\n\nEquivalently, changing `9` to `8` should also satisfy the verifier:\n\n```c\ndata = bpf_dynptr_slice(&ptr, 0, buffer, 8);\n```\n\nUsing `sizeof(buffer)` is slightly safer because it keeps the helper length tied to the actual stack buffer size.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-high/case-008-legacy.txt",
+    "case_id": "case-008",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-high",
+    "prompt_bytes": 1995,
+    "prompt_path": "public/case-008/prompt_legacy.md",
+    "prompt_sha256": "bb69e9d81c52b441a9ca18ed1387cdaf4d358455af3a7eb36dc706949cff365c",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-high/case-008-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "0e4b2c9b-d761-485b-935b-d4bc98a8677d",
+    "started_at": "2026-06-05T03:15:54+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.004025,
+    "output_cost_usd": 0.02796,
+    "total_cost_usd": 0.031985
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 805,
+    "output_tokens": 932,
+    "raw_usage": {
+      "input_tokens": 805,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 932,
+      "output_tokens_details": {
+        "reasoning_tokens": 516
+      },
+      "total_tokens": 1737
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 516,
+    "total_tokens": 1737
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629372,
+    "created_at": 1780629355,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0c95f49c8cd02f3d006a223f6b4a1c81a2993f44ba8f5a2470",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0c95f49c8cd02f3d006a223f6bcdd481a28a0e22b0383d7b27",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier failure is due to a size mismatch in the call to `bpf_dynptr_slice()`.\n\n`buffer` is only 8 bytes:\n\n```c\nchar buffer[8] = {};\n```\n\nbut the helper is called with length `9`:\n\n```c\ndata = bpf_dynptr_slice(&ptr, 0, buffer, 9);\n```\n\nThe verifier tracks `buffer` as stack memory at `fp-24` with size 8. Passing `buffer` together with length `9` tells the verifier that the helper may access 9 bytes starting at `fp-24`, which extends one byte past the end of `buffer`. That is why the log says:\n\n```text\ninvalid read from stack R3 off -24+8 size 9\nR3 and R4 memory, len pair leads to invalid memory access\n```\n\n`R3` is the `buffer` pointer, and `R4` is the length `9`.\n\nThe smallest fix is to pass the actual buffer size instead of `9`.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -13,7 +13,7 @@ int entry(struct __sk_buff *skb)\n \tif (bpf_dynptr_from_skb(skb, 0, &ptr))\n \t\treturn 1;\n \n-\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 9);\n+\tdata = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));\n \n \treturn !!data;\n }\n```\n\nEquivalently, changing `9` to `8` should also satisfy the verifier:\n\n```c\ndata = bpf_dynptr_slice(&ptr, 0, buffer, 8);\n```\n\nUsing `sizeof(buffer)` is slightly safer because it keeps the helper length tied to the actual stack buffer size.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0c95f49c8cd02f3d006a223f76bf7c81a2884538a111e3bd29",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 805,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 932,
+      "output_tokens_details": {
+        "reasoning_tokens": 516
+      },
+      "total_tokens": 1737
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

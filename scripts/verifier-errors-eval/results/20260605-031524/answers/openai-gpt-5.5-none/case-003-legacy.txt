@@ -1,0 +1,71 @@
+The failure is caused by corrupting the saved pointer on the stack.
+
+At instruction 0:
+
+```asm
+*(u64*)(r10 - 8) = r1;
+```
+
+`r1` is the socket program context pointer, so the verifier records stack slot `fp-8..fp-1` as containing a spilled `ctx` pointer:
+
+```text
+fp-8=ctx()
+```
+
+Then instruction 2 writes one byte into the middle of that saved 8-byte value:
+
+```asm
+*(u8*)(r10 - 7) = r0;
+```
+
+This partially overwrites the spilled pointer. The verifier no longer considers the stack slot to contain a valid pointer; it marks the bytes as miscellaneous/scalar:
+
+```text
+fp-8=mmmmmmmm
+```
+
+So when the program reloads from the stack:
+
+```asm
+r0 = *(u64*)(r10 - 8);
+```
+
+the verifier treats `r0` as a plain scalar, not as a context pointer:
+
+```text
+R0=scalar()
+```
+
+Then the next instruction tries to dereference that scalar:
+
+```asm
+r0 = *(u64*)(r0 + 8);
+```
+
+which is rejected:
+
+```text
+R0 invalid mem access 'scalar'
+```
+
+The smallest fix is to avoid partially overwriting the spilled pointer. Store the byte somewhere else on the stack, outside the `r10 - 8` to `r10 - 1` range used by the spilled pointer.
+
+For example, change the byte store from `r10 - 7` to `r10 - 9`:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -8,7 +8,7 @@ __naked void entry(void)
+ 	asm volatile ("					\
+ 	*(u64*)(r10 - 8) = r1;				\
+ 	r0 = 0x23;					\
+-	*(u8*)(r10 - 7) = r0;				\
++	*(u8*)(r10 - 9) = r0;				\
+ 	r0 = *(u64*)(r10 - 8);				\
+ 	r0 = *(u64*)(r0 + 8);				\
+ 	exit;						\
+```
+
+With that change, the spill at `r10 - 8` remains intact, so the reload should recover `r0` as a valid `ctx` pointer, and the subsequent context access at offset `8` can be checked as a context access instead of an invalid scalar memory access.

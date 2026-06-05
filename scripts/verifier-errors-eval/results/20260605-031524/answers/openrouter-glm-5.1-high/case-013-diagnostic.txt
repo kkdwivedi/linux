@@ -1,0 +1,38 @@
+## Verifier Failure Explanation
+
+The BPF verifier enforces a **combined stack depth limit of 512 bytes** across the entire call chain. The failing chain is:
+
+```
+entry → helper_c → helper_b
+```
+
+- `helper_c` allocates `volatile char buf[260]` (260 bytes on stack)
+- `helper_b` allocates `volatile char buf[260]` (260 bytes on stack)
+- `entry` itself uses some stack for register spills/calling conventions
+
+That's at least 520 bytes just from the two buffers, plus ~24 bytes of overhead, totaling 544 bytes — exceeding the 512-byte limit.
+
+## Fix
+
+Reduce `MAX_STACK` from 260 to 240. This brings the two buffers to 480 bytes, leaving ~32 bytes of headroom for per-function overhead across the 3-call chain:
+
+```
+3 calls × ~16 bytes overhead + 2 × 240 bytes = ~528 → with 240 it fits within 512
+```
+
+Actually, to be safe, **240** works because:
+- `helper_b`: 240 + ~16 = ~256
+- `helper_c`: 240 + ~16 = ~256  
+- `entry`: ~16
+- Total: ~256 + 256 = 512 (just at the limit)
+
+A slightly safer choice is **236** to ensure comfortable margin.
+
+**Patch:**
+
+```diff
+-#define MAX_STACK 260
++#define MAX_STACK 236
+```
+
+This reduces each buffer by 24 bytes (48 bytes total across the two nested functions), bringing the combined stack from 544 down to approximately 496, safely under the 512-byte limit. The test still validates deep call chains with substantial per-frame stack usage — just within the verifier's limit.

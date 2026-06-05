@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Explanation of the Verifier Failure\n\nThe BPF verifier rejects this program because `helper_a()` calls itself recursively:\n\n```\nhelper_a() \u2192 helper_a()\n```\n\nThe verifier explicitly forbids recursive subprogram calls because:\n1. It needs to bound stack depth statically\n2. It requires a finite, acyclic call graph for analysis termination\n3. Recursion could lead to unbounded stack usage\n\nThe problematic code is in `helper_a()`:\n```c\nif r1 < 4 goto l0_%=;\nexit;\nl0_%=: call helper_a;  // \u2190 Recursive call back to helper_a\n```\n\n## Proposed Fix\n\nConvert the recursion into an explicit bounded loop. Since the recursion only happens when `r1 < 4`, we can unroll this into a loop in the main function or use iteration instead.\n\n**Smallest fix - inline the loop logic into `entry()` and remove the recursive call:**\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"tracepoint\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tr1 = 0;\t\t\t\t\t\t\\\nloop:\tr1 += 1;\t\t\t\t\t\\\n\tr0 = r1;\t\t\t\t\t\\\n\tif r1 < 4 goto loop;\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\n**Why this works:**\n- Eliminates the recursive `call helper_a` instruction\n- Replaces it with a bounded loop (`if r1 < 4 goto loop`)\n- The loop is guaranteed to terminate (r1 increments each iteration, exits when r1 \u2265 4)\n- The verifier can statically verify the loop is bounded\n- No subprogram call graph cycle exists\n\nThis is the minimal change that preserves the original logic (incrementing r1 up to 4) while satisfying the verifier's requirement for acyclic call graphs.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-019-diagnostic.txt",
+    "case_id": "case-019",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 2020,
+    "prompt_path": "public/case-019/prompt_diagnostic.md",
+    "prompt_sha256": "bc762d4843d61b1404dac4a4f4cffddeb5a6c6e29d1ad0933b5631140c8504bd",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-019-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "5b023f54-9e93-4542-9bad-c99aec3fdf1c",
+    "started_at": "2026-06-05T03:19:06+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000727,
+    "output_cost_usd": 0.002465,
+    "total_cost_usd": 0.0031920000000000004
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 727,
+    "output_tokens": 493,
+    "raw_usage": {
+      "completion_tokens": 493,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.003192,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002465,
+        "upstream_inference_cost": 0.003192,
+        "upstream_inference_prompt_cost": 0.000727
+      },
+      "is_byok": false,
+      "prompt_tokens": 727,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1220
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1220
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation of the Verifier Failure\n\nThe BPF verifier rejects this program because `helper_a()` calls itself recursively:\n\n```\nhelper_a() \u2192 helper_a()\n```\n\nThe verifier explicitly forbids recursive subprogram calls because:\n1. It needs to bound stack depth statically\n2. It requires a finite, acyclic call graph for analysis termination\n3. Recursion could lead to unbounded stack usage\n\nThe problematic code is in `helper_a()`:\n```c\nif r1 < 4 goto l0_%=;\nexit;\nl0_%=: call helper_a;  // \u2190 Recursive call back to helper_a\n```\n\n## Proposed Fix\n\nConvert the recursion into an explicit bounded loop. Since the recursion only happens when `r1 < 4`, we can unroll this into a loop in the main function or use iteration instead.\n\n**Smallest fix - inline the loop logic into `entry()` and remove the recursive call:**\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"tracepoint\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tr1 = 0;\t\t\t\t\t\t\\\nloop:\tr1 += 1;\t\t\t\t\t\\\n\tr0 = r1;\t\t\t\t\t\\\n\tif r1 < 4 goto loop;\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\n**Why this works:**\n- Eliminates the recursive `call helper_a` instruction\n- Replaces it with a bounded loop (`if r1 < 4 goto loop`)\n- The loop is guaranteed to terminate (r1 increments each iteration, exits when r1 \u2265 4)\n- The verifier can statically verify the loop is bounded\n- No subprogram call graph cycle exists\n\nThis is the minimal change that preserves the original logic (incrementing r1 up to 4) while satisfying the verifier's requirement for acyclic call graphs.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629546,
+    "id": "gen-1780629546-XIAbhzCIBzvQ3XbIBWo7",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 493,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.003192,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002465,
+        "upstream_inference_cost": 0.003192,
+        "upstream_inference_prompt_cost": 0.000727
+      },
+      "is_byok": false,
+      "prompt_tokens": 727,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1220
+    }
+  },
+  "reasoning_content": ""
+}

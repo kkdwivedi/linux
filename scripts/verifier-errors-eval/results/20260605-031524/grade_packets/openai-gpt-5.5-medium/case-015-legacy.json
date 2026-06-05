@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Move helper_a(sk, 0) before taking and checking p.",
+    "Recompute p from sk->data after helper_a and repeat the data_end check before *p = 42.",
+    "Avoid calling a packet-data-invalidating helper between pointer validation and pointer use."
+  ],
+  "canonical_fix": "After helper_a returns, reload sk->data and sk->data_end, redo the bounds check, and only then write through the packet pointer.",
+  "case_id": "case-015",
+  "category": "Register Type Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program validates a packet data pointer, then calls a subprogram that invokes bpf_skb_pull_data. That helper can move packet data and invalidates packet pointers proven before the call. The later store through the old pointer uses an invalidated value.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-medium/case-015-legacy.txt",
+    "case_id": "case-015",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-medium",
+    "prompt_bytes": 1984,
+    "prompt_path": "public/case-015/prompt_legacy.md",
+    "prompt_sha256": "dc0fc1e91b61bdf915966f9cbe5ae652d8b1776a8af859d12e6cd23d52604af2",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-medium/case-015-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "359f47b1-b507-4d10-940d-b9093914accb",
+    "started_at": "2026-06-05T03:15:40+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "The failure is because `helper_a(sk, 0)` eventually calls `bpf_skb_pull_data()`. That helper is packet-mutating: it can reallocate/linearize/change the skb data area, so the verifier invalidates all packet pointers and their previous bounds checks after the call.\n\nBefore the call, `p` is valid:\n\n```c\nint *p = (void *)(long)sk->data;\n\nif ((void *)(p + 1) > (void *)(long)sk->data_end)\n        return TCX_DROP;\n```\n\nThe verifier records `R7=pkt(r=4)` after the bounds check. But after:\n\n```c\nhelper_a(sk, 0);\n```\n\nthe old packet pointer in `R7` is no longer trusted and becomes a scalar. Then:\n\n```c\n*p = 42;\n```\n\ntries to dereference that invalidated pointer:\n\n```text\n10: (63) *(u32 *)(r7 +0) = r1\nR7 invalid mem access 'scalar'\n```\n\nThe fix is to reload `sk->data`/`sk->data_end` and redo the bounds check after the helper call, before using `p`.\n\nSmallest source-level fix:\n\n```diff\n SEC(\"tc\")\n int entry(struct __sk_buff *sk)\n {\n \tint *p = (void *)(long)sk->data;\n\n \tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n \t\treturn TCX_DROP;\n \thelper_a(sk, 0);\n+\n+\tp = (void *)(long)sk->data;\n+\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n+\t\treturn TCX_DROP;\n+\n \t*p = 42;\n \treturn TCX_PASS;\n }\n```\n\nThe first check becomes redundant from the verifier\u2019s perspective, but keeping it is the smallest behavioral change. A cleaner equivalent version would move the bounds check to after `helper_a()`.",
+  "must_mention": [
+    "bpf_skb_pull_data invalidates packet pointers",
+    "The previous packet bounds check no longer applies after the call",
+    "Reload and revalidate data/data_end before dereference"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check for p only",
+    "Uses the old p after the helper call",
+    "Changes the write value but not pointer provenance"
+  ]
+}

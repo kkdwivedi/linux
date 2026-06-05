@@ -1,0 +1,29 @@
+`helper_a()` is being verified **in isolation** (because it has external linkage: no `static`).  
+In that mode, verifier treats its pointer arg as potentially nullable: `R1=mem_or_null`.
+
+So in:
+
+```c
+return bpf_get_prandom_u32() < s->x;
+```
+
+the load of `s->x` is a dereference of `mem_or_null`, and verifier rejects it.
+
+### Small fix (robust): add a NULL guard in `helper_a`
+
+```diff
+@@
+ __noinline int helper_a(const struct Item *s)
+ {
++	if (!s)
++		return 0;
++
+ 	return bpf_get_prandom_u32() < s->x;
+ }
+```
+
+This gives verifier a non-NULL branch before dereference, so `s->x` is safe.
+
+---
+
+Optional alternative (even smaller textual change): make `helper_a` `static`, so verifier can use caller context (`&s` is non-NULL). But the NULL-check fix is the most direct and reliable with current code shape.

@@ -1,0 +1,124 @@
+{
+  "answer_text": "The failure is caused by this call in `helper_b()`:\n\n```c\nhelper_c(val, skb + 1)\n```\n\n`skb` is a context pointer (`struct __sk_buff *`). Pointer arithmetic on context pointers is not allowed in the way it is for normal memory pointers. In BPF, the verifier tracks `skb` as a special `ctx` pointer, and helpers/subprograms that dereference it must receive the original unmodified context pointer.\n\nThe compiler turns `skb + 1` into:\n\n```text\n21: r6 += 192        ; sizeof(struct __sk_buff) == 192\n23: r2 = r6\n24: call helper_c\n```\n\nSo `helper_c()` receives `R2=ctx(imm=192)` instead of the original `R2=ctx()`. Inside `helper_c()`, the program dereferences the pointer:\n\n```c\nreturn skb->ifindex * val;\n```\n\nThe verifier rejects that because dereferencing a modified context pointer is disallowed:\n\n```text\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\nThe smallest source-level fix is to pass the original `skb` pointer to `helper_c()` instead of `skb + 1`.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -15,7 +15,7 @@ int helper_c(int val, struct __sk_buff *skb);\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n \n __attribute__((noinline))\n```\n\nAfter this change, `helper_c()` receives the original `ctx` pointer, matching its prototype and allowing the verifier to validate the dereference of `skb->ifindex`.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-none/case-010-diagnostic.txt",
+    "case_id": "case-010",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-none",
+    "prompt_bytes": 3922,
+    "prompt_path": "public/case-010/prompt_diagnostic.md",
+    "prompt_sha256": "c9975b0bd7d86b4edddce6166024784483798109ab83deeb5185dbddd366cae7",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-none/case-010-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "none"
+    },
+    "run_id": "e8ee27e5-6f5c-4c0a-8349-4268741acec6",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.005805,
+    "output_cost_usd": 0.01269,
+    "total_cost_usd": 0.018495
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1161,
+    "output_tokens": 423,
+    "raw_usage": {
+      "input_tokens": 1161,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 423,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 1584
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1584
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629333,
+    "created_at": 1780629325,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0811411725a26d01006a223f4d086881919a25280b58ba284c",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is caused by this call in `helper_b()`:\n\n```c\nhelper_c(val, skb + 1)\n```\n\n`skb` is a context pointer (`struct __sk_buff *`). Pointer arithmetic on context pointers is not allowed in the way it is for normal memory pointers. In BPF, the verifier tracks `skb` as a special `ctx` pointer, and helpers/subprograms that dereference it must receive the original unmodified context pointer.\n\nThe compiler turns `skb + 1` into:\n\n```text\n21: r6 += 192        ; sizeof(struct __sk_buff) == 192\n23: r2 = r6\n24: call helper_c\n```\n\nSo `helper_c()` receives `R2=ctx(imm=192)` instead of the original `R2=ctx()`. Inside `helper_c()`, the program dereferences the pointer:\n\n```c\nreturn skb->ifindex * val;\n```\n\nThe verifier rejects that because dereferencing a modified context pointer is disallowed:\n\n```text\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\nThe smallest source-level fix is to pass the original `skb` pointer to `helper_c()` instead of `skb + 1`.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -15,7 +15,7 @@ int helper_c(int val, struct __sk_buff *skb);\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n \n __attribute__((noinline))\n```\n\nAfter this change, `helper_c()` receives the original `ctx` pointer, matching its prototype and allowing the verifier to validate the dereference of `skb->ifindex`.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0811411725a26d01006a223f4df9108191bb0951470a85a1be",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "none",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1161,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 423,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 1584
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

@@ -1,0 +1,40 @@
+## What the verifier is complaining about
+
+The message
+
+```
+recursive call from helper_a() to helper_a()
+```
+
+comes from the verifier's subprogram-call checker. The BPF verifier does **not** support recursion of any kind. Each `call` to a static subprogram (a `bpf2bpf` call) is modeled as pushing a new stack frame, and the verifier statically detects when a subprogram can call itself (directly or through a cycle). As soon as it sees `helper_a` containing `call helper_a`, it rejects the program before even simulating instructions (note `processed 0 insns`).
+
+So the fundamental problem is the self-call here:
+
+```asm
+l0_%=:	call helper_a;
+	exit;
+```
+
+## The fix
+
+The function is really just a bounded counting loop: it increments `r1`, copies it to `r0`, and "recurses" while `r1 < 4`. That can be expressed as an ordinary in-function loop, which the verifier *does* support (it can prove the loop terminates because `r1` is strictly increasing and bounded by the `< 4` test). Replacing the recursive `call` with a backward branch removes the recursion while preserving the behavior.
+
+```c
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l0_%=:	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l0_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+### Why this satisfies the verifier
+- There is no longer any `call` to `helper_a`, so the recursive-call check passes.
+- The backward jump `if r1 < 4 goto l0_%=` forms a loop, but `r1` is incremented by 1 on every iteration and the loop exits once `r1 >= 4`. The verifier's bounded-loop analysis can unroll/prove termination, so the back-edge is accepted.
+- `r0` is set on every path before `exit`, so the return value is defined.
+
+If the intent of the test was specifically to keep a separate helper, the same idea applies: the recursion must be turned into iteration (or the recursive `call` simply removed), because the verifier categorically forbids self-recursive `bpf2bpf` calls.

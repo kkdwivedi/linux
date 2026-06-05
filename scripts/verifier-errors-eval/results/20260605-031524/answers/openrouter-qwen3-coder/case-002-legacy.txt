@@ -1,0 +1,28 @@
+Looking at the verifier log, the issue is a reference leak. The `bpf_cpumask_create()` function returns a reference-tracked pointer, and the verifier is complaining that this reference is not properly released before the program exits.
+
+Let me trace through the code:
+
+1. `make_object()` calls `bpf_cpumask_create()` and stores the result in `cpumask`
+2. It checks if `cpumask` is NULL (and would return early if so)
+3. It calls `bpf_cpumask_empty(cast(cpumask))` 
+4. If the cpumask is not empty, it calls `bpf_cpumask_release(cpumask)` and returns NULL
+5. Otherwise, it returns the cpumask pointer
+6. In the main program, `cpumask` is assigned the return value but then only passed to `__sink()`
+
+The problem is that when `make_object()` returns a non-NULL cpumask (the normal case where the cpumask is successfully created and is empty), that reference is never released. The `__sink()` function likely doesn't release the reference.
+
+The fix is to release the cpumask reference in the main program after using it.
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *cpumask;
+
+	cpumask = make_object();
+	if (cpumask)
+		bpf_cpumask_release(cpumask);
+
+	return 0;
+}
+```

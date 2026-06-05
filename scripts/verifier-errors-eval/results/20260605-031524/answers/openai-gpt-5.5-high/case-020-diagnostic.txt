@@ -1,0 +1,56 @@
+The failure is not from an illegal instruction or an invalid stack access. It is a verifier complexity failure during subprogram liveness analysis.
+
+The program builds a very wide/deep BPF-to-BPF call graph:
+
+```text
+entry -> helper_a -> helper_b -> helper_c -> helper_d -> helper_e -> helper_f -> helper_g
+```
+
+At every level, the caller calls the next helper 50 times, each time setting `r1` to a different stack pointer value:
+
+```asm
+r1 = r10;
+r1 += -off;
+call helper_x;
+```
+
+So the verifier has to reason about many call paths and argument/stack-pointer patterns. Even though every helper ignores its argument and just returns `0`, the liveness pass still has to prove that across the nested calls. With 50-way fanout over 7 call levels, the number of possible call chains is enormous. The log shows the verifier repeatedly re-analyzing `helper_g` at depth 7 until it hits the liveness complexity limit:
+
+```text
+liveness analysis exceeded complexity limit (10001 calls)
+```
+
+A small source-level fix is to reduce the fanout. Since the depth is 7, using 3 calls per level gives at most:
+
+```text
+3 + 3^2 + ... + 3^7 = 3279
+```
+
+callee analyses, comfortably below the 10001 limit. Using 4 calls per level would already be:
+
+```text
+4 + 4^2 + ... + 4^7 = 21844
+```
+
+which is likely still too high.
+
+A minimal patch is to redefine `CALLS_50()` to emit only three calls.
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -5,7 +5,8 @@
+ #define CALLS_10(fn) \
+ 	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \
+ 	CALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)
+-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
++#define CALLS_50(fn) \
++	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)
+ 
+ __naked __noinline __used
+ static unsigned long helper_g(void)
+```
+
+This keeps the structure of the test — nested BPF-to-BPF calls with stack-pointer arguments — but reduces the number of distinct call paths enough that the verifier should finish liveness analysis instead of hitting the complexity limit.

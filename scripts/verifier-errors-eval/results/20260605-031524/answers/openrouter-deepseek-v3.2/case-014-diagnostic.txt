@@ -1,0 +1,48 @@
+The verifier fails because the program uses an unbounded offset read from the map value to compute a destination pointer for `bpf_probe_read_kernel`. The offset (`r3`) can be any 32-bit unsigned value (0–4294967295), but the map value size is only 48 bytes. The verifier cannot guarantee that `r1 = r0 + r3` stays within the 48-byte bounds when reading 1 byte.
+
+The fix adds a bounds check after reading the offset and before using it. If the offset is 48 or greater, the program jumps to exit, ensuring that only offsets 0–47 are used. This guarantees the destination pointer remains within the map value.
+
+Here is the fixed source:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+struct value {
+	__u32 offset;
+	__u8 data[44];
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1);
+	__type(key, __u64);
+	__type(value, struct value);
+} map_a SEC(".maps");
+
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = 0;						\
+	*(u64*)(r2 + 0) = r1;				\
+	r1 = %[map_a] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l0_%=;				\
+	r3 = *(u32*)(r0 + 0);				\
+	if r3 >= 48 goto l0_%=;				\
+	r1 = r0;					\
+	r1 += r3;					\
+	r2 = 1;						\
+	r3 = 0;						\
+	call %[bpf_probe_read_kernel];			\
+l0_%=:	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm(bpf_probe_read_kernel),
+	  __imm_addr(map_a)
+	: __clobber_all);
+}
+```

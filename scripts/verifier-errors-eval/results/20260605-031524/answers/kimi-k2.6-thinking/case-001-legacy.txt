@@ -1,0 +1,46 @@
+**Explanation**
+
+The verifier rejects the program at the call to `bpf_cpumask_populate`:
+
+```
+R1 type=scalar expected=fp
+```
+
+`bpf_cpumask_populate` requires its first argument to point to a `struct cpumask`
+that lives in the BPF program’s stack (a frame-pointer-based memory region).  
+Instead, the code passes the constant integer `0x123456`, which the verifier
+tracks as an untrusted **scalar**. Because the argument is not a stack pointer,
+the verifier refuses to load the program.
+
+Additionally, even if the first argument were fixed, `bits` is passed by
+reference as an input buffer but is never initialized. The verifier checks that
+memory read by helpers is initialized, so `bits` must be given a value.
+
+**Fix**
+
+Replace the dummy scalar “pointer” with a real `struct cpumask` allocated on the
+stack, and initialize `bits` so the helper can safely read from it.
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -228,11 +228,11 @@ char _license[] SEC("license") = "GPL";
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+-	u64 bits;
++	struct cpumask mask;
++	u64 bits = 0;
+ 	int ret;
+ 
+-	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
++	ret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));
+ 	if (!ret)
+ 		return 2;
+ 
+```
+
+This satisfies the verifier because `&mask` is a valid stack pointer
+(`R1=fp-N`) and `bits` is known-initialized stack memory, matching the
+expected types for both helper arguments.

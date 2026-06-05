@@ -1,0 +1,114 @@
+I'll analyze this verifier failure and propose a fix.
+
+## Verifier Failure Explanation
+
+The program:
+1. Looks up a value from `map_a` (value size: 48 bytes)
+2. Reads `offset` from the map value (first 4 bytes, stored in `r3`)
+3. Adds `offset` to the map value pointer (`r1 += r3`)
+4. Calls `bpf_probe_read_kernel(r1, 1, 0)` to read 1 byte at the computed address
+
+**The problem:** The verifier cannot prove that `r1 + 0` (with `r2=1` byte size) stays within the 48-byte map value. After `r1 += r3`, the register `r1` becomes a `map_value` with a **variable offset** where `r3` is unbounded (range [0, 0xffffffff]). The verifier requires `offset + size <= 48`, but `r3` could be anything up to 4 billion, far exceeding the 48-byte object.
+
+## The Fix
+
+We need to bounds-check `r3` (the offset) before using it. The offset must satisfy `offset + 1 <= 48`, i.e., `offset <= 47`. Since `offset` is a `u32`, we need to check it's within `[0, 47]`.
+
+The smallest fix is to add a comparison that bounds `r3`. We can use `if r3 > 47 goto exit` (or equivalent). In BPF assembly, we can use `r3 > 47` or check `r3 >= 48`.
+
+Here's the patch:
+
+```c
+--- a/case.c
++++ b/case.c
+@@ -15,6 +15,9 @@ SEC("tracepoint")
+ 	r3 = *(u32*)(r0 + 0);				\
+ 	r1 += r3;					\
+ 	r2 = 1;						\
++	if r3 > 47 goto l0_%=;				\
++	r1 = r0;					\
++	r1 += r3;					\
+ 	r3 = 0;						\
+ 	call %[bpf_probe_read_kernel];			\
+ l0_%=:	exit;						\
+```
+
+Wait - let me re-read the original more carefully. The issue is that after `r1 += r3`, `r1` has variable offset and this taints `r1` for the helper call. We need to re-establish the bounds.
+
+Actually, looking more precisely: the verifier tracks that `r1` is `map_value` with variable offset after `r1 += r3`. Even if we check `r3 <= 47`, we need to redo the pointer arithmetic so the verifier can track the bounded offset properly.
+
+Let me revise - the cleanest fix is to check the bound, then recompute the pointer:
+
+```c
+--- a/case.c
++++ b/case.c
+@@ -12,8 +12,10 @@ SEC("tracepoint")
+ 	call %[bpf_map_lookup_elem];			\
+ 	if r0 == 0 goto l0_%=;				\
+ 	r1 = r0;					\
+-	r3 = *(u32*)(r0 + 0);				\
+-	r1 += r3;					\
++	r3 = *(u32*)(r1 + 0);				\
++	if r3 > 47 goto l0_%=;				\
++	r1 = r0;					\
++	r1 += r3;					\
+ 	r2 = 1;						\
+ 	r3 = 0;						\
+ 	call %[bpf_probe_read_kernel];			\
+```
+
+## Complete Patch
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+struct value {
+	__u32 offset;
+	__u8 data[44];
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1);
+	__type(key, __u64);
+	__type(value, struct value);
+} map_a SEC(".maps");
+
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = 0;						\
+	*(u64*)(r2 + 0) = r1;				\
+	r1 = %[map_a] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l0_%=;				\
+	r1 = r0;					\
+	r3 = *(u32*)(r1 + 0);				\
+	if r3 > 47 goto l0_%=;				\
+	r1 = r0;					\
+	r1 += r3;					\
+	r2 = 1;						\
+	r3 = 0;						\
+	call %[bpf_probe_read_kernel];			\
+l0_%=:	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm(bpf_probe_read_kernel),
+	  __imm_addr(map_a)
+	: __clobber_all);
+}
+```
+
+## Why This Works
+
+The key insight is that the verifier tracks register types and offsets precisely:
+- After `r3 = *(u32*)(r1 + 0)`, `r3` is a `scalar` with unknown bounds
+- `if r3 > 47 goto l0_%=` establishes that `r3 <= 47` on the fall-through path
+- `r1 = r0` resets `r1` to a clean `map_value` with fixed offset 0
+- `r1 += r3` then creates a `map_value` with **bounded** variable offset [0, 47]
+
+With `r1` having offset in [0, 47] and access size 1, the verifier can prove `47 + 1 = 48 <= 48` (object size), so the access is safe.

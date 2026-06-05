@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Release cpumask after __sink(cpumask) if cpumask is non-NULL.",
+    "Transfer the owned cpumask into a kptr/map in a verifier-accepted way so the program no longer owns it."
+  ],
+  "canonical_fix": "After make_object returns a non-NULL cpumask, call bpf_cpumask_release(cpumask) before returning on every path that still owns it.",
+  "case_id": "case-002",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "easy",
+  "expected_explanation": "make_object acquires an owned cpumask reference. The entry program stores/sinks it and returns without releasing or transferring ownership, so one exit path leaks the reference.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-002-legacy.txt",
+    "case_id": "case-002",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 2521,
+    "prompt_path": "public/case-002/prompt_legacy.md",
+    "prompt_sha256": "b1009b27b63c85152af26046b06f483efc378f604fa60de5cb0fdda6b91ed858",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-002-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "58ac9b14-181c-49e8-82d5-2894915e4acd",
+    "started_at": "2026-06-05T03:16:41+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "`bpf_cpumask_create()` returns a **refcounted kptr**.  \nIn your program, `make_object()` returns that live reference on the success path, and `entry()` exits without releasing it.\n\nVerifier log confirms exactly that:\n\n- insn 0: `bpf_cpumask_create` => `trusted_ptr_or_null_bpf_cpumask ... refs=2`\n- success path reaches exit with `R6=trusted_ptr_bpf_cpumask(id=2) refs=2`\n- error: `Unreleased reference id=2 ... BPF_EXIT ... reference leak`\n\n`__sink(cpumask)` does not consume/release the reference; it only keeps the value \u201cused\u201d.\n\n## Smallest fix\n\nRelease in `entry()` when non-NULL:\n\n```diff\n SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n \tstruct bpf_cpumask *cpumask;\n\n \tcpumask = make_object();\n \t__sink(cpumask);\n+\tif (cpumask)\n+\t\tbpf_cpumask_release(cpumask);\n\n \treturn 0;\n }\n```\n\nThis balances the reference acquired by `bpf_cpumask_create()` on the successful return path from `make_object()`.",
+  "must_mention": [
+    "An owned cpumask reference is acquired",
+    "Every exit path must release or transfer ownership",
+    "The NULL path does not need release"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Removes the acquisition without preserving the intended object use",
+    "Calls release without considering NULL when the API requires non-NULL",
+    "Releases only on an error path and still returns with ownership on success"
+  ]
+}

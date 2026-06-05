@@ -1,0 +1,42 @@
+## Explanation
+
+The verifier passes context pointers (`struct __sk_buff *`) to global subprograms as a special `ctx` register type. The kernel only allows dereferencing a `ctx` pointer **in its original, unmodified form** — you may not add an offset to a ctx pointer and then dereference it (or pass it where it will be dereferenced).
+
+In `helper_b` the code does:
+
+```c
+return helper_a(skb) + helper_c(val, skb + 1);
+```
+
+`skb + 1` advances the pointer by `sizeof(struct __sk_buff)` (192 bytes). The compiler emits `r6 += 192`, producing `ctx(imm=192)`, and then passes it as the 2nd argument (`r2`) into `helper_c`. Since `helper_c` dereferences its `skb` argument (`skb->ifindex`), the verifier rejects it:
+
+```
+dereference of modified ctx ptr R2 off=192 disallowed
+```
+
+This is almost certainly a typo — there is no reason to pass `skb + 1`.
+
+## Fix
+
+Pass the original, unmodified `skb`:
+
+```c
+__attribute__((noinline))
+int helper_b(int val, struct __sk_buff *skb)
+{
+	return helper_a(skb) + helper_c(val, skb);
+}
+```
+
+### Patch
+
+```diff
+ __attribute__((noinline))
+ int helper_b(int val, struct __sk_buff *skb)
+ {
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+ }
+```
+
+With this change, `helper_c` receives the ctx pointer at offset 0, so its `skb->ifindex` dereference uses the original ctx pointer and verification succeeds.

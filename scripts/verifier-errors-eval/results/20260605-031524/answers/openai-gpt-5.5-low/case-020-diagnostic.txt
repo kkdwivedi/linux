@@ -1,0 +1,67 @@
+The failure is not due to an invalid instruction or unsafe memory access. The program is valid in principle, but it creates an enormous BPF-to-BPF call fan-out.
+
+Each function calls the next one 50 times:
+
+```c
+entry -> helper_a -> helper_b -> ... -> helper_g
+```
+
+There are 7 call levels before reaching `helper_g`, so the verifier can end up considering an enormous number of distinct call paths, roughly:
+
+```text
+50^7
+```
+
+Each call also passes a different stack-derived value in `r1`:
+
+```asm
+r1 = r10;
+r1 += -8;
+call helper_x;
+...
+r1 = r10;
+r1 += -80;
+call helper_x;
+```
+
+Even though the callees do not actually use `r1`, the verifier still has to perform liveness propagation through those call paths. The log shows repeated re-analysis of `helper_g` until the verifier hits:
+
+```text
+liveness analysis exceeded complexity limit (10001 calls)
+```
+
+So the verifier rejects the program because the liveness-analysis complexity limit is exceeded.
+
+The smallest reliable source-level fix is to reduce the fan-out. Since the limit is 10001, keeping 50 calls per level is far too much. A uniform fan-out of 3 gives:
+
+```text
+3^7 = 2187
+```
+
+which should stay below the liveness limit. A fan-out of 4 would already be:
+
+```text
+4^7 = 16384
+```
+
+which is likely still too high.
+
+A minimal patch is therefore to redefine `CALLS_50()` to emit only three calls.
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..1111111 100644
+--- a/case.c
++++ b/case.c
+@@ -5,7 +5,7 @@
+ #define CALLS_10(fn) \
+ 	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \
+ 	CALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)
+-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
++#define CALLS_50(fn) CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)
+ 
+ __naked __noinline __used
+ static unsigned long helper_g(void)
+```
+
+This keeps the structure of the test intact — nested BPF-to-BPF calls with different stack-pointer arguments — but reduces the number of distinct call paths enough that the verifier should no longer exceed its liveness-analysis limit.

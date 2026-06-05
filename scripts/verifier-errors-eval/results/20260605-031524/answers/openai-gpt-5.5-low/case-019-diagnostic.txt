@@ -1,0 +1,69 @@
+The verifier is rejecting the program because `helper_a()` contains a direct bpf2bpf call to itself:
+
+```asm
+l0_%=: call helper_a;
+```
+
+That creates a recursive subprogram call graph:
+
+```text
+entry -> helper_a -> helper_a -> ...
+```
+
+Even though the code appears to have a bound via:
+
+```asm
+r1 += 1;
+if r1 < 4 goto l0_%=;
+```
+
+the verifier does not allow recursive bpf2bpf calls at all. It requires the subprogram call graph to be finite and acyclic so stack depth and analysis state can be bounded before instruction exploration.
+
+The smallest fix is to rewrite the recursion as an explicit bounded loop inside `helper_a()` instead of calling `helper_a()` again.
+
+A minimal patch would be:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -14,11 +14,10 @@ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+ 	asm volatile ("					\
++l0_%=:							\
+ 	r1 += 1;					\
+ 	r0 = r1;					\
+ 	if r1 < 4 goto l0_%=;				\
+ 	exit;						\
+-l0_%=:	call helper_a;					\
+-	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+Resulting function:
+
+```c
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l0_%=:							\
+	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l0_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+Why this should satisfy the verifier:
+
+- There is no longer a bpf2bpf call from `helper_a()` to itself.
+- The subprogram call graph becomes acyclic: `entry -> helper_a`.
+- The repeated behavior is represented as a bounded loop.
+- Since `entry()` initializes `r1 = 0` before calling `helper_a()`, the loop increments `r1` until it reaches `4`, then exits.
+
+This preserves the intended behavior of the recursive version while avoiding forbidden recursive subprogram calls.

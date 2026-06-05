@@ -1,0 +1,45 @@
+## Explanation
+
+`bpf_dynptr_slice(&ptr, 0, buffer, len)` requires that the destination buffer (`R3`, the stack array `buffer[sizeof(*hdr)]`) is large enough to hold `len` bytes. The verifier proves this by checking that the length argument (`R4`) is bounded and that the bound fits inside the object pointed to by `R3`.
+
+Here the length comes from a global variable:
+
+```c
+__u32 slice_len = sizeof(struct ethhdr);
+```
+
+A global is backed by the `.data` map. When the verifier loads it:
+
+```
+11: (61) r4 = *(u32 *)(r1 +0)   ; R4=scalar(... umax=0xffffffff ...)
+```
+
+it treats the value as a fully *unbounded* `u32` (it cannot assume the runtime value still equals the initializer, since the map is writable). So `R4` is `0 .. 0xffffffff`, which obviously can exceed the 14‑byte `buffer`. That is exactly the reported:
+
+```
+R4 unbounded memory access, use 'var &= const' or 'if (var < const)'
+R3 and R4 memory, len pair leads to invalid memory access
+```
+
+The `R3 ... stack pointer at offset -32` message is just identifying the buffer pointer in the (pointer, length) pair; the real problem is the unbounded length, not the pointer itself.
+
+## Fix
+
+Give the verifier a length it can prove fits in `buffer`. The smallest fix is to bound `slice_len` before the call (or simply pass the compile‑time constant size).
+
+### Option A – pass the constant size (simplest)
+
+```c
+hdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+```
+
+### Option B – keep using the variable but clamp it
+
+```c
+if (slice_len > sizeof(buffer))
+	return SK_DROP;
+
+hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
+```
+
+Either makes `R4`'s upper bound `<= sizeof(buffer)`, satisfying the (pointer, length) contract. Option A is the minimal change; Option B preserves the intent of using the dynamically‑loaded `slice_len`.

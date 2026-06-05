@@ -1,0 +1,45 @@
+## Verifier Failure Analysis
+
+The verifier is detecting a **reference leak**. The program reserves two dynptrs (`ptr1` and `ptr2`) but only submits/discards `ptr1`. The second dynptr (`ptr2`) at `fp-32` is never released before the program exits.
+
+From the verifier log:
+- Line 7: `ptr1` is reserved (id=2)
+- Line 14: `ptr2` is reserved (id=4, parent_id=3)
+- Line 32: Only `ptr1` is submitted
+- Line 34: Program exits with `refs=3` (meaning reference id=3 is still held)
+
+The error message confirms: `Unreleased reference id=3 alloc_insn=14`
+
+## Root Cause
+
+The code path where `sample` is NULL (lines 105-108) discards both dynptrs correctly. However, the success path (lines 110-111) only submits `ptr1` and never releases `ptr2`, causing a leak when the function returns.
+
+## Fix
+
+Add a call to discard `ptr2` before returning on the success path:
+
+```c
+SEC("?raw_tp")
+int entry(void *ctx)
+{
+	struct bpf_dynptr ptr1, ptr2;
+	struct sample *sample;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);
+
+	sample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));
+	if (!sample) {
+		bpf_ringbuf_discard_dynptr(&ptr1, 0);
+		bpf_ringbuf_discard_dynptr(&ptr2, 0);
+		return 0;
+	}
+
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_discard_dynptr(&ptr2, 0);  // ADD THIS LINE
+
+	return 0;
+}
+```
+
+This ensures that `ptr2` is always released (either discarded on error or discarded on success), eliminating the reference leak and allowing the program to pass verification.

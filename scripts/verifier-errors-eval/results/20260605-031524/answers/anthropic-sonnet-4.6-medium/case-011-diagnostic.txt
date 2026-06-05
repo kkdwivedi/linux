@@ -1,0 +1,44 @@
+## Explanation
+
+The verifier failure is a **resource leak**: `ptr2` (acquired at instruction 14) is never released on the success path (when `sample != NULL`). On that path the code only calls `bpf_ringbuf_submit_dynptr(&ptr1, 0)` and then exits, leaving the ring-buffer reservation held by `ptr2` unreleased.
+
+The `if (!sample)` branch correctly discards both `ptr1` and `ptr2`, but the fall-through (non-NULL) path only submits `ptr1`.
+
+## Fix
+
+Add a discard (or submit) of `ptr2` before the final `return 0;`:
+
+```c
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
++	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+
+	return 0;
+```
+
+Full corrected function:
+
+```c
+SEC("?raw_tp")
+int entry(void *ctx)
+{
+	struct bpf_dynptr ptr1, ptr2;
+	struct sample *sample;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);
+
+	sample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));
+	if (!sample) {
+		bpf_ringbuf_discard_dynptr(&ptr1, 0);
+		bpf_ringbuf_discard_dynptr(&ptr2, 0);
+		return 0;
+	}
+
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_discard_dynptr(&ptr2, 0);   /* release ptr2 on success path */
+
+	return 0;
+}
+```
+
+This ensures every exit path releases both acquired ring-buffer reservations, satisfying the verifier's resource lifetime safety requirement.

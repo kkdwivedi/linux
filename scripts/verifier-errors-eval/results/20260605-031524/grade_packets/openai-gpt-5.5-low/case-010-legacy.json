@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Change helper_c(val, skb + 1) to helper_c(val, skb).",
+    "Preserve the original context pointer in another variable/register and pass that original pointer to functions that dereference ctx fields."
+  ],
+  "canonical_fix": "Pass the original skb pointer to helper_c, or keep an unmodified copy for context dereferences and perform any needed offset arithmetic only in verifier-allowed ways.",
+  "case_id": "case-010",
+  "category": "Register Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "helper_b passes skb + 1 to helper_c, whose argument is later dereferenced as a context pointer. The verifier rejects dereferencing a modified ctx pointer because the callee no longer receives the original context pointer form.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-low/case-010-legacy.txt",
+    "case_id": "case-010",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-low",
+    "prompt_bytes": 2233,
+    "prompt_path": "public/case-010/prompt_legacy.md",
+    "prompt_sha256": "42cb94c19ecff9212d01b745ca76ad135db7dce4e6c15eefc8d6cb8a521dd385",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-low/case-010-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "low"
+    },
+    "run_id": "bf8dda2c-442a-47c5-9800-e5379bf5ad1a",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "The verifier rejects `helper_b()` because it passes a modified context pointer to another BPF subprogram:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\nFor `struct __sk_buff *skb`, `skb + 1` advances the pointer by `sizeof(struct __sk_buff)`, which the verifier log shows as `192` bytes:\n\n```text\n21: (07) r6 += 192                    ; R6=ctx(imm=192)\n23: (bf) r2 = r6                      ; R2=ctx(imm=192)\n24: (85) call pc+2\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\n`helper_c()` then dereferences that pointer:\n\n```c\nreturn skb->ifindex * val;\n```\n\nThe verifier allows direct field accesses from the original context pointer, but it does not allow dereferencing an arbitrary/modified context pointer such as `skb + 1`. Therefore the call into `helper_c()` is rejected.\n\nThe smallest source-level fix is to pass the original `skb` pointer to `helper_c()` instead of `skb + 1`.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -15,7 +15,7 @@ int helper_c(int val, struct __sk_buff *skb);\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n \n __attribute__((noinline))\n```\n\nWith this change, `helper_c()` receives the unmodified `ctx` pointer, so its access to `skb->ifindex` should be accepted by the verifier.",
+  "must_mention": [
+    "skb + 1 modifies the ctx pointer",
+    "helper_c dereferences the ctx pointer",
+    "The callee needs the original ctx pointer"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check to skb",
+    "Changes helper_c's field access but still passes skb + 1 as ctx",
+    "Treats the error as stack depth or packet bounds"
+  ]
+}

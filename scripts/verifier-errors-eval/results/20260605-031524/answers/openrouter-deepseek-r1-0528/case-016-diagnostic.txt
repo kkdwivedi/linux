@@ -1,0 +1,38 @@
+The verifier error occurs because the program fails to release an acquired socket reference on one of the exit paths. Specifically:
+
+1. `bpf_sk_lookup_tcp` acquires a socket reference (id=2) stored in `r0`
+2. If `r6 != 0`, the program exits immediately via `exit` instruction without releasing the socket
+3. This violates resource lifetime safety as owned resources must be released before exit
+
+The fix ensures the socket is released when non-NULL regardless of `r6`'s value by:
+1. Removing the conditional check on `r6`
+2. Always checking if `r0` (socket reference) is non-NULL
+3. Releasing the socket only when `r0 != 0`
+
+Here's the minimal patch:
+
+```diff
+--- original.c
++++ fixed.c
+@@ -13,10 +13,7 @@
+ 	r5 = 0;						\
+ 	call %[bpf_sk_lookup_tcp];			\
+-	if r6 == 0 goto l1_%=;				\
+-	exit;						\
+-l1_%=:	if r0 == 0 goto l2_%=;				\
++	if r0 == 0 goto l2_%=;				\
+ 	r1 = r0;					\
+ 	call %[bpf_sk_release];				\
+ l2_%=:	exit;						\
+```
+
+This change:
+1. Removes 3 instructions (`if r6 == 0`, `exit`, and label `l1_%=`)
+2. Adds 1 instruction (`if r0 == 0`)
+3. Maintains all other functionality
+4. Ensures socket is released on all exit paths when non-NULL
+
+The fixed program will pass verification because:
+- Socket reference is now always checked
+- Release happens when reference is non-NULL
+- No paths exist where owned resources leak

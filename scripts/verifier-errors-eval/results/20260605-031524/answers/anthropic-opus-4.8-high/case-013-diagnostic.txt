@@ -1,0 +1,48 @@
+## Explanation
+
+The verifier enforces a hard limit of **512 bytes** for the *combined* stack usage along any single chain of nested function calls (each non-inlined global/static function gets its own stack frame, and the frames of an active call chain are summed).
+
+Here the deepest call chain is:
+
+```
+entry  ->  helper_c  ->  helper_b   (-> helper_a, which uses no stack)
+```
+
+Both `helper_c` and `helper_b` declare:
+
+```c
+volatile char buf[MAX_STACK] = {};   /* MAX_STACK == 260 */
+```
+
+Each 260‑byte frame is rounded up to a 16‑byte boundary → **272 bytes** per frame. Two such frames stacked together:
+
+```
+272 + 272 = 544 bytes  > 512
+```
+
+`entry` itself adds ~0 bytes, so the “3 calls” total is 544, which exceeds the 512‑byte limit — hence:
+
+```
+combined stack size of 3 calls is 544. Too large
+```
+
+(`helper_a` has no array and `helper_d` is only reached as a *separate* leaf call from `helper_c`, not stacked under `helper_b`, so they don’t add to the worst chain.)
+
+## Smallest fix
+
+Shrink the per‑frame stack so that two of these frames fit in 512 bytes. With two nested buffers, each frame must round to ≤ 256 bytes, i.e. `MAX_STACK ≤ 256`:
+
+```c
+2 * round_up_16(256) = 2 * 256 = 512   /* within the 512-byte limit */
+```
+
+### Patch
+
+```c
+-#define MAX_STACK 260
++#define MAX_STACK 256
+```
+
+This reduces each of `helper_b`/`helper_c`/`helper_d`’s frame to 256 bytes, making the worst‑case chain (`entry -> helper_c -> helper_b`) total 512 bytes, which no longer exceeds the verifier’s combined call‑stack‑depth limit.
+
+If you want a little margin below the limit instead of being exactly at it, use a smaller value (e.g. `248`); but `256` is the minimal change that satisfies the `≤ 512` constraint.

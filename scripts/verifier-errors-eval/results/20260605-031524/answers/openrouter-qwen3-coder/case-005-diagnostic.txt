@@ -1,0 +1,51 @@
+### Explanation of the Verifier Failure
+
+The verifier is rejecting the eBPF program because it detects a **context safety violation**:
+
+- The program calls `bpf_preempt_disable()` at line 112, which enters a **non-preemptible region**.
+- Inside this region, it attempts to call `bpf_copy_from_user()` at line 113.
+- However, `bpf_copy_from_user()` is a **sleepable helper**, meaning it may cause the kernel to sleep.
+- Sleepable helpers are **not allowed** inside non-preemptible regions because disabling preemption is meant to ensure code runs atomically and with low latency — sleeping would violate that.
+
+The error message confirms:
+```
+sleepable helper bpf_copy_from_user#148 in non-preemptible region
+```
+
+### Proposed Fix
+
+To fix this, the `bpf_copy_from_user()` call must be moved **outside** the preempt-disabled region. That is, it should occur **after** `bpf_preempt_enable()`.
+
+This change ensures:
+- Preemption is disabled only for code that must run atomically.
+- The sleepable helper is invoked in a context where sleeping is allowed.
+
+### Patch
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("?fentry.s/sys_getpgid")
+int entry(void *ctx)
+{
+	u32 data;
+
+	bpf_preempt_disable();
+	// Removed bpf_copy_from_user() from here
+	bpf_preempt_enable();
+
+	// Moved bpf_copy_from_user() here, outside the critical section
+	bpf_copy_from_user(&data, sizeof(data), NULL);
+
+	return 0;
+}
+```
+
+### Why This Fix Works
+
+- The critical section (between `bpf_preempt_disable()` and `bpf_preempt_enable()`) no longer contains any sleepable operations.
+- `bpf_copy_from_user()` is now called after preemption is re-enabled, which is a valid context for sleepable helpers.
+- This is the **minimal change** needed to satisfy the verifier's context safety rules.

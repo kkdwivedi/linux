@@ -1,0 +1,54 @@
+The verifier rejects the call because:
+
+```c
+struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+...
+bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
+```
+
+does not create a real verifier-known pointer. It just loads the scalar constant `0x123456` into `R1`:
+
+```text
+2: (b7) r1 = 1193046
+4: (85) call bpf_cpumask_populate
+R1 type=scalar expected=fp
+```
+
+`bpf_cpumask_populate()` expects its first argument to point to valid memory large enough for a `struct cpumask` — the log says 16 bytes. A raw integer cast to a pointer is still a scalar to the verifier, so it cannot prove that the memory is valid.
+
+There is also a likely second issue: `bits` is uninitialized. Once the first argument is fixed, the verifier may reject passing `&bits` as readable input memory unless it is initialized.
+
+The smallest robust source fix is to use real stack-backed memory for the cpumask and initialize the input bits.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -7,12 +7,12 @@ char _license[] SEC("license") = "GPL";
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+-	u64 bits;
++	struct cpumask mask = {};
++	u64 bits = 0;
+ 	int ret;
+ 
+-	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
++	ret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));
+ 	if (!ret)
+ 		return 2;
+ 
+ 	return 0;
+ }
+```
+
+Why this should satisfy the verifier:
+
+- `&mask` is a stack pointer, so the verifier can prove it points to real BPF stack memory.
+- `struct cpumask mask = {};` ensures the stack object exists and is initialized.
+- `u64 bits = 0;` ensures the second argument points to initialized readable stack memory.
+- The size argument remains `sizeof(bits)`, matching the available initialized input buffer size.

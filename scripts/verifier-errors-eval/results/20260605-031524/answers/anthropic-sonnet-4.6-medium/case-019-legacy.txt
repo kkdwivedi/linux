@@ -1,0 +1,28 @@
+## Explanation
+
+The BPF verifier explicitly forbids recursive function calls. When it processes `helper_a` and finds a `call helper_a` instruction within `helper_a` itself, it immediately rejects the program with:
+
+```
+recursive call from helper_a() to helper_a()
+```
+
+The function is tail-recursive: it increments `r1`, and loops back (via a self-call) while `r1 < 4`. This is straightforward to convert into an iterative loop using a backward branch, which the verifier handles fine.
+
+## Fix
+
+Replace the recursive `call helper_a` with a backward `goto` to the top of the loop body:
+
+```c
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l0_%=:	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l0_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+**Why this works:** The logic is identical — increment `r1`, copy to `r0`, repeat while `r1 < 4` — but instead of a recursive `call` (which the verifier rejects), we use a backward conditional jump. The verifier handles backward branches by tracking loop iterations and will accept this iterative form without issue.

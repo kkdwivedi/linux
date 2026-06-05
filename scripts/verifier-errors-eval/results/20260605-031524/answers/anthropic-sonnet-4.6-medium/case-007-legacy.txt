@@ -1,0 +1,16 @@
+## Explanation
+
+The verifier error occurs because `slice_len` is a global variable stored in the `.data` map. When loaded at runtime (`R4 = *(u32 *)(r1 +0)`), the verifier treats it as an **unbounded scalar** — it could be any 32-bit value. `bpf_dynptr_slice` requires the `len` argument to be a **known, bounded** value so the verifier can confirm the buffer (`buffer`) is large enough for the access.
+
+The buffer `buffer` is `sizeof(struct ethhdr)` bytes, and `slice_len` is initialized to the same value, but the verifier cannot prove that at verification time since it reads `slice_len` from a map value.
+
+## Fix
+
+Replace the runtime variable `slice_len` with the compile-time constant `sizeof(*hdr)` (or `sizeof(struct ethhdr)`) in the `bpf_dynptr_slice` call:
+
+```c
+-	hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
++	hdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(*hdr));
+```
+
+This makes the length argument a compile-time constant that the verifier can use to confirm the buffer is large enough, satisfying the memory safety check.

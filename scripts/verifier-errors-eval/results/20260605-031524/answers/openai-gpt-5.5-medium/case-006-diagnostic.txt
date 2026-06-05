@@ -1,0 +1,46 @@
+The verifier is not rejecting this program because of register state or the naked inline assembly. It fails immediately at instruction 0:
+
+```text
+0: (85) call bpf_ktime_get_coarse_ns#160
+program of this type cannot use helper bpf_ktime_get_coarse_ns#160
+```
+
+The program is loaded as a kprobe program because of:
+
+```c
+SEC("kprobe")
+```
+
+For each BPF program type, the verifier has a helper allowlist. `bpf_ktime_get_coarse_ns()` is not allowed for kprobe programs on this kernel, so the verifier rejects the program before it even reaches:
+
+```asm
+r0 = 0;
+exit;
+```
+
+The smallest source-level fix is to call a time helper that is allowed for kprobe programs. `bpf_ktime_get_ns()` is the usual allowed helper for tracing/kprobe programs and has the same no-argument calling convention.
+
+Patch:
+
+```diff
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ 
+ char _license[] SEC("license") = "GPL";
+ 
+ SEC("kprobe")
+ __naked void entry(void)
+ {
+ 	asm volatile ("					\
+-	call %[bpf_ktime_get_coarse_ns];		\
++	call %[bpf_ktime_get_ns];			\
+ 	r0 = 0;						\
+ 	exit;						\
+ "	:
+-	: __imm(bpf_ktime_get_coarse_ns)
++	: __imm(bpf_ktime_get_ns)
+ 	: __clobber_all);
+ }
+```
+
+Why this should pass: `bpf_ktime_get_ns()` is allowed for kprobe/tracing program types, takes no arguments, returns a scalar in `r0`, and the program then overwrites `r0` with `0` before exiting, which is valid for a kprobe program.

@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Reduce CALLS_50 fan-out or the number of helper layers.",
+    "Pass a stable non-FP-derived argument pattern when possible.",
+    "Replace the generated call tree with a simpler bounded loop or less duplicated call structure."
+  ],
+  "canonical_fix": "Reduce the number of distinct call paths or argument patterns reaching the subprograms, for example by reducing fan-out/depth, consolidating calls, or avoiding many distinct FP-offset arguments.",
+  "case_id": "case-020",
+  "category": "Verifier Limit",
+  "difficulty": "hard",
+  "expected_explanation": "The program creates an enormous number of distinct bpf2bpf call paths and frame-pointer-derived argument patterns. Liveness analysis exceeds its complexity limit while recomputing subprogram liveness across those paths.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-020-diagnostic.txt",
+    "case_id": "case-020",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 4110,
+    "prompt_path": "public/case-020/prompt_diagnostic.md",
+    "prompt_sha256": "cb7344658f86bd080c64c73a9c8ee3095a7de5b045356c00872dce60afb5bfb8",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-020-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "2d12e8fb-7f68-496b-b7fe-706dcc4827f5",
+    "started_at": "2026-06-05T03:19:06+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Analysis\n\nThe verifier is failing due to exceeding the **liveness analysis complexity limit** (10001 calls). This happens because:\n\n1. The program creates a deeply nested call chain: `entry` \u2192 `helper_a` (50 calls) \u2192 `helper_b` (50 calls) \u2192 ... \u2192 `helper_g` (50 calls)\n2. This results in **50^7 = 78,125 billion** potential call paths to the innermost function `helper_g`\n3. The verifier's liveness analysis must recompute which registers/stack locations are live across all these paths, causing exponential complexity\n4. Each time `helper_g` is analyzed from different call contexts, the verifier re-analyzes it, hitting the 10,001 call limit\n\n## Root Cause\n\nThe macro-based approach creates too many distinct call paths reaching the same subprogram. The verifier tracks liveness per call context, and with 50 calls at each of 7 levels, the number of distinct contexts explodes combinatorially.\n\n## Solution\n\nReduce the nesting depth or the number of calls per level. The simplest fix is to **reduce `CALLS_50` to a smaller number** like `CALLS_10` or even fewer calls per level.\n\n### Patch\n\n```c\n#define CALLS_10(fn) \\\n\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n\tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n+#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn)\n```\n\nOr alternatively, reduce the depth by removing one or more helper levels (e.g., remove `helper_a` and have `entry` call `helper_b` directly).\n\n**Why this works:** Reducing from 50 calls to 20 per level drops the call path explosion from 50^7 to 20^7, which is manageable by the verifier's liveness analysis within the 10,001 call limit.",
+  "must_mention": [
+    "The failure is verifier liveness complexity, not runtime recursion",
+    "Many call paths or distinct FP offsets drive the limit",
+    "The fix is to simplify the call/argument pattern"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only increases a runtime loop bound",
+    "Adds packet or memory bounds checks",
+    "Suggests releasing a resource"
+  ]
+}

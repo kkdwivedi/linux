@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Add bpf_ringbuf_discard_dynptr(&ptr2, 0) before the final return.",
+    "Submit ptr2 too, if the program actually initializes and intends to publish it.",
+    "Restructure cleanup so both ptr1 and ptr2 are released on all exits after reservation."
+  ],
+  "canonical_fix": "Submit or discard ptr2 on every path after it is reserved, including the path where ptr1 is submitted successfully.",
+  "case_id": "case-011",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The program reserves two ringbuf dynptrs. On the success path it submits/releases only ptr1 and returns while ptr2 is still live.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-sonnet-4.6-medium/case-011-diagnostic.txt",
+    "case_id": "case-011",
+    "model": "anthropic/claude-sonnet-4.6",
+    "profile": "openrouter-claude-sonnet-4.6-medium",
+    "prompt_bytes": 5553,
+    "prompt_path": "public/case-011/prompt_diagnostic.md",
+    "prompt_sha256": "c4e9b1631d514a5b5c9e921fc3dfd8dc5de6eebfbb59913cb9ede46e6625c9ef",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-sonnet-4.6-medium/case-011-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "192091de-33b2-4eba-8909-1159cc78df66",
+    "started_at": "2026-06-05T03:18:47+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation of the Failure\n\nThe verifier tracks ring-buffer reservations as \"owned references\" that **must** be released (submitted or discarded) on every control-flow path before the program exits.\n\nThe program has two paths:\n\n1. **`!sample` branch (ptr1 NULL):** calls `bpf_ringbuf_discard_dynptr(&ptr1, 0)` and `bpf_ringbuf_discard_dynptr(&ptr2, 0)` \u2192 both references released \u2714  \n2. **`sample` non-NULL branch:** calls only `bpf_ringbuf_submit_dynptr(&ptr1, 0)` \u2192 `ptr2`'s reference (id=3, acquired at insn 14) is **never released** \u2717\n\nThe verifier reports:  \n```\nUnreleased reference id=3 alloc_insn=14\n```\n\n## Fix\n\nAdd a submit (or discard) for `ptr2` on the success path, before `return 0`:\n\n```c\n--- a/case.c\n+++ b/case.c\n@@ -109,6 +109,7 @@ int entry(void *ctx)\n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_submit_dynptr(&ptr2, 0);\n \n \treturn 0;\n }\n```\n\n### Why this works\n\nEvery path through the function must release **both** reservations:\n\n- **NULL path:** discards `ptr1` then `ptr2` (already correct).  \n- **Non-NULL path:** submits `ptr1` then (with the fix) submits `ptr2`, satisfying the verifier's resource-lifetime check.",
+  "must_mention": [
+    "The second dynptr reservation is leaked",
+    "Every reserved dynptr must be submitted or discarded",
+    "The successful ptr1 path still needs ptr2 cleanup"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only releases ptr1",
+    "Adds cleanup only in the !sample branch, which already releases both",
+    "Calls a non-dynptr ringbuf cleanup API on the dynptr"
+  ]
+}

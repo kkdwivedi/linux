@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nThe BPF verifier enforces that `bpf_local_irq_save`/`bpf_local_irq_restore` pairs follow **LIFO (stack) order**, just like real IRQ flag nesting must work.\n\n- `flags1` was saved first \u2192 assigned id=1  \n- `flags2` was saved second \u2192 assigned id=2  \n\nThe verifier therefore expects `flags2` (id=2, the most-recently saved) to be restored **before** `flags1`. The code restores them in the wrong order (`flags1` first, then `flags2`), causing the error:\n\n```\ncannot restore irq state out of order, expected id=2 acquired at insn_idx=7\n```\n\n## Fix\n\nSwap the two `bpf_local_irq_restore` calls so they follow LIFO order:\n\n```c\n--- a/case.c\n+++ b/case.c\n@@ -9,7 +9,7 @@ int entry(struct __sk_buff *ctx)\n \tbpf_local_irq_save(&flags1);\n \tbpf_local_irq_save(&flags2);\n-\tbpf_local_irq_restore(&flags1);\n \tbpf_local_irq_restore(&flags2);\n+\tbpf_local_irq_restore(&flags1);\n \treturn 0;\n }\n```\n\n`flags2` must be restored first (it was saved last), then `flags1`.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-medium/case-017-legacy.txt",
+    "case_id": "case-017",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-medium",
+    "prompt_bytes": 1745,
+    "prompt_path": "public/case-017/prompt_legacy.md",
+    "prompt_sha256": "7fc465b0f01c16b7f076395e6776f54156c97eb932b04d9dd1f878444e3ec702",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-medium/case-017-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "99d899bc-e4b6-4308-953c-954346fbe28b",
+    "started_at": "2026-06-05T03:17:54+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00243,
+    "output_cost_usd": 0.00705,
+    "total_cost_usd": 0.009479999999999999
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 810,
+    "output_tokens": 470,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 810,
+      "output_tokens": 470,
+      "output_tokens_details": {
+        "thinking_tokens": 102
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 269,
+    "reasoning_tokens": 0,
+    "total_tokens": 1280
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EtUDCmUIDhgCKkD/mV2Tre/54aBBvWI8+6Rkdizo3xrT6AQvdv0JqML87NEzkk6C2EtGLmDdGHiRr/VBjLss+uiT1nlw2gHWW8z4MhFjbGF1ZGUtc29ubmV0LTQtNjgAQgh0aGlua2luZxIMb/+zFL7YDRL4/QzEGgyEw0CPTPmi2eCgWr4iMDcsYAQz8n9YiaNlR1JgBsby5cjk7FgYqbSy3XUzdGysqO950MP2+y2352YIygzMQiqdAi1bgJAkq3cgwTStg1KnwCe1B0Nk9pjMRDshtaOpRabPsUQY9vkzuvtQaIawcPJCHGEpVu6U+xf6KRIdMLnfb+Mli/SAUQhT5Np/YsmHmhnIuHx76NvGtsqpcGejnZg/6pzjeeHX5f7vCNJH3VfYZz73ZnfJl6DzuBctjzFPTsdfkGNI5YdGco90Kw2tk7riWDcub61SA3bYydZjXCkZ0Vi3HJ22yE+bODE6d5Fw9LV2VcIhyaEDfjssMQQrF5sIDLaX0Im/XnuynOkRb/bUC8HCAg1pfAD/TmRBBFQGmSuW1TP2m5rgO53LzAyn5LFEp+U1rGTghcS7Ua4FkeD0h7iFQncHJQeJ8GrRjxbX3X6PnrD2pJeAnxZt04HiRhgB",
+        "thinking": "The verifier requires IRQ restores to happen in LIFO (stack) order. flags2 was saved last (id=2), so it must be restored first before flags1 can be restored.\n\nThe fix is to swap the restore order:\n```c\nbpf_local_irq_restore(&flags2);\nbpf_local_irq_restore(&flags1);\n```",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nThe BPF verifier enforces that `bpf_local_irq_save`/`bpf_local_irq_restore` pairs follow **LIFO (stack) order**, just like real IRQ flag nesting must work.\n\n- `flags1` was saved first \u2192 assigned id=1  \n- `flags2` was saved second \u2192 assigned id=2  \n\nThe verifier therefore expects `flags2` (id=2, the most-recently saved) to be restored **before** `flags1`. The code restores them in the wrong order (`flags1` first, then `flags2`), causing the error:\n\n```\ncannot restore irq state out of order, expected id=2 acquired at insn_idx=7\n```\n\n## Fix\n\nSwap the two `bpf_local_irq_restore` calls so they follow LIFO order:\n\n```c\n--- a/case.c\n+++ b/case.c\n@@ -9,7 +9,7 @@ int entry(struct __sk_buff *ctx)\n \tbpf_local_irq_save(&flags1);\n \tbpf_local_irq_save(&flags2);\n-\tbpf_local_irq_restore(&flags1);\n \tbpf_local_irq_restore(&flags2);\n+\tbpf_local_irq_restore(&flags1);\n \treturn 0;\n }\n```\n\n`flags2` must be restored first (it was saved last), then `flags1`.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01HRJBRayVEjDASPybQyHnHU",
+    "model": "claude-sonnet-4-6",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 810,
+      "output_tokens": 470,
+      "output_tokens_details": {
+        "thinking_tokens": 102
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": "The verifier requires IRQ restores to happen in LIFO (stack) order. flags2 was saved last (id=2), so it must be restored first before flags1 can be restored.\n\nThe fix is to swap the restore order:\n```c\nbpf_local_irq_restore(&flags2);\nbpf_local_irq_restore(&flags1);\n```"
+}

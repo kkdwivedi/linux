@@ -1,0 +1,19 @@
+## Explanation
+
+The verifier rejects the program because of a mismatch between the backup buffer size and the requested slice length in `bpf_dynptr_slice`.
+
+- `buffer` is declared as `char buffer[8]` — an 8-byte stack buffer.
+- The 4th argument to `bpf_dynptr_slice` is `9`, telling the verifier the fallback buffer needs to be at least 9 bytes.
+
+The verifier checks that the R3/R4 memory-length pair is consistent: R3 points to 8 bytes of initialized stack memory, but R4 claims 9 bytes. This is an out-of-bounds access, so verification fails.
+
+## Fix
+
+Change the buffer size from 8 to 9 so it matches the slice length:
+
+```c
+-	char buffer[8] = {};
++	char buffer[9] = {};
+```
+
+This makes the backup buffer large enough for the 9-byte slice requested by `bpf_dynptr_slice`, satisfying the verifier's memory-length contract.

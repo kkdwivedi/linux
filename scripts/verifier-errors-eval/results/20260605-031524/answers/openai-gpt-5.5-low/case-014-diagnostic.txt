@@ -1,0 +1,48 @@
+The verifier rejects the program because `r3` is loaded from the map value:
+
+```asm
+r3 = *(u32*)(r0 + 0);
+```
+
+That value is then used as a variable offset into the same map value:
+
+```asm
+r1 = r0;
+r1 += r3;
+...
+call bpf_probe_read_kernel;
+```
+
+At the helper call, `r1` is the destination pointer for `bpf_probe_read_kernel(dst, size, src)`. The verifier must prove that `dst` points to writable memory inside the map value for `size = 1`.
+
+The map value size is 48 bytes:
+
+```c
+struct value {
+	__u32 offset;   /* 4 bytes */
+	__u8 data[44];  /* 44 bytes */
+};
+```
+
+But `offset` is an unconstrained `u32`, so the verifier sees it as possibly ranging from `0` to `0xffffffff`. Therefore `r0 + offset` may point outside the 48-byte map value.
+
+The smallest fix is to add a bounds check proving that `offset + 1 <= 48`, i.e. `offset <= 47`, before adding it to the map-value pointer.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -24,6 +24,7 @@ __naked void entry(void)
+ 	if r0 == 0 goto l0_%=;				\
+ 	r1 = r0;					\
+ 	r3 = *(u32*)(r0 + 0);				\
++	if r3 > 47 goto l0_%=;				\
+ 	r1 += r3;					\
+ 	r2 = 1;						\
+ 	r3 = 0;						\
+```
+
+With this check, the verifier can infer that `r3` is in the range `[0, 47]`, so `r1 = map_value + r3` is guaranteed to point inside the 48-byte map value, and a 1-byte write through `bpf_probe_read_kernel()` is safe.

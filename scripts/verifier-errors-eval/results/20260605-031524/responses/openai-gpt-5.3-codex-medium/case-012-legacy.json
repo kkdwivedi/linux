@@ -1,0 +1,130 @@
+{
+  "answer_text": "The actual verifier rejection is this line:\n\n> `sleepable global function helper_a() called in IRQ-disabled region`\n\n### Why it fails\n- `entry()` disables IRQs via `bpf_local_irq_save(&flags)`.\n- While IRQs are disabled, it calls `helper_a(0)`.\n- `helper_a()` contains `bpf_copy_from_user(...)`, which is a **sleepable** operation.\n- Verifier forbids any sleepable call path in an IRQ-disabled region.\n\nSo even though the code is small, the call ordering violates verifier rules.\n\n---\n\n### Smallest likely fix\nCall `helper_a()` **before** disabling IRQs (or after restoring).  \nThis keeps sleepable work outside the IRQ-off critical section.\n\n```diff\n SEC(\"?syscall\")\n int entry(void *ctx)\n {\n \tunsigned long flags;\n \n-\tbpf_local_irq_save(&flags);\n \thelper_a(0);\n+\tbpf_local_irq_save(&flags);\n \tbpf_local_irq_restore(&flags);\n \treturn 0;\n }\n```\n\nThat is the minimal source change most likely to make this pass.  \n(Top log line about arg#0 type is not the rejecting condition here; the hard failure is the sleepable-call-in-IRQ-disabled-region error.)",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-medium/case-012-legacy.txt",
+    "case_id": "case-012",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-medium",
+    "prompt_bytes": 1526,
+    "prompt_path": "public/case-012/prompt_legacy.md",
+    "prompt_sha256": "3c7396a0a94e22b4ffa05f47bf695c68faeca27ec07a26da548d621cb3473cdb",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-medium/case-012-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "df405ffe-5b30-4be4-97bc-dba6e9597b5d",
+    "started_at": "2026-06-05T03:16:31+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.0009695,
+    "output_cost_usd": 0.021826,
+    "total_cost_usd": 0.022795500000000003
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 554,
+    "output_tokens": 1559,
+    "raw_usage": {
+      "input_tokens": 554,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1559,
+      "output_tokens_details": {
+        "reasoning_tokens": 1293
+      },
+      "total_tokens": 2113
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 1293,
+    "total_tokens": 2113
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629417,
+    "created_at": 1780629391,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_02a374dd9d218731006a223f8f3f84819fa140442a2716e55d",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_02a374dd9d218731006a223f8fbb58819f81060be1c5a3822f",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The actual verifier rejection is this line:\n\n> `sleepable global function helper_a() called in IRQ-disabled region`\n\n### Why it fails\n- `entry()` disables IRQs via `bpf_local_irq_save(&flags)`.\n- While IRQs are disabled, it calls `helper_a(0)`.\n- `helper_a()` contains `bpf_copy_from_user(...)`, which is a **sleepable** operation.\n- Verifier forbids any sleepable call path in an IRQ-disabled region.\n\nSo even though the code is small, the call ordering violates verifier rules.\n\n---\n\n### Smallest likely fix\nCall `helper_a()` **before** disabling IRQs (or after restoring).  \nThis keeps sleepable work outside the IRQ-off critical section.\n\n```diff\n SEC(\"?syscall\")\n int entry(void *ctx)\n {\n \tunsigned long flags;\n \n-\tbpf_local_irq_save(&flags);\n \thelper_a(0);\n+\tbpf_local_irq_save(&flags);\n \tbpf_local_irq_restore(&flags);\n \treturn 0;\n }\n```\n\nThat is the minimal source change most likely to make this pass.  \n(Top log line about arg#0 type is not the rejecting condition here; the hard failure is the sleepable-call-in-IRQ-disabled-region error.)",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_02a374dd9d218731006a223fa596c8819fbb19fe8b782ce442",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 554,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1559,
+      "output_tokens_details": {
+        "reasoning_tokens": 1293
+      },
+      "total_tokens": 2113
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

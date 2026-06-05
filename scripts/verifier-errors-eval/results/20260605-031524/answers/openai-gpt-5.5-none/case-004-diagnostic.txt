@@ -1,0 +1,43 @@
+The verifier is checking `helper_a()` as a separate subprogram and sees its argument as:
+
+```text
+R1=mem_or_null(id=1,sz=4)
+```
+
+So inside `helper_a`, the pointer parameter `s` is treated as possibly `NULL`. The function then immediately dereferences it:
+
+```c
+return bpf_get_prandom_u32() < s->x;
+```
+
+which becomes:
+
+```text
+10: r2 = *(u32 *)(r6 +0)
+R6 invalid mem access 'mem_or_null'
+```
+
+Because there is no NULL check in `helper_a()`, the verifier cannot prove that `s` is non-NULL on the dereference path.
+
+Even though the caller passes `&s`, a stack address that is non-NULL in normal C semantics, the verifier log shows that for this selftest/verifier mode the subprogram argument is modeled as `mem_or_null`, so the callee itself must guard the dereference.
+
+Smallest likely source-level fix: add a NULL check in `helper_a()` before accessing `s->x`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -8,6 +8,8 @@ struct Item {
+ 
+ __noinline int helper_a(const struct Item *s)
+ {
++	if (!s)
++		return 0;
+ 	return bpf_get_prandom_u32() < s->x;
+ }
+```
+
+With this change, the verifier should split the state at the NULL check. On the path reaching `s->x`, `s` has been refined from `mem_or_null` to non-NULL `mem`, making the load from offset `0` safe.

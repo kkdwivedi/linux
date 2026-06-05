@@ -1,0 +1,60 @@
+The verifier error occurs because the `helper_a` function contains a recursive call to itself, which creates a cyclic call graph. The eBPF verifier requires a finite, acyclic call graph to bound stack depth and ensure safe program execution.
+
+**Fix Explanation:**
+The recursion in `helper_a` is bounded (r1 increments from 0 to 4), so it can be converted to a bounded loop. The smallest fix is to:
+1. Replace the recursive call with a jump back to the top of the function
+2. Move the `r0 = r1` assignment after the loop to preserve the final value
+3. Remove the unused label and recursive call
+
+This maintains the original behavior (r1 increments 4 times) while eliminating recursion.
+
+**Fixed Source:**
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r1 = 0;						\
+	call helper_a;					\
+	exit;						\
+"	::: __clobber_all);
+}
+
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l0_%=:	r1 += 1;					\
+	if r1 < 4 goto l0_%=;				\
+	r0 = r1;					\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+**Patch:**
+```diff
+--- original.c
++++ fixed.c
+@@ -10,12 +10,10 @@
+ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+-	asm volatile ("					\
+-	r1 += 1;					\
+-	r0 = r1;					\
+-	if r1 < 4 goto l0_%=;				\
+-	exit;						\
+-l0_%=:	call helper_a;					\
+-	exit;						\
++	asm volatile ("                                 \
++l0_%=:  r1 += 1;                                    \
++	if r1 < 4 goto l0_%=;                       \
++	r0 = r1;                                    \
++	exit;                                       \
+ "	::: __clobber_all);
+ }
+```

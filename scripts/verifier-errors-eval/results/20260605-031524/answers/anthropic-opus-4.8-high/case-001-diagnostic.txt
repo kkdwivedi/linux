@@ -1,0 +1,56 @@
+## Explanation
+
+The kfunc `bpf_cpumask_populate()` is declared with `KF_TRUSTED_ARGS` and expects its first argument to be a real pointer to a `struct cpumask` (verifier-known memory of the proper type/size). In the test the first argument is:
+
+```c
+struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+```
+
+When this is passed, the verifier sees `R1` as a plain integer scalar (`0x123456`), not a pointer to allocated memory:
+
+```
+R1 type=scalar expected=fp
+Call Type Safety: Invalid call argument
+```
+
+So the call fails verification because you can't hand a raw integer-cast pointer to a kfunc that needs a trusted/known cpumask of 16 bytes.
+
+## Fix
+
+Use a properly allocated `bpf_cpumask` (via `bpf_cpumask_create()`), pass it to the kfunc, then release it. That gives the verifier a real, typed, trusted pointer.
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *mask;
+	u64 bits;
+	int ret;
+
+	mask = bpf_cpumask_create();
+	if (!mask)
+		return 1;
+
+	ret = bpf_cpumask_populate((struct cpumask *)mask, &bits, sizeof(bits));
+
+	bpf_cpumask_release(mask);
+
+	if (!ret)
+		return 2;
+
+	return 0;
+}
+```
+
+Key points:
+- `bpf_cpumask_create()` returns a trusted, ref-counted pointer the verifier tracks as proper memory of type `struct bpf_cpumask`, so the cast to `struct cpumask *` satisfies the kfunc's argument contract.
+- The reference must be released with `bpf_cpumask_release()` before the program returns, otherwise the verifier rejects with a reference-leak error.
+- The `&bits`/`sizeof(bits)` arguments are already valid (stack memory), so they don't need changing.
+
+This replaces the invalid scalar-cast pointer with verifier-known memory of the expected type and size, which is exactly what the failure message asks for.

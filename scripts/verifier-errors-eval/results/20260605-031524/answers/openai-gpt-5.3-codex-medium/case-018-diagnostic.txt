@@ -1,0 +1,35 @@
+`lock_a` is acquired first, then `lock_b`.  
+So unlocks must be **LIFO**: `lock_b` first, then `lock_a`.
+
+In your source, success path does:
+
+```c
+bpf_res_spin_unlock(&lock_a);
+bpf_res_spin_unlock(&lock_b);
+```
+
+That is out of order. The verifier log confirms that after `bpf_res_spin_lock(&lock_b)`, the next unlock it sees is `lock_a`, which violates nested lock ordering.
+
+### Smallest likely fix
+
+Swap the two unlocks in the normal path.
+
+```diff
+ SEC("?tc")
+ int entry(struct __sk_buff *ctx)
+ {
+ 	if (bpf_res_spin_lock(&lock_a))
+ 		return 0;
+ 	if (bpf_res_spin_lock(&lock_b)) {
+ 		bpf_res_spin_unlock(&lock_a);
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+-	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+This preserves behavior and satisfies verifier lock lifetime rules (release nested locks in reverse acquisition order).

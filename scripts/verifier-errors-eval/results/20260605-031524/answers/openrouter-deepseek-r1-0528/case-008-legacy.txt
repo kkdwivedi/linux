@@ -1,0 +1,41 @@
+The verifier error occurs because the program attempts to read 9 bytes from a stack buffer that is only 8 bytes. The `bpf_dynptr_slice()` function is called with a length argument of 9 (`buffer` size is 8), leading to an invalid memory access beyond the buffer boundaries. This overread violates the verifier's memory safety checks.
+
+The fix is to adjust the length argument to match the buffer size. Change the call to request 8 bytes instead of 9. This ensures the operation stays within the allocated buffer space while maintaining the program's functionality.
+
+Fixed source:
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("?cgroup_skb/egress")
+int entry(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+	char buffer[8] = {};
+	__u64 *data;
+
+	if (bpf_dynptr_from_skb(skb, 0, &ptr))
+		return 1;
+
+	data = bpf_dynptr_slice(&ptr, 0, buffer, 8);
+
+	return !!data;
+}
+```
+
+Patch:
+```patch
+--- a/prog.c
++++ b/prog.c
+@@ -11,7 +11,7 @@ int entry(struct __sk_buff *skb)
+ 	if (bpf_dynptr_from_skb(skb, 0, &ptr))
+ 		return 1;
+ 
+-	data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
++	data = bpf_dynptr_slice(&ptr, 0, buffer, 8);
+ 
+ 	return !!data;
+ }
+```

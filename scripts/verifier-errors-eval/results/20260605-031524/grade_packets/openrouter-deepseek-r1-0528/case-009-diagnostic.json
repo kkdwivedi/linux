@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Use bpf_rcu_read_lock(), load task = value->task, check if (!task), call bpf_task_acquire(task) only on the non-NULL path, and unlock appropriately.",
+    "Avoid reading a nullable map kptr field directly and instead pass a task pointer from a trusted source that already satisfies bpf_task_acquire's argument contract."
+  ],
+  "canonical_fix": "Load value->task into a temporary, prove it is non-NULL on the call path, and use the verifier-required trusted/RCU-safe access pattern before calling bpf_task_acquire.",
+  "case_id": "case-009",
+  "category": "Call Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "value->task is loaded from a map value as an RCU/null-capable task pointer. bpf_task_acquire requires an argument that the verifier can prove is non-NULL and trusted/acceptable for that kfunc. Passing the field directly does not satisfy that contract.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-r1-0528/case-009-diagnostic.txt",
+    "case_id": "case-009",
+    "model": "deepseek/deepseek-r1-0528",
+    "profile": "openrouter-deepseek-r1-0528",
+    "prompt_bytes": 9539,
+    "prompt_path": "public/case-009/prompt_diagnostic.md",
+    "prompt_sha256": "b18a80e715b0997c1feba2b4b098abd71869a9fb867ace1b91abe52c1a1cab07",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-r1-0528/case-009-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "4da4f54f-abb3-4928-a477-680fb46f951a",
+    "started_at": "2026-06-05T03:19:11+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier failure occurs because `value->task` might be NULL when passed to `bpf_task_acquire()`, which requires a non-NULL pointer. The verifier cannot guarantee that `value->task` is non-NULL after `map_insert()` succeeds, as the `task` field is initialized to NULL and later set via `bpf_kptr_xchg()`, which the verifier doesn't track sufficiently.\n\n### Minimal Fix\nAdd a NULL check for `value->task` before calling `bpf_task_acquire()` in the `entry` program:\n\n```diff\n SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n \tstruct task_struct *acquired;\n \tstruct map_value *value;\n \n \tvalue = helper_a(task);\n \tif (!value)\n \t\treturn 0;\n \n+\tif (!value->task)\n+\t\treturn 0;\n+\n \tacquired = bpf_task_acquire(value->task);\n \tif (!acquired)\n \t\treturn 0;\n \n \tbpf_task_release(acquired);\n \treturn 0;\n }\n```\n\n### Explanation\n- **Why it fails**: The verifier sees `value->task` as a `rcu_ptr_or_null_task_struct` (possibly NULL) due to its initialization path, but `bpf_task_acquire()` requires a non-NULL pointer.\n- **How the fix works**: The added NULL check ensures `value->task` is non-NULL before the call, satisfying the verifier's requirement. This allows the verifier to refine the pointer type to non-NULL on the continuation path.\n- **Minimality**: Only 3 lines are added directly at the point of failure, preserving existing logic while addressing the verifier's concern. No other changes are needed.",
+  "must_mention": [
+    "The first argument may be NULL",
+    "The pointer comes from value->task/map kptr state",
+    "The call must happen only after the verifier can prove the pointer satisfies the kfunc contract"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check on the returned acquired pointer only",
+    "Checks value but not value->task",
+    "Casts value->task to another pointer type without proving trust/non-NULL"
+  ]
+}

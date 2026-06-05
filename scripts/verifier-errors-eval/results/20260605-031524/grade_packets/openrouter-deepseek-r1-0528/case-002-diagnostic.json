@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Release cpumask after __sink(cpumask) if cpumask is non-NULL.",
+    "Transfer the owned cpumask into a kptr/map in a verifier-accepted way so the program no longer owns it."
+  ],
+  "canonical_fix": "After make_object returns a non-NULL cpumask, call bpf_cpumask_release(cpumask) before returning on every path that still owns it.",
+  "case_id": "case-002",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "easy",
+  "expected_explanation": "make_object acquires an owned cpumask reference. The entry program stores/sinks it and returns without releasing or transferring ownership, so one exit path leaks the reference.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-r1-0528/case-002-diagnostic.txt",
+    "case_id": "case-002",
+    "model": "deepseek/deepseek-r1-0528",
+    "profile": "openrouter-deepseek-r1-0528",
+    "prompt_bytes": 5048,
+    "prompt_path": "public/case-002/prompt_diagnostic.md",
+    "prompt_sha256": "63788e59d8129296d6b2d78c878578b65f355ef76b449bf180000c418be58a88",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-r1-0528/case-002-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "83e05b92-59e3-4e28-9a25-26dd50d8ed4d",
+    "started_at": "2026-06-05T03:19:07+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier failure occurs because the BPF program acquires a reference to a `bpf_cpumask` object via `bpf_cpumask_create()` in `make_object()`, but fails to release it when the object is successfully created and empty. The main program (`BPF_PROG`) does not release the reference when `make_object()` returns a non-NULL pointer, leading to a resource leak.\n\n**Fix Explanation:**\nThe smallest fix is to release the `bpf_cpumask` reference in the main program after use. We add a conditional check in `BPF_PROG` to release the object if `make_object()` returns non-NULL.\n\n**Patch:**\n```patch\n--- original.c\n+++ fixed.c\n@@ -38,7 +38,9 @@\n {\n \tstruct bpf_cpumask *cpumask;\n \n-\tcpumask = make_object();\n+\tcpumask = make_object(); \n \t__sink(cpumask);\n-\n+\tif (cpumask)\n+\t\tbpf_cpumask_release(cpumask);\n \treturn 0;\n }\n```\n\n**Reason:**\n- The `make_object()` function returns a reference-counted object. The main program must release this reference before exiting.\n- The fix checks if `cpumask` is non-NULL (indicating a valid reference) and releases it with `bpf_cpumask_release()`.\n- This ensures the reference is released on all paths, satisfying the verifier's resource lifetime checks.",
+  "must_mention": [
+    "An owned cpumask reference is acquired",
+    "Every exit path must release or transfer ownership",
+    "The NULL path does not need release"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Removes the acquisition without preserving the intended object use",
+    "Calls release without considering NULL when the API requires non-NULL",
+    "Releases only on an error path and still returns with ownership on success"
+  ]
+}

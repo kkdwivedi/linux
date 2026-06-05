@@ -1,0 +1,68 @@
+## What the verifier is complaining about
+
+Look at the stack slot at `fp-8`:
+
+```
+0: (7b) *(u64 *)(r10 -8) = r1     ; fp-8 = ctx()   <- 8-byte pointer spilled
+2: (73) *(u8  *)(r10 -7) = r0     ; fp-8 = mmmmmmmm <- slot now "misc"/scalar
+3: (79) r0 = *(u64 *)(r10 -8)     ; R0 = scalar()
+4: (79) r0 = *(u64 *)(r0 +8)      ; deref of a scalar -> rejected
+```
+
+A spilled register only keeps its pointer type as long as the **whole 8‑byte
+slot** stays intact. The instruction
+
+```
+*(u8*)(r10 - 7) = r0;
+```
+
+writes one byte *inside* the 8‑byte spill region (`fp-8 … fp-1`). Any partial
+write to a spilled pointer slot forces the verifier to forget the pointer and
+mark the slot as `mmmmmmmm` (a scalar/misc).
+
+So when the value is read back at insn 3, `r0` is a `scalar()`, and the
+subsequent load `r0 = *(u64*)(r0 + 8)` is dereferencing a scalar, which the
+verifier rejects:
+
+```
+R0 invalid mem access 'scalar'
+```
+
+This is *expected* behavior — partially overwriting a spilled pointer destroys
+its pointer-ness.
+
+## Smallest fix
+
+Don't let the byte store overlap the pointer spill. Put the byte in a slot that
+is outside the 8‑byte region used by the pointer (e.g. `fp-9` or `fp-16`):
+
+```c
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	*(u64*)(r10 - 8) = r1;				\
+	r0 = 0x23;					\
+	*(u8*)(r10 - 9) = r0;		/* off the pointer slot */ \
+	r0 = *(u64*)(r10 - 8);				\
+	r0 = *(u64*)(r0 + 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+Now `fp-8` still holds `ctx()`, the reload restores `R0` as the pointer, and the
+scalar-dereference error disappears.
+
+(If the goal is simply to make verification pass and the dereference itself is
+not important, the even smaller fix is to delete the offending line
+`r0 = *(u64*)(r0 + 8);`, since `R0` after the reload is a plain scalar and the
+program would just `exit` with it.)
+
+Note: keeping the pointer alive trades the “scalar deref” error for a normal
+context-access check on `*(u64*)(ctx + 8)`. For a `socket`/`__sk_buff` program a
+direct 8‑byte ctx read at offset 8 is itself not a valid field access, so if you
+want the dereference to remain, point it at a real, dereferenceable pointer (or
+a valid `__sk_buff` field/size) rather than the raw ctx. The verifier error in
+the log, however, is exactly the partial-overwrite-of-spilled-pointer problem
+fixed above.

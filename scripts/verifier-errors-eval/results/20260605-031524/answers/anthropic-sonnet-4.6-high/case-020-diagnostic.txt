@@ -1,0 +1,43 @@
+## Explanation of the Failure
+
+The verifier performs liveness analysis to track which registers/stack slots are "read" across subprogram call paths. With 8 functions (entry + helpers a–g) and 50 calls at each of 7 levels, the number of distinct call paths the verifier must trace to helper_g grows combinatorially. The verifier's liveness analysis counter reaches the hard limit of **10,001 re-computations** before it can finish, causing rejection.
+
+The verifier log confirms this: `helper_g` (subprog#7) is repeatedly analysed at `depth 7` for each unique call context reaching it, quickly exhausting the budget.
+
+## Fix
+
+The minimal fix is to **remove one level of indirection** — eliminate `helper_g` and make `helper_f` the leaf function. This reduces the maximum call depth from 8 to 7 and cuts the number of distinct paths by a factor of 50, bringing liveness analysis well under the 10,001-call limit.
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -10,20 +10,11 @@
+ 
+-__naked __noinline __used
+-static unsigned long helper_g(void)
+-{
+-	asm volatile (
+-		"r0 = 0;"
+-		"exit;"
+-		::: __clobber_all);
+-}
+-
+ __naked __noinline __used
+ static unsigned long helper_f(void)
+ {
+ 	asm volatile (
+-		CALLS_50(helper_g)
+ 		"r0 = 0;"
+ 		"exit;"
+ 		::: __clobber_all);
+ }
+```
+
+### Why this works
+
+| Before | After |
+|--------|-------|
+| entry→a→b→c→d→e→f→g (depth 8, 7 levels of 50 calls) | entry→a→b→c→d→e→f (depth 7, 6 levels of 50 calls) |
+| Liveness paths to leaf ∝ 50⁶ | Liveness paths to leaf ∝ 50⁵ (~50× fewer) |
+
+Removing `helper_g` makes `helper_f` the leaf (identical body: `r0 = 0; exit`). The call chain is structurally the same but one level shorter, drastically reducing the number of times liveness must be re-propagated, so the verifier finishes within its 10,001-call budget.

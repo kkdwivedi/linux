@@ -1,0 +1,63 @@
+The verifier rejects this because `helper_a()` is classified as a **sleepable global function**.
+
+`helper_a()` contains:
+
+```c
+if (!i)
+	bpf_copy_from_user(data, sizeof(data), NULL);
+```
+
+`bpf_copy_from_user()` is a sleepable helper. Even though `helper_a(0)` is called with a constant, the verifier treats the global function as potentially sleepable because one of its paths can call a sleepable helper.
+
+In `entry()`:
+
+```c
+bpf_local_irq_save(&flags);
+helper_a(0);
+bpf_local_irq_restore(&flags);
+```
+
+the program calls `helper_a()` while IRQs are disabled. Sleepable operations are not allowed inside an IRQ-disabled region, so verification fails:
+
+```text
+sleepable global function helper_a() called in IRQ-disabled region
+```
+
+There is also an earlier-looking verifier diagnostic:
+
+```text
+arg#0 reference type('UNKNOWN ') size cannot be determined: -22
+```
+
+but the actionable rejection in the log is the execution context safety failure: a sleepable global function is called with local IRQs disabled.
+
+The smallest likely source-level fix is to make sure the call to `helper_a()` happens outside the IRQ-disabled critical section.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -18,9 +18,9 @@ SEC("?syscall")
+ int entry(void *ctx)
+ {
+ 	unsigned long flags;
+ 
++	helper_a(0);
+ 	bpf_local_irq_save(&flags);
+-	helper_a(0);
+ 	bpf_local_irq_restore(&flags);
+ 	return 0;
+ }
+```
+
+After this change, the IRQ-disabled region contains only:
+
+```c
+bpf_local_irq_save(&flags);
+bpf_local_irq_restore(&flags);
+```
+
+and the potentially sleepable `helper_a()` call is executed before IRQs are disabled, satisfying the verifier’s context-safety rule.

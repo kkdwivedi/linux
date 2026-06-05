@@ -1,0 +1,97 @@
+Looking at this verifier failure, I need to understand what's happening and how to fix it.
+
+## Verifier Failure Explanation
+
+The verifier rejects this program because it contains **direct recursion**: `helper_a()` calls itself. The eBPF verifier requires an acyclic call graph so it can:
+- Bound stack depth statically
+- Ensure termination of its analysis
+- Guarantee bounded resource usage
+
+The code implements a recursive function that counts from 0 to 4:
+- `helper_a` increments `r1`, returns it in `r0`
+- If `r1 < 4`, it calls itself again
+- Otherwise it exits
+
+This is tail recursion with a known bound (4 iterations maximum), but the verifier doesn't analyze deep enough to recognize this bounded pattern—it simply sees a recursive call and rejects it.
+
+## Fix Strategy
+
+The suggestion says to "rewrite the recursion as an explicit bounded loop." Since this is `__naked` code with inline assembly, I need to convert the tail recursion into a loop within `helper_a`.
+
+The original logic:
+- Start with some `r1` value
+- Increment `r1` by 1
+- If `r1 < 4`, repeat
+- Return final `r1` in `r0`
+
+This becomes a simple `while`-style loop in assembly.
+
+## Proposed Fix
+
+Replace the recursive call with a backward jump (loop). In eBPF assembly, we can jump backward to create loops—the verifier handles these with its state pruning and loop bounding mechanisms.
+
+```c
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l0_%=:	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l0_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+Wait—let me re-check. The original starts with whatever `r1` was when called, adds 1, and if `< 4` recurses. On the initial call from `entry`, `r1 = 0`. So:
+- Call 1: r1=0 → r1=1, 1<4, recurse
+- Call 2: r1=1 → r1=2, 2<4, recurse
+- Call 3: r1=2 → r1=3, 3<4, recurse
+- Call 4: r1=3 → r1=4, 4<4 is false, return 4
+
+So the loop should run while `r1 < 4`, incrementing each time. But we need to be careful: the initial `r1` from `entry` is 0, and we need to increment first, then check.
+
+Actually, looking more carefully at the original: the increment happens, then we check `r1 < 4`. With initial `r1=0`: after increment `r1=1`, check `1<4` → true, recurse. This is correct.
+
+For a loop version, we need the same behavior. The entry point `helper_a` should start with the increment:
+
+```c
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l0_%=:	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l0_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+This creates a bounded loop: starts at label, increments, checks condition, loops back if needed. The verifier can handle this because it's a back-edge in the same function, not a recursive call. The verifier will track the loop bound through its state pruning mechanisms (the loop runs at most 4 times given the starting condition, though the verifier may need to see this through its analysis).
+
+Actually, I want to double-check: will the verifier accept this loop? The eBPF verifier has support for bounded loops. With `r1` starting at 0 and incrementing to 4, this is clearly bounded. The verifier should handle this.
+
+## Complete Patch
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -20,13 +20,10 @@ SEC("tracepoint")
+ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+ 	asm volatile ("					\
+-	r1 += 1;					\
++l0_%=:	r1 += 1;					\
+ 	r0 = r1;					\
+-	if r1 < 4 goto l0_%=;				\
+-	exit;						\
+-l0_%=:	call helper_a;					\
++	if r1 < 4 goto l0_%=;				\
+ 	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+The key change: remove the `call helper_a` instruction and the separate `l0_%=` label, and instead make `l0_%=` the entry point of the loop. The forward conditional branch `if r1 < 4 goto l0_%=` now becomes a backward branch (loop), replacing the recursive tail call with iteration.

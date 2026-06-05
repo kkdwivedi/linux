@@ -1,0 +1,29 @@
+## Explanation
+
+When the verifier validates a global (non-static) `__noinline` function in isolation, it does not know anything about the actual arguments callers will pass. For a pointer-to-memory argument it assumes the most general type: `PTR_TO_MEM_OR_NULL` (shown as `mem_or_null` in the log).
+
+That means at the start of `helper_a`, `R1` (the `s` pointer) may legally be NULL. The code immediately dereferences it (`s->x` → `r2 = *(u32 *)(r6 + 0)`), and the verifier rejects this because there is a path where `s == NULL`:
+
+```
+10: (61) r2 = *(u32 *)(r6 +0)
+R6 invalid mem access 'mem_or_null'
+```
+
+The fact that the *caller* always passes a valid stack pointer (`&s`) is irrelevant — global functions are verified independently of their callers.
+
+## Fix
+
+Add an explicit NULL check inside `helper_a` and only dereference on the non-NULL path. This narrows `R1`/`R6` from `mem_or_null` to `mem`, satisfying the verifier.
+
+```c
+__noinline int helper_a(const struct Item *s)
+{
+	if (!s)
+		return 0;
+	return bpf_get_prandom_u32() < s->x;
+}
+```
+
+After the `if (!s) return 0;`, the verifier knows that on the remaining path `s` is non-NULL `PTR_TO_MEM` of size 4, so `s->x` is a provably-safe read.
+
+(Alternatively, making the helper `static` would let the verifier inline/propagate the concrete pointer type from the caller, but adding the NULL check is the smallest, most direct source fix.)

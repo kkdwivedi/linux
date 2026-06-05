@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\n`helper_a()` is defined as a **global** (non-`static`) function. In the BPF verifier, global functions are verified independently of their callers and are treated as **sleepable** subprograms \u2014 the verifier conservatively assumes a global function may sleep, because it does not know the calling context when it verifies the function in isolation.\n\nYour `entry` program opens an IRQ-disabled critical section with `bpf_local_irq_save()`. Code inside such a region must not call anything that may sleep. Because `helper_a()` is a sleepable global function, calling it between `bpf_local_irq_save()` and `bpf_local_irq_restore()` is rejected:\n\n```\nsleepable global function helper_a() called in IRQ-disabled region\n```\n\nNote the actual body of `helper_a()` never runs `bpf_copy_from_user()` for `i == 0`, but that's irrelevant: the restriction is on the *call to a global function*, not on whether that path is taken at runtime.\n\n## Fix\n\nMake the helper a **static** function. Static (non-global) subprograms are verified inline in the context of their caller, inheriting its execution-context state, so they are not treated as standalone sleepable global functions. The IRQ-disabled check then validates the helper's actual body against the current context.\n\n```c\nstatic int __noinline helper_a(int i)\n{\n\tchar data[8];\n\n\tif (!i)\n\t\tbpf_copy_from_user(data, sizeof(data), NULL);\n\treturn i;\n}\n```\n\nThe single-word change `int __noinline` \u2192 `static int __noinline` is the smallest source-level fix.\n\n(Of course, if `bpf_copy_from_user()` could actually be reached inside the critical section it would still fail \u2014 but here, with the static helper inlined into the caller's verification, the verifier sees that the `i == 0` argument makes the `bpf_copy_from_user()` branch dead, so the program verifies.)",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-012-diagnostic.txt",
+    "case_id": "case-012",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 3392,
+    "prompt_path": "public/case-012/prompt_diagnostic.md",
+    "prompt_sha256": "cb0bb7bae71f637618353d539dc3320ce61e3ed2b36b833f42dc45015a35e430",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-012-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "fce8dcbf-1955-4537-9302-363232285509",
+    "started_at": "2026-06-05T03:17:39+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.007145,
+    "output_cost_usd": 0.02365,
+    "total_cost_usd": 0.030795000000000003
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1429,
+    "output_tokens": 946,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1429,
+      "output_tokens": 946,
+      "output_tokens_details": {
+        "thinking_tokens": 324
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 2375
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EtMJCmMIDhgCKkDEEoIhWknqm/m1oh3pQK390ecf6u3KogC/0QADb5h1dmDdYwMQsyK2JGYnghNNvxcWJ8l5dstx0h0DKPERU8sbMg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDBc09o3mqj2ZJQWaZRoMkuNr6qO4/yRwXjZaIjCKuVfRdXHoWuyCgd4cInk12o1A0oMxDwgGjIMh2/ZA9zIDpoiVku0uTE4Kr3jddvQqnQi2qHk1pQv0u5d+znYuJhrZjFi12l9EqPmuh/aCzJmxMmxTB9VkTeOWs6Bs/4EfbooIygt3esfdCuojOJs6i5SGrznMrFGJKuuBNpwbcMpm5sldbrDzPiYa8KXm9LUVE49hkhst6EG05ndb7G80VrscuecUWE3b1q2sekxBr+v2NVMgkj3m7/1LsJAU5/jG6xqq/DmXW41VtQb91jWECEVXApvnmr40awZt5dBcu6vaGNc+BJGNs3LwU/A0ib5AYqemk15TLX7RukVQkn+VLXjfgzTg9yD3d3ZeZ3q34K6iyGjHoLWMaaoZjg4CTbVZ4NU8Q5cSSczwQFDoo9pLzsOdLDHpFZhfpaERg6ceKgD9jlDwfPszIfTe4aj7BFSH3PyoLzPDpH2iyp+Q3JTuf7+0khwGNbFUiK+SupQ2leVSuHTJ1FwEhZ+kh9ZwRL710x3psY7IW1YACC75oX8RGwJ5/30F4g1J7jHndwD8xDykh4mqvIP0WzU4+ejvrqtdBLxPf2ZC8izUEhqLTI60NU5T1kGWMf1lYr8ugVGn/lq4NhO//+bfZIvYCZ2xoWoB3aXJB4rzDueLFVA6IaXS1X03ZSx0Es5JGCHk5MtVO5MdxmBlTK0IbahcUXSMKY+gdvbhfnW/aBXyIKSqjgn8/IgmsqnY92G/l9Xi4PZHX+5j2smFnj4K/zmCxYRoF+tAQ501TSGNqW7igl7ZFuZuMCp3vC+uoS2AcEzRPIBKp5Gk64kUVqd8WhMOVOMSM2STWP3XaiP/8kNkLjMeJKflJtNzdfd53YCWht0lBvtleuOR1snROGAGRKLiF8LMIaXSs4t3CRwX/pqzqj8z9Czc1pyOxRHieSNQlHL3ZjLYk8i5SjVhbfnKMM5aW+o6jBBNgfDElBmdmpV1BWjziu1qUZQQ2FCzqEdJCdrH3Sa2Eecj3JAKuAGaiZr6zoFcSKUqEWcZgtaEV/fd/I/Kn38PKS0o30jcW1qYomazLTHs4kQQBuN/2T3oS9KSHsSlDarx7+gv05LV/0DHbb3XE23FVnNxBmnmYs9szIIy18f1rq/jo3M/lzzQ+Hv+HL4IcK0nAMdcJzwE2VK+UXORqeW615bRNkW9BOzJyu6bRwGkony0LluiVLupnpDf136x7Mw0Wus21Yqr5aUFkjS21XjYqyIqmBC8XB1cpXJbS7TCKTzjH4UoMOkb5zz8SBMzx7tg4aMwue56Xc78ntUUzlJtvt8MrkUnZLsS2bYIXSrqZ2e+QctbsIOF2IuvSG+AUJ++DTzkcaU6sh44Oubd7eSYrPjqm0gWaMwzMMCgXQzd/P/BLHyde6+SJEcoPTQ9tc99vQUymGkmWNJkIn2SC0wkwqgXl+R33CjCszL9dFnbTlhwsdDl49vZkj9RfUqFR2IYAQ==",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\n`helper_a()` is defined as a **global** (non-`static`) function. In the BPF verifier, global functions are verified independently of their callers and are treated as **sleepable** subprograms \u2014 the verifier conservatively assumes a global function may sleep, because it does not know the calling context when it verifies the function in isolation.\n\nYour `entry` program opens an IRQ-disabled critical section with `bpf_local_irq_save()`. Code inside such a region must not call anything that may sleep. Because `helper_a()` is a sleepable global function, calling it between `bpf_local_irq_save()` and `bpf_local_irq_restore()` is rejected:\n\n```\nsleepable global function helper_a() called in IRQ-disabled region\n```\n\nNote the actual body of `helper_a()` never runs `bpf_copy_from_user()` for `i == 0`, but that's irrelevant: the restriction is on the *call to a global function*, not on whether that path is taken at runtime.\n\n## Fix\n\nMake the helper a **static** function. Static (non-global) subprograms are verified inline in the context of their caller, inheriting its execution-context state, so they are not treated as standalone sleepable global functions. The IRQ-disabled check then validates the helper's actual body against the current context.\n\n```c\nstatic int __noinline helper_a(int i)\n{\n\tchar data[8];\n\n\tif (!i)\n\t\tbpf_copy_from_user(data, sizeof(data), NULL);\n\treturn i;\n}\n```\n\nThe single-word change `int __noinline` \u2192 `static int __noinline` is the smallest source-level fix.\n\n(Of course, if `bpf_copy_from_user()` could actually be reached inside the critical section it would still fail \u2014 but here, with the static helper inlined into the caller's verification, the verifier sees that the `i == 0` argument makes the `bpf_copy_from_user()` branch dead, so the program verifies.)",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01CgLPcJWqSV2WerXbggrU2T",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1429,
+      "output_tokens": 946,
+      "output_tokens_details": {
+        "thinking_tokens": 324
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

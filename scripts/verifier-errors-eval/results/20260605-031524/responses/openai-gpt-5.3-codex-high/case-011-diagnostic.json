@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier error is a **reference leak** from `ptr2`.\n\n### Why it fails\n\n- `bpf_ringbuf_reserve_dynptr(..., &ptr1)` acquires one owned resource.\n- `bpf_ringbuf_reserve_dynptr(..., &ptr2)` acquires another owned resource (`id=3` in log).\n- On `!sample` path, both are discarded \u2705\n- On `sample != NULL` path, only `ptr1` is submitted, then function exits \u274c  \n  `ptr2` is never submitted/discarded, so verifier reports:\n\n> Unreleased reference id=3 alloc_insn=14\n\n### Smallest fix\n\nRelease `ptr2` on the success path as well.\n\n```diff\n@@ SEC(\"?raw_tp\")\n int entry(void *ctx)\n {\n@@\n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\n \treturn 0;\n }\n```\n\nThat should satisfy the verifier\u2019s \u201crelease/transfer on all paths\u201d rule.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-011-diagnostic.txt",
+    "case_id": "case-011",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 5553,
+    "prompt_path": "public/case-011/prompt_diagnostic.md",
+    "prompt_sha256": "c4e9b1631d514a5b5c9e921fc3dfd8dc5de6eebfbb59913cb9ede46e6625c9ef",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-011-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "2a908484-5a30-4893-8f75-6605ab39f483",
+    "started_at": "2026-06-05T03:16:52+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.003248,
+    "output_cost_usd": 0.025592,
+    "total_cost_usd": 0.02884
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1856,
+    "output_tokens": 1828,
+    "raw_usage": {
+      "input_tokens": 1856,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1828,
+      "output_tokens_details": {
+        "reasoning_tokens": 1597
+      },
+      "total_tokens": 3684
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 1597,
+    "total_tokens": 3684
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629439,
+    "created_at": 1780629412,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0c37b90467ca7617006a223fa4f6ec819cb2e8eb767d33f708",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0c37b90467ca7617006a223fa56800819cad294aee47595aff",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier error is a **reference leak** from `ptr2`.\n\n### Why it fails\n\n- `bpf_ringbuf_reserve_dynptr(..., &ptr1)` acquires one owned resource.\n- `bpf_ringbuf_reserve_dynptr(..., &ptr2)` acquires another owned resource (`id=3` in log).\n- On `!sample` path, both are discarded \u2705\n- On `sample != NULL` path, only `ptr1` is submitted, then function exits \u274c  \n  `ptr2` is never submitted/discarded, so verifier reports:\n\n> Unreleased reference id=3 alloc_insn=14\n\n### Smallest fix\n\nRelease `ptr2` on the success path as well.\n\n```diff\n@@ SEC(\"?raw_tp\")\n int entry(void *ctx)\n {\n@@\n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\n \treturn 0;\n }\n```\n\nThat should satisfy the verifier\u2019s \u201crelease/transfer on all paths\u201d rule.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0c37b90467ca7617006a223fbcd0d4819ca1313272d80f5d20",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1856,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1828,
+      "output_tokens_details": {
+        "reasoning_tokens": 1597
+      },
+      "total_tokens": 3684
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

@@ -1,0 +1,36 @@
+## Verifier Failure Explanation
+
+The error message is clear:
+
+```
+program of this type cannot use helper bpf_ktime_get_coarse_ns#160
+```
+
+The program is declared as `SEC("kprobe")`, which corresponds to `BPF_PROG_TYPE_KPROBE`. The helper `bpf_ktime_get_coarse_ns` is **not available** for kprobe-type programs. In the kernel, this helper is only exposed through `tracing_func_proto()` (used by `raw_tp`/`tp` programs), not through `kprobe_prog_func_proto()`.
+
+The kprobe program type does, however, have access to `bpf_ktime_get_ns`.
+
+## Fix
+
+Replace `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns`, which is available for kprobe programs:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("kprobe")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_ns];			\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+```
+
+This is the smallest change: swap the helper name in both the `call` instruction and the `__imm` operand. `bpf_ktime_get_ns` is in `kprobe_prog_func_proto()` and will pass verification for `SEC("kprobe")` programs.

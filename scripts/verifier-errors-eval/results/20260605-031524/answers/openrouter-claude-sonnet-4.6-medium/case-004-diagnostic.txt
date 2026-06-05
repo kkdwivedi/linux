@@ -1,0 +1,22 @@
+## Explanation
+
+When the verifier validates an `__noinline` subprogram, it analyses the function **independently** from its call sites. For pointer arguments, it conservatively assigns the type `mem_or_null` — meaning the pointer *might* be NULL. Because `helper_a` dereferences `s->x` unconditionally after a `bpf_get_prandom_u32()` call (which clobbers R1, so the saved copy in R6 is what gets dereferenced), the verifier cannot prove the access is safe and rejects the program.
+
+## Fix
+
+Add an explicit NULL check inside `helper_a` so the verifier can narrow the type to a valid (non-null) memory reference before the dereference occurs.
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -8,7 +8,10 @@
+ __noinline int helper_a(const struct Item *s)
+ {
+-	return bpf_get_prandom_u32() < s->x;
++	if (!s)
++		return 0;
++	return bpf_get_prandom_u32() < s->x;
+ }
+```
+
+After the `if (!s) return 0;` guard, the verifier knows R6 is non-NULL on the remaining path and allows the `*(u32 *)(r6 +0)` load. The call site already always passes a valid stack pointer, so the runtime behaviour is unchanged.

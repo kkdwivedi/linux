@@ -1,0 +1,49 @@
+## Verifier Failure Analysis
+
+The verifier is rejecting this program because `bpf_cpumask_populate()` expects its first argument (R1) to be a frame pointer (fp) - specifically, a pointer to valid kernel memory that the verifier can track. 
+
+The code explicitly casts a hardcoded invalid address `0x123456` to `struct cpumask *` and passes it to `bpf_cpumask_populate()`. The verifier sees R1 as a scalar value (the constant `0x123456`) rather than a valid memory reference, and rejects it with:
+```
+R1 type=scalar expected=fp
+```
+
+The BPF verifier enforces memory safety by requiring that kernel helper functions receive properly-tracked pointers to valid memory regions, not arbitrary scalar constants.
+
+## Solution
+
+The fix is to pass a valid stack-allocated buffer instead of an invalid hardcoded address. The code already allocates `bits` on the stack; we should pass a pointer to that:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *mask;
+	u64 bits;
+	int ret;
+
+	mask = bpf_cpumask_create();
+	if (!mask)
+		return 1;
+
+	ret = bpf_cpumask_populate((struct cpumask *)mask, &bits, sizeof(bits));
+	if (!ret)
+		return 2;
+
+	bpf_cpumask_release(mask);
+	return 0;
+}
+```
+
+**Key changes:**
+1. Remove the invalid hardcoded address cast
+2. Use `bpf_cpumask_create()` to allocate a valid cpumask object that the verifier can track
+3. Pass the properly-allocated `mask` pointer to `bpf_cpumask_populate()`
+4. Add proper cleanup with `bpf_cpumask_release()`
+
+This gives R1 a proper pointer type that the verifier recognizes as valid for the helper function, satisfying the `expected=fp` requirement.

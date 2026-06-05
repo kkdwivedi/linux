@@ -1,0 +1,52 @@
+## Verifier Failure Explanation
+
+The verifier is rejecting this program because `bpf_cpumask_populate()` expects its first argument (R1) to be a frame pointer (stack memory), but the code is passing a scalar constant `0x123456`.
+
+The error message is clear:
+```
+R1 type=scalar expected=fp
+```
+
+The BPF verifier requires that pointers to kernel structures passed to helper functions must point to valid memory locations. A hardcoded scalar address like `0x123456` is not a valid memory reference from the BPF program's perspective. Only stack-allocated memory (frame pointer based) or other validated memory regions are acceptable.
+
+## Root Cause
+
+Line 234 attempts to cast a hardcoded address to a cpumask pointer:
+```c
+struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+```
+
+This creates an invalid pointer that the verifier rejects.
+
+## Fix
+
+The simplest fix is to allocate the cpumask structure on the stack and pass that instead:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct cpumask mask = {};
+	u64 bits;
+	int ret;
+
+	ret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));
+	if (!ret)
+		return 2;
+
+	return 0;
+}
+```
+
+**Key changes:**
+1. Remove the invalid cast: `struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;`
+2. Declare `struct cpumask mask = {};` on the stack instead
+3. Pass `&mask` (a valid stack address) to `bpf_cpumask_populate()`
+
+This gives the verifier a valid frame-pointer-based address, satisfying the requirement that R1 must be `fp` (frame pointer) based.

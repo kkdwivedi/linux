@@ -1,0 +1,55 @@
+The failure is at the final `bpf_task_acquire(value->task)` in `entry()`.
+
+From the log:
+
+```text
+3: r1 = *(u64 *)(r0 +0)   ; R1=rcu_ptr_or_null_task_struct(id=10)
+4: call bpf_task_acquire
+Possibly NULL pointer passed to trusted R1
+```
+
+`value` itself was checked non-NULL, but the kptr field inside the map value, `value->task`, is still considered possibly NULL. Even though `helper_a()` just inserted/acquired a task and stored it with `bpf_kptr_xchg()`, the verifier does not prove that a later map lookup returns a value whose `task` field is non-NULL. Map contents are treated as mutable/unknown, and a kptr load produces a `rcu_ptr_or_null_task_struct`.
+
+`bpf_task_acquire()` requires a non-NULL trusted/RCU task pointer argument, so the field must be loaded, checked for NULL, and then the same checked register should be passed to `bpf_task_acquire()`.
+
+Smallest likely fix: add a temporary local for `value->task` and NULL-check it before calling `bpf_task_acquire()`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -69,7 +69,7 @@ static struct map_value *helper_a(struct task_struct *task)
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct task_struct *acquired;
++	struct task_struct *acquired, *stored_task;
+ 	struct map_value *value;
+ 
+ 	value = helper_a(task);
+@@ -77,7 +77,11 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ 		return 0;
+ 
+-	acquired = bpf_task_acquire(value->task);
++	stored_task = value->task;
++	if (!stored_task)
++		return 0;
++
++	acquired = bpf_task_acquire(stored_task);
+ 	if (!acquired)
+ 		return 0;
+ 
+```
+
+Using the temporary is important: writing only
+
+```c
+if (!value->task)
+	return 0;
+acquired = bpf_task_acquire(value->task);
+```
+
+may compile into two separate loads from the map field, and the verifier would still treat the second load as possibly NULL. Loading once into `stored_task`, checking it, and passing that same value lets the verifier refine the register from `rcu_ptr_or_null_task_struct` to non-NULL before the kfunc call.

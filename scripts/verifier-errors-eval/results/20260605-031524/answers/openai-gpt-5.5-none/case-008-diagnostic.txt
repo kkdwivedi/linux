@@ -1,0 +1,66 @@
+The verifier rejects the call to:
+
+```c
+data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
+```
+
+because `buffer` is only 8 bytes:
+
+```c
+char buffer[8] = {};
+```
+
+but the helper is called with length `9`.
+
+For `bpf_dynptr_slice(dynptr, offset, buffer, len)`, the verifier treats arguments 3 and 4 as a memory/length pair. Here:
+
+- R3 points to stack memory at `fp-24`, i.e. `buffer`
+- R4 is the constant length `9`
+- the stack object initialized for `buffer` is only 8 bytes wide
+
+So the verifier reports:
+
+```text
+invalid read from stack R3 off -24+8 size 9
+R3 and R4 memory, len pair leads to invalid memory access
+```
+
+This is a real out-of-bounds stack access from the verifier’s perspective: the helper may read/write 9 bytes through a pointer to an 8-byte stack buffer.
+
+The smallest fix is to make the fallback buffer at least as large as the requested slice length, or reduce the requested length to 8. Since the program asks for a 9-byte slice, the most direct source-level fix is to enlarge the buffer to 9 bytes.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -6,7 +6,7 @@ SEC("?cgroup_skb/egress")
+ int entry(struct __sk_buff *skb)
+ {
+ 	struct bpf_dynptr ptr;
+-	char buffer[8] = {};
++	char buffer[9] = {};
+ 	__u64 *data;
+ 
+ 	if (bpf_dynptr_from_skb(skb, 0, &ptr))
+```
+
+Alternatively, if the intended buffer size is 8 bytes, change the helper call to:
+
+```c
+data = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+```
+
+or specifically:
+
+```c
+data = bpf_dynptr_slice(&ptr, 0, buffer, 8);
+```
+
+But the minimal fix preserving the requested slice length is:
+
+```c
+char buffer[9] = {};
+```

@@ -1,0 +1,79 @@
+{
+  "answer_text": "## Analysis\n\nThe verifier is rejecting the program because the pointer `s` passed to `helper_a()` is being tracked as `mem_or_null` - meaning it could be NULL. When the function tries to dereference it with `s->x` (instruction 10: `r2 = *(u32 *)(r6 +0)`), the verifier refuses to allow the memory access on a potentially-NULL pointer.\n\nThe root cause is that when passing a pointer to a stack-allocated variable to a `__noinline` function, the verifier cannot guarantee the pointer isn't NULL without explicit validation.\n\n## Solution\n\nThe smallest fix is to **remove the `__noinline` annotation**. This allows the function to be inlined, so the verifier can see that `&s` is a valid pointer to a stack-allocated structure and track it properly.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nstruct Item {\n\tint x;\n};\n\nint helper_a(const struct Item *s)\n{\n\treturn bpf_get_prandom_u32() < s->x;\n}\n\nSEC(\"cgroup_skb/ingress\")\nint entry(struct __sk_buff *skb)\n{\n\tconst struct Item s = {.x = skb->len};\n\n\thelper_a(&s);\n\n\treturn 1;\n}\n```\n\n**Why this works:** When `helper_a` is inlined, the verifier analyzes the call site directly and sees that `&s` points to a valid local variable. Without `__noinline`, the function becomes inlined and the pointer derivation remains visible to the verifier, eliminating the `mem_or_null` uncertainty.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-004-legacy.txt",
+    "case_id": "case-004",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 1415,
+    "prompt_path": "public/case-004/prompt_legacy.md",
+    "prompt_sha256": "5122475504cbe77965669ffc9de4273ee4a86feb8b73ecbb090ea008b68a08ae",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-004-legacy.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "23557ac6-bb58-4faa-92ff-40f181a8dfa3",
+    "started_at": "2026-06-05T03:17:56+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000671,
+    "output_cost_usd": 0.002055,
+    "total_cost_usd": 0.002726
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 671,
+    "output_tokens": 411,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 671,
+      "output_tokens": 411,
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1082
+  },
+  "raw_response": {
+    "content": [
+      {
+        "text": "## Analysis\n\nThe verifier is rejecting the program because the pointer `s` passed to `helper_a()` is being tracked as `mem_or_null` - meaning it could be NULL. When the function tries to dereference it with `s->x` (instruction 10: `r2 = *(u32 *)(r6 +0)`), the verifier refuses to allow the memory access on a potentially-NULL pointer.\n\nThe root cause is that when passing a pointer to a stack-allocated variable to a `__noinline` function, the verifier cannot guarantee the pointer isn't NULL without explicit validation.\n\n## Solution\n\nThe smallest fix is to **remove the `__noinline` annotation**. This allows the function to be inlined, so the verifier can see that `&s` is a valid pointer to a stack-allocated structure and track it properly.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nstruct Item {\n\tint x;\n};\n\nint helper_a(const struct Item *s)\n{\n\treturn bpf_get_prandom_u32() < s->x;\n}\n\nSEC(\"cgroup_skb/ingress\")\nint entry(struct __sk_buff *skb)\n{\n\tconst struct Item s = {.x = skb->len};\n\n\thelper_a(&s);\n\n\treturn 1;\n}\n```\n\n**Why this works:** When `helper_a` is inlined, the verifier analyzes the call site directly and sees that `&s` points to a valid local variable. Without `__noinline`, the function becomes inlined and the pointer derivation remains visible to the verifier, eliminating the `mem_or_null` uncertainty.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_018Znym4ZzfKMdv8fUyWuS4x",
+    "model": "claude-haiku-4-5-20251001",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 671,
+      "output_tokens": 411,
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

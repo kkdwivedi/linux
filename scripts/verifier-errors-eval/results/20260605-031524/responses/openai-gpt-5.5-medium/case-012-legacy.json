@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier is rejecting this at the BPF-to-BPF call to `helper_a()`:\n\n```text\n5: (85) call pc+4\nsleepable global function helper_a() called in IRQ-disabled region\n```\n\n`bpf_local_irq_save(&flags)` puts the verifier into an IRQ-disabled/atomic state. While in that state, the program cannot call anything that may sleep.\n\n`helper_a()` is considered a sleepable global subprogram because it can call:\n\n```c\nbpf_copy_from_user(data, sizeof(data), NULL);\n```\n\n`bpf_copy_from_user()` is a sleepable helper. Therefore the verifier marks `helper_a()` as sleepable, and the call to it while IRQs are disabled is rejected.\n\nThe smallest source-level fix is to call `helper_a(0)` only after IRQs have been restored, or before IRQs are disabled. For example:\n\n```diff\n SEC(\"?syscall\")\n int entry(void *ctx)\n {\n \tunsigned long flags;\n \n \tbpf_local_irq_save(&flags);\n-\thelper_a(0);\n \tbpf_local_irq_restore(&flags);\n+\thelper_a(0);\n \treturn 0;\n }\n```\n\nThis preserves the `bpf_local_irq_save()` / `bpf_local_irq_restore()` pairing and moves the potentially sleepable operation out of the IRQ-disabled region. That should satisfy the verifier because `helper_a()` is no longer called while `refs=1` / IRQ-disabled state is active.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-medium/case-012-legacy.txt",
+    "case_id": "case-012",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-medium",
+    "prompt_bytes": 1526,
+    "prompt_path": "public/case-012/prompt_legacy.md",
+    "prompt_sha256": "3c7396a0a94e22b4ffa05f47bf695c68faeca27ec07a26da548d621cb3473cdb",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-medium/case-012-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "ca8279cf-98c2-4591-954c-cc2852fe3bea",
+    "started_at": "2026-06-05T03:15:38+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00277,
+    "output_cost_usd": 0.07143,
+    "total_cost_usd": 0.07419999999999999
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 554,
+    "output_tokens": 2381,
+    "raw_usage": {
+      "input_tokens": 554,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 2381,
+      "output_tokens_details": {
+        "reasoning_tokens": 2069
+      },
+      "total_tokens": 2935
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 2069,
+    "total_tokens": 2935
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629396,
+    "created_at": 1780629339,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0c665f0fe0f02ccc006a223f5b1ff4819d9127218cf4cd3a7c",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0c665f0fe0f02ccc006a223f5bc7a8819dac9084398ce359ef",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier is rejecting this at the BPF-to-BPF call to `helper_a()`:\n\n```text\n5: (85) call pc+4\nsleepable global function helper_a() called in IRQ-disabled region\n```\n\n`bpf_local_irq_save(&flags)` puts the verifier into an IRQ-disabled/atomic state. While in that state, the program cannot call anything that may sleep.\n\n`helper_a()` is considered a sleepable global subprogram because it can call:\n\n```c\nbpf_copy_from_user(data, sizeof(data), NULL);\n```\n\n`bpf_copy_from_user()` is a sleepable helper. Therefore the verifier marks `helper_a()` as sleepable, and the call to it while IRQs are disabled is rejected.\n\nThe smallest source-level fix is to call `helper_a(0)` only after IRQs have been restored, or before IRQs are disabled. For example:\n\n```diff\n SEC(\"?syscall\")\n int entry(void *ctx)\n {\n \tunsigned long flags;\n \n \tbpf_local_irq_save(&flags);\n-\thelper_a(0);\n \tbpf_local_irq_restore(&flags);\n+\thelper_a(0);\n \treturn 0;\n }\n```\n\nThis preserves the `bpf_local_irq_save()` / `bpf_local_irq_restore()` pairing and moves the potentially sleepable operation out of the IRQ-disabled region. That should satisfy the verifier because `helper_a()` is no longer called while `refs=1` / IRQ-disabled state is active.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0c665f0fe0f02ccc006a223f8f8f58819da509bc0b5a1f9bdd",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 554,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 2381,
+      "output_tokens_details": {
+        "reasoning_tokens": 2069
+      },
+      "total_tokens": 2935
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

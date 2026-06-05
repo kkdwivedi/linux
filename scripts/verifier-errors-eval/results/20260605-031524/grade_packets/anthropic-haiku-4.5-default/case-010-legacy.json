@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Change helper_c(val, skb + 1) to helper_c(val, skb).",
+    "Preserve the original context pointer in another variable/register and pass that original pointer to functions that dereference ctx fields."
+  ],
+  "canonical_fix": "Pass the original skb pointer to helper_c, or keep an unmodified copy for context dereferences and perform any needed offset arithmetic only in verifier-allowed ways.",
+  "case_id": "case-010",
+  "category": "Register Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "helper_b passes skb + 1 to helper_c, whose argument is later dereferenced as a context pointer. The verifier rejects dereferencing a modified ctx pointer because the callee no longer receives the original context pointer form.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-010-legacy.txt",
+    "case_id": "case-010",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 2233,
+    "prompt_path": "public/case-010/prompt_legacy.md",
+    "prompt_sha256": "42cb94c19ecff9212d01b745ca76ad135db7dce4e6c15eefc8d6cb8a521dd385",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-010-legacy.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "1b00c973-8eed-458a-8eb3-4461da2eb6e9",
+    "started_at": "2026-06-05T04:22:10+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Explanation of the Verifier Failure\n\nThe verifier is rejecting the program because in `helper_b()`, there is an invalid pointer arithmetic operation on the `skb` parameter:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\nAt line 21 of the verifier log, we see:\n```\n21: (07) r6 += 192                    ; R6=ctx(imm=192)\n```\n\nThis is adding 192 bytes (sizeof `struct __sk_buff`) to the `skb` pointer. The verifier then tracks `R2=ctx(imm=192)` and rejects the call to `helper_c` because:\n\n```\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\n**The core issue:** BPF context pointers (like `struct __sk_buff *`) are special kernel objects. The verifier does not allow arithmetic on context pointers beyond what is needed for valid field access. Passing `skb + 1` (a modified context pointer) to another function violates this constraint because:\n\n1. Context pointers should point to the actual kernel structure, not arbitrary offsets\n2. The verifier cannot verify that dereferencing `skb + 1` is safe in the callee\n3. This breaks the contract that context pointers represent valid kernel objects\n\n## Fix\n\nThe problematic line is:\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\nThe fix is to pass `skb` directly instead of `skb + 1`:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb);\n```\n\n## Complete Patch\n\n```diff\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n}\n```\n\nThis is the minimal fix: it removes the invalid pointer arithmetic on the context pointer, allowing the verifier to properly validate that `helper_c` receives a valid `struct __sk_buff *` argument.",
+  "must_mention": [
+    "skb + 1 modifies the ctx pointer",
+    "helper_c dereferences the ctx pointer",
+    "The callee needs the original ctx pointer"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check to skb",
+    "Changes helper_c's field access but still passes skb + 1 as ctx",
+    "Treats the error as stack depth or packet bounds"
+  ]
+}

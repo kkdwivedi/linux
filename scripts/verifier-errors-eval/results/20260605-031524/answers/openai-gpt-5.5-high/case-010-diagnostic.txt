@@ -1,0 +1,45 @@
+The failure is caused by this expression in `helper_b()`:
+
+```c
+helper_c(val, skb + 1)
+```
+
+`skb` is a BPF context pointer, i.e. a `PTR_TO_CTX`. It is not a normal array/object pointer that can be advanced and then dereferenced. The compiler turns `skb + 1` into adding `sizeof(struct __sk_buff)` to the context pointer; in the verifier log that is:
+
+```text
+21: (07) r6 += 192                    ; R6=ctx(imm=192)
+...
+23: (bf) r2 = r6                      ; R2=ctx(imm=192)
+24: (85) call pc+2
+dereference of modified ctx ptr R2 off=192 disallowed
+```
+
+`helper_c()` dereferences its `skb` argument:
+
+```c
+return skb->ifindex * val;
+```
+
+So the verifier sees that `helper_c()` would dereference a context pointer with a nonzero offset, `ctx + 192`, and rejects it. Context pointers must be dereferenced in their original form, with field accesses done as verifier-recognized fixed offsets from the original context pointer.
+
+The smallest fix is to pass the original `skb` pointer to `helper_c()`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -13,7 +13,7 @@ int helper_c(int val, struct __sk_buff *skb);
+ __attribute__((noinline))
+ int helper_b(int val, struct __sk_buff *skb)
+ {
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+ }
+ 
+ __attribute__((noinline))
+```
+
+With this change, `helper_c()` receives `R2=ctx()` rather than `R2=ctx(imm=192)`, so its `skb->ifindex` access should be verifier-acceptable.

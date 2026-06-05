@@ -1,0 +1,65 @@
+{
+  "answer_text": "Looking at this verifier failure, I need to understand what's happening with the packet pointer tracking across function calls.\n\n## Analysis of the Verifier Failure\n\nThe key issue is in the verifier log at instruction 10:\n```\n10: (63) *(u32 *)(r7 +0) = r1\nR7 invalid mem access 'scalar'\n```\n\nLet's trace through what's happening:\n\n1. At instruction 2: `r7 = *(u32 *)(r1 +76)` - R7 gets `sk->data`, which is typed as `pkt(r=0)` (packet pointer with read size 0)\n2. At instructions 3-5: Bounds check `if r3 > r2 goto pc+5` - this checks `p + 1 <= data_end`, and when we fall through, R3 becomes `pkt(r=4,imm=4)` (packet pointer with 4 bytes readable)\n3. However, **R7 still remains `pkt(r=0)`** - the bounds check was done on R3, not R7!\n\nWait, let me re-check. Actually looking more carefully at instruction 5: `R3=pkt(r=4,imm=4)` and R7 was `R7=pkt(r=0)` at instruction 3, but after the branch, R7 should still be tracked. \n\nActually, the real issue is: after instruction 5, R6=0 means we passed the check. But R7's type is still `pkt(r=0)` - it didn't get updated to `pkt(r=4)`. The verifier tracks packet pointers precisely, and the arithmetic was done on R3 (a copy), not R7.\n\nBut wait - there's another critical issue. At instruction 8, we call `helper_a(sk, 0)`. This is a **non-inlined helper call** that eventually calls `bpf_skb_pull_data`. \n\nThe problem: **`bpf_skb_pull_data` can invalidate packet pointers** because it may reallocate the packet buffer. After calling `helper_a` \u2192 `helper_b` \u2192 `bpf_skb_pull_data`, the verifier **must assume that all packet pointers (like `sk->data`) are invalidated** because the packet buffer could have been reallocated.\n\nThe verifier marks R7 as `scalar` (untrusted integer) after the helper call because:\n- `bpf_skb_pull_data` is a packet data helper that can change `sk->data` and `sk->data_end`\n- The verifier cannot track that `p` still points to valid packet memory after this potential reallocation\n\n## The Fix\n\nThe fix is to **re-read `sk->data` and re-do the bounds check AFTER the helper call**, not before. The pointer `p` obtained before `bpf_skb_pull_data` is potentially stale.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\n__noinline long helper_b(struct __sk_buff *sk, __u32 len)\n{\n\treturn bpf_skb_pull_data(sk, len);\n}\n\n__noinline long helper_a(struct __sk_buff *sk, __u32 len)\n{\n\treturn helper_b(sk, len);\n}\n\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\thelper_a(sk, 0);\n\n\tint *p = (void *)(long)sk->data;\n\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\n## Why This Fix Works\n\nBy moving the `helper_a(sk, 0)` call **before** reading `sk->data`, we ensure that:\n\n1. Any potential packet reallocation by `bpf_skb_pull_data` happens first\n2. We then read the fresh, valid `sk->data` pointer after the helper returns\n3. The bounds check is performed on the current, valid pointer\n4. The verifier can track that `p` is a valid packet pointer with proper bounds at the time of dereference\n\nThe original code had a classic bug: using a packet pointer across a call to `bpf_skb_pull_data`, which is explicitly documented as potentially invalidating such pointers.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-no-thinking/case-015-legacy.txt",
+    "case_id": "case-015",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-no-thinking",
+    "prompt_bytes": 1984,
+    "prompt_path": "public/case-015/prompt_legacy.md",
+    "prompt_sha256": "dc0fc1e91b61bdf915966f9cbe5ae652d8b1776a8af859d12e6cd23d52604af2",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-no-thinking/case-015-legacy.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "disabled"
+    },
+    "run_id": "fba201f5-dc68-4b32-9be6-9191e4cfe854",
+    "started_at": "2026-06-05T03:18:04+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00075335,
+    "output_cost_usd": 0.003472,
+    "total_cost_usd": 0.00422535
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 793,
+    "output_tokens": 868,
+    "raw_usage": {
+      "completion_tokens": 868,
+      "prompt_tokens": 793,
+      "total_tokens": 1661
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1661
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+          "content": "Looking at this verifier failure, I need to understand what's happening with the packet pointer tracking across function calls.\n\n## Analysis of the Verifier Failure\n\nThe key issue is in the verifier log at instruction 10:\n```\n10: (63) *(u32 *)(r7 +0) = r1\nR7 invalid mem access 'scalar'\n```\n\nLet's trace through what's happening:\n\n1. At instruction 2: `r7 = *(u32 *)(r1 +76)` - R7 gets `sk->data`, which is typed as `pkt(r=0)` (packet pointer with read size 0)\n2. At instructions 3-5: Bounds check `if r3 > r2 goto pc+5` - this checks `p + 1 <= data_end`, and when we fall through, R3 becomes `pkt(r=4,imm=4)` (packet pointer with 4 bytes readable)\n3. However, **R7 still remains `pkt(r=0)`** - the bounds check was done on R3, not R7!\n\nWait, let me re-check. Actually looking more carefully at instruction 5: `R3=pkt(r=4,imm=4)` and R7 was `R7=pkt(r=0)` at instruction 3, but after the branch, R7 should still be tracked. \n\nActually, the real issue is: after instruction 5, R6=0 means we passed the check. But R7's type is still `pkt(r=0)` - it didn't get updated to `pkt(r=4)`. The verifier tracks packet pointers precisely, and the arithmetic was done on R3 (a copy), not R7.\n\nBut wait - there's another critical issue. At instruction 8, we call `helper_a(sk, 0)`. This is a **non-inlined helper call** that eventually calls `bpf_skb_pull_data`. \n\nThe problem: **`bpf_skb_pull_data` can invalidate packet pointers** because it may reallocate the packet buffer. After calling `helper_a` \u2192 `helper_b` \u2192 `bpf_skb_pull_data`, the verifier **must assume that all packet pointers (like `sk->data`) are invalidated** because the packet buffer could have been reallocated.\n\nThe verifier marks R7 as `scalar` (untrusted integer) after the helper call because:\n- `bpf_skb_pull_data` is a packet data helper that can change `sk->data` and `sk->data_end`\n- The verifier cannot track that `p` still points to valid packet memory after this potential reallocation\n\n## The Fix\n\nThe fix is to **re-read `sk->data` and re-do the bounds check AFTER the helper call**, not before. The pointer `p` obtained before `bpf_skb_pull_data` is potentially stale.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\n__noinline long helper_b(struct __sk_buff *sk, __u32 len)\n{\n\treturn bpf_skb_pull_data(sk, len);\n}\n\n__noinline long helper_a(struct __sk_buff *sk, __u32 len)\n{\n\treturn helper_b(sk, len);\n}\n\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\thelper_a(sk, 0);\n\n\tint *p = (void *)(long)sk->data;\n\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\n## Why This Fix Works\n\nBy moving the `helper_a(sk, 0)` call **before** reading `sk->data`, we ensure that:\n\n1. Any potential packet reallocation by `bpf_skb_pull_data` happens first\n2. We then read the fresh, valid `sk->data` pointer after the helper returns\n3. The bounds check is performed on the current, valid pointer\n4. The verifier can track that `p` is a valid packet pointer with proper bounds at the time of dereference\n\nThe original code had a classic bug: using a packet pointer across a call to `bpf_skb_pull_data`, which is explicitly documented as potentially invalidating such pointers.",
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1780629487,
+    "id": "chatcmpl-6a223fef5a7618a02c65e1da",
+    "model": "kimi-k2.6",
+    "object": "chat.completion",
+    "usage": {
+      "completion_tokens": 868,
+      "prompt_tokens": 793,
+      "total_tokens": 1661
+    }
+  },
+  "reasoning_content": ""
+}

@@ -1,0 +1,40 @@
+## Verifier Failure Analysis
+
+The failure occurs at:
+```
+3: (79) r1 = *(u64 *)(r0 +0)   ; R1=rcu_ptr_or_null_task_struct(id=10)
+4: (85) call bpf_task_acquire#63762
+Possibly NULL pointer passed to trusted R1
+```
+
+When `value->task` is loaded from the map, the verifier correctly tracks it as `rcu_ptr_or_null_task_struct` — a kptr stored in a map can be NULL. Passing this potentially-NULL value directly to `bpf_task_acquire`, which requires a non-NULL trusted/RCU pointer (the `trusted` annotation on R1), triggers the error.
+
+## Fix
+
+Add an explicit NULL check on `value->task` before calling `bpf_task_acquire`. Loading the field into a local variable and guarding it lets the verifier narrow the type to non-null:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct task_struct *acquired, *task_ptr;
+	struct map_value *value;
+
+	value = helper_a(task);
+	if (!value)
+		return 0;
+
+	task_ptr = value->task;
+	if (!task_ptr)
+		return 0;
+
+	acquired = bpf_task_acquire(task_ptr);
+	if (!acquired)
+		return 0;
+
+	bpf_task_release(acquired);
+	return 0;
+}
+```
+
+**Why this works:** After the `if (!task_ptr) return 0;` guard, the verifier knows `task_ptr` is non-NULL (`rcu_ptr_task_struct` without the `_or_null` qualifier), satisfying the requirement that `bpf_task_acquire`'s first argument must be a non-NULL trusted/RCU pointer.

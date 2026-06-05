@@ -1,0 +1,67 @@
+{
+  "acceptable_fixes": [
+    "Use bpf_cpumask_create(), check for NULL, call bpf_cpumask_populate on the returned cpumask pointer, and release it before returning.",
+    "Replace the integer-cast pointer with another verifier-known memory object accepted by the kfunc contract."
+  ],
+  "canonical_fix": "Allocate or otherwise use verifier-known cpumask memory and pass that pointer to bpf_cpumask_populate, then release it if ownership was acquired.",
+  "case_id": "case-001",
+  "category": "Call Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The first argument to bpf_cpumask_populate is produced by casting the integer constant 0x123456 to a cpumask pointer. The verifier tracks it as a scalar, not as verifier-known writable memory of the required cpumask size.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-001-legacy.txt",
+    "case_id": "case-001",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 1470,
+    "prompt_path": "public/case-001/prompt_legacy.md",
+    "prompt_sha256": "a0e1ddcc93f0bbda0f2825039ffd053bcc68794492e83d423c6bece1a756de61",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-001-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "800fbb9c-3ce3-46da-80db-a685572f5384",
+    "started_at": "2026-06-05T03:17:28+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## What the log is telling you\n\nThe program intentionally passes a garbage pointer as the destination `cpumask`:\n\n```c\nstruct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;\nret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));\n```\n\nSo at the call site `R1` holds the scalar constant `0x123456`, and the verifier\ncorrectly rejects it:\n\n```\n4: (85) call bpf_cpumask_populate#61745\nR1 type=scalar expected=fp\n```\n\nThis is **not** a bug in the program logic \u2014 passing a bogus pointer here *must*\nfail verification. The program is a *negative* (`__failure`) test.\n\n## Why the test is \"failing\"\n\nThe source is missing the test-harness annotations that tell `test_loader` that\nthis program is **expected** to fail verification (and with which message).\nWithout `__failure`/`__msg`, the loader assumes the program should load\nsuccessfully, so the (correct) verifier rejection is reported as a test failure.\n\n## The fix\n\nAdd the `bpf_misc.h` annotations marking the program as an expected failure, and\nmatch the verifier message shown in the log.\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_tracing.h>\n#include <bpf/bpf_helpers.h>\n#include \"bpf_misc.h\"\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"tp_btf/task_newtask\")\n__failure __msg(\"type=scalar expected=fp\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;\n\tu64 bits;\n\tint ret;\n\n\tret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));\n\tif (!ret)\n\t\treturn 2;\n\n\treturn 0;\n}\n```\n\nThe only source-level edits are:\n1. `#include \"bpf_misc.h\"` (provides the `__failure`/`__msg` macros).\n2. `__failure __msg(\"type=scalar expected=fp\")` on the program.\n\nWith these, the harness now expects the verifier to reject the program and\nchecks that the rejection message contains `type=scalar expected=fp`, which\nmatches the log exactly, so the test passes.\n\n(If, instead, the intent were for the program to genuinely load, you would have\nto pass a real `bpf_cpumask` obtained from `bpf_cpumask_create()` rather than the\nfabricated `0x123456` pointer \u2014 but the `invalid` naming makes clear this is\nmeant to be a failure test.)",
+  "must_mention": [
+    "R1 is a scalar/integer, not memory",
+    "The destination pointer must be verifier-known memory",
+    "Do not cast a constant integer to a pointer"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes the integer value",
+    "Adds a NULL check around the integer-cast pointer",
+    "Suppresses or ignores the return value without fixing the destination pointer"
+  ]
+}

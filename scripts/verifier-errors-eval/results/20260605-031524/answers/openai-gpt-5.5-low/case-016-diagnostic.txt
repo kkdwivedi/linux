@@ -1,0 +1,65 @@
+The verifier failure is a reference leak.
+
+`bpf_sk_lookup_tcp()` returns a `PTR_TO_SOCKET_OR_NULL` with an owned reference when non-NULL:
+
+```text
+19: call bpf_sk_lookup_tcp#84    ; R0=sock_or_null(id=2) refs=2
+```
+
+After that, the program branches on `r6`, which was loaded from `skb->mark`:
+
+```text
+20: if r6 == 0x0 goto pc+1
+21: exit
+```
+
+On the path where `r6 != 0`, the program exits immediately at insn 21. But at that point `r0` may contain a non-NULL socket reference from `bpf_sk_lookup_tcp()`, and that reference has not been released with `bpf_sk_release()`. The verifier therefore rejects the program:
+
+```text
+Unreleased reference id=2 alloc_insn=19
+```
+
+The existing release logic only runs on the `r6 == 0` path:
+
+```asm
+l1_%=: if r0 == 0 goto l2_%=;
+       r1 = r0;
+       call bpf_sk_release;
+l2_%=: exit;
+```
+
+So every exit path after the lookup must either release `r0` if it is non-NULL, or avoid doing the lookup on paths that will exit early.
+
+The smallest clean fix is to move the `skb->mark` check before the `bpf_sk_lookup_tcp()` call. Since `r6` is already loaded before the lookup and the program exits immediately when `r6 != 0`, there is no need to acquire a socket reference on that path.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -11,6 +11,8 @@ __naked void entry(void)
+ 	if r0 <= r3 goto l0_%=;				\
+ 	exit;						\
+ l0_%=:	r6 = *(u32*)(r2 + %[mark]);			\
++	if r6 == 0 goto l1_%=;				\
++	exit;						\
++l1_%=:							\
+ 	r2 = 0;						\
+ 	*(u32*)(r10 -8) = r2;				\
+ 	*(u64*)(r10 -16) = r2;				\
+@@ -25,9 +27,7 @@ l0_%=:	r6 = *(u32*)(r2 + %[mark]);			\
+ 	r4 = 0;						\
+ 	r5 = 0;						\
+ 	call %[bpf_sk_lookup_tcp];			\
+-	if r6 == 0 goto l1_%=;				\
+-	exit;						\
+-l1_%=:	if r0 == 0 goto l2_%=;				\
++	if r0 == 0 goto l2_%=;				\
+ 	r1 = r0;					\
+ 	call %[bpf_sk_release];				\
+ l2_%=:	exit;						\
+```
+
+After this change, the `r6 != 0` exit happens before any owned reference is acquired. On the path where `bpf_sk_lookup_tcp()` is called, the program checks `r0` and releases the socket reference if it is non-NULL before exiting. That should satisfy the verifier’s resource lifetime rules.

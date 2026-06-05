@@ -1,0 +1,18 @@
+## Explanation
+
+The verifier rejects the program because **`buffer` is only 8 bytes, but `bpf_dynptr_slice` is called with a length of 9**. The verifier validates that the stack-allocated buffer passed as the third argument (R3) is large enough to hold the requested number of bytes (R4). Since `buffer[8]` ends at `fp-16` and the pointer is at `fp-24`, reading 9 bytes would go out of bounds (`fp-24+8 = fp-16`, one byte past the array), triggering:
+
+```
+invalid read from stack R3 off -24+8 size 9
+```
+
+## Fix
+
+Increase the buffer to at least 9 bytes so it can accommodate the requested slice length:
+
+```diff
+-	char buffer[8] = {};
++	char buffer[9] = {};
+```
+
+This ensures the verifier sees at least 9 bytes of readable stack memory starting at `buffer`, satisfying the memory/length pair contract for `bpf_dynptr_slice`.

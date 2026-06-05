@@ -1,0 +1,37 @@
+## Explanation
+
+The verifier rejects the program because `bpf_cpumask_populate`'s first argument must be **verifier-known memory** (stack, map value, context pointer, etc.), but the code casts the literal integer `0x123456` to `struct cpumask *`. To the verifier, R1 is just a scalar, not a memory region it can verify is safe to write.
+
+The error message is explicit:
+> R1 type=scalar expected=fp
+
+and the suggestion is:
+> Pass stack, map, context, or other verifier-known memory of the expected type and size, not an integer cast to a pointer.
+
+## Fix
+
+Replace the invalid pointer cast with a stack-allocated `struct cpumask`. This gives the verifier a known, appropriately-sized memory region:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct cpumask invalid = {};
+	u64 bits;
+	int ret;
+
+	ret = bpf_cpumask_populate(&invalid, &bits, sizeof(bits));
+	if (!ret)
+		return 2;
+
+	return 0;
+}
+```
+
+**Why this works:** `&invalid` is a frame-pointer-relative address (type `fp`), which is exactly what the verifier accepts. The verifier can confirm it points to at least 16 bytes of stack memory matching `struct cpumask`, satisfying the kfunc argument contract.

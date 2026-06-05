@@ -1,0 +1,38 @@
+**Explanation**
+
+The verifier rejects the program because the pointer `p` (loaded from `sk->data`) is dereferenced *after* a call chain that ends in `bpf_skb_pull_data()`.
+
+1. `entry()` loads `sk->data` into `p`. The verifier tracks `p` as a packet pointer.
+2. The bounds check against `sk->data_end` validates accesses through `p`.
+3. Then `entry()` calls `helper_a()`, which calls `helper_b()`, which calls `bpf_skb_pull_data()`.
+4. `bpf_skb_pull_data` may re‑allocate or relocate the packet buffer. Because of this, the verifier conservatively **invalidates all packet pointers that were derived before the call**.  
+   After the call, register `r7` (which holds `p`) is no longer considered a packet pointer; it has become an untrusted scalar.
+5. Consequently `*p = 42` is flagged as an invalid dereference of a scalar.
+
+The verifier’s suggestion matches exactly: *reload and revalidate the pointer after operations that can invalidate it*.
+
+**Fix**
+
+Move the load of `p` and the `data_end` bounds check to **after** the call to `helper_a()`. The pointer must be derived from the (possibly updated) context after any helper that can move packet data.
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -1059,12 +1059,12 @@ __noinline long helper_a(struct __sk_buff *sk, __u32 len)
+ SEC("tc")
+ int entry(struct __sk_buff *sk)
+ {
+-	int *p = (void *)(long)sk->data;
++	helper_a(sk, 0);
+ 
++	int *p = (void *)(long)sk->data;
+ 	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+ 		return TCX_DROP;
+-	helper_a(sk, 0);
++
+ 	*p = 42;
+ 	return TCX_PASS;
+ }
+```
+
+With this change, `p` is loaded fresh after `helper_a` returns, the verifier sees the subsequent bounds check as establishing a valid packet pointer, and the store `*p = 42` passes verification.

@@ -1,0 +1,43 @@
+**Explanation**
+
+`bpf_res_spin_lock` / `bpf_res_spin_unlock` maintain an internal *lock stack* in the verifier.  
+Acquisitions are pushed onto this stack, and releases must pop them in strict **LIFO**
+(last‑in, first‑out) order.
+
+In the source:
+
+1. `lock_a` is acquired.
+2. `lock_b` is acquired.
+3. The success path then tries to unlock `lock_a` **while `lock_b` is still held**.
+
+Because `lock_a` is not the most recently acquired lock, the verifier rejects the
+`bpf_res_spin_unlock` call with:
+
+```
+bpf_res_spin_unlock cannot be out of order
+```
+
+**Fix**
+
+Swap the two unlock statements so that `lock_b` is released before `lock_a`.
+
+**Patch**
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -182,8 +182,8 @@ int entry(struct __sk_buff *ctx)
+ 	if (bpf_res_spin_lock(&lock_b)) {
+ 		bpf_res_spin_unlock(&lock_a);
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+ 	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+This preserves the error path (if locking `lock_b` fails, only `lock_a` is held,
+so unlocking `lock_a` there is correct) while making the normal path obey the
+required unlock order: **B before A**.

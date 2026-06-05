@@ -1,0 +1,102 @@
+## What the verifier is complaining about
+
+This program builds a *call tree*, not a linear chain. Read the structure:
+
+```
+entry        calls helper_a   50 times
+helper_a     calls helper_b   50 times
+helper_b     calls helper_c   50 times
+helper_c     calls helper_d   50 times
+helper_d     calls helper_e   50 times
+helper_e     calls helper_f   50 times
+helper_f     calls helper_g   50 times   (leaf, just `r0=0; exit`)
+```
+
+There are 7 "calling" levels, each with a fan‑out of 50. The verifier analyzes a
+callee separately for every distinct call path that reaches it, and after
+finishing a callee it must **propagate (recompute) liveness** of stack/register
+reads back up each path. The number of call paths reaching `helper_g` is on the
+order of
+
+```
+50^7 ≈ 7.8 × 10^11
+```
+
+The verifier has a guard that caps how many times it will recompute subprogram
+liveness (the message says the limit is **10001 calls**). The log shows it
+re‑analyzing `subprog#7 helper_g` over and over until it trips that guard:
+
+```
+liveness analysis exceeded complexity limit (10001 calls)
+Verification failed: Verifier Limit: Limit exceeded
+```
+
+So this is not a logic bug in the program — it is pure combinatorial blow‑up of
+call paths. The "Suggestion" in the log is exactly right: *reduce the number of
+distinct call paths reaching these subprograms.*
+
+## The fix
+
+To pass, the product of the per‑level fan‑outs along the chain must stay under
+the liveness‑recompute budget (~10⁴). Every extra nesting level multiplies the
+cost by the fan‑out (50), so the cheapest way to recover the most headroom is to
+**shorten the chain and/or shrink the fan‑out**. Either:
+
+- reduce the fan‑out (`CALLS_50` → a small macro), and/or
+- remove most of the nested helper levels.
+
+For example, keep a tiny fan‑out and only a couple of levels so the path count
+stays small:
+
+```c
+/* small fan-out instead of 50 calls per level */
+#define CALLS_5(fn) \
+	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40)
+```
+
+and collapse the helper chain to just a few levels, e.g. keep only
+`helper_g`, `helper_f`, `helper_a` (entry → helper_a → helper_f → helper_g):
+
+```c
+__naked __noinline __used
+static unsigned long helper_g(void)
+{
+	asm volatile ("r0 = 0; exit;" ::: __clobber_all);
+}
+
+__naked __noinline __used
+static unsigned long helper_f(void)
+{
+	asm volatile (CALLS_5(helper_g) "r0 = 0; exit;" ::: __clobber_all);
+}
+
+__naked __noinline __used
+static unsigned long helper_a(void)
+{
+	asm volatile (CALLS_5(helper_f) "r0 = 0; exit;" ::: __clobber_all);
+}
+
+SEC("?raw_tp")
+__naked int entry(void)
+{
+	asm volatile (CALLS_5(helper_a) "r0 = 0; exit;" ::: __clobber_all);
+}
+```
+
+Here `helper_g` is reached on `5^3 = 125` paths — far below the limit — and the
+program verifies.
+
+### Why this is the right kind of edit
+The verifier rejection has nothing to do with instruction semantics; every
+subprogram is trivially correct (`r0 = 0; exit`). The only thing that must
+change is the *shape* of the call tree so that
+`Σ (paths to each subprog)` stays under the liveness‑analysis recompute cap.
+Cutting nesting depth helps multiplicatively (each removed level divides the
+cost by the fan‑out), while reducing the fan‑out helps at every level, so doing
+both gives ample margin with the smallest change to the program’s logic (none).
+
+If the intent of the test is specifically to *exercise* the limit (i.e. it is
+meant to be a `__failure`/limit test), then the correct "repair" is instead to
+mark it as an expected‑failure case rather than expecting it to load — but based
+on the plain `SEC("?raw_tp")` program with no failure annotations shown, the
+expectation is that it loads, so the path‑count reduction above is the fix.

@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Replace slice_len with sizeof(buffer) or sizeof(*hdr) at the call site.",
+    "Add if (slice_len > sizeof(buffer)) return ...; before bpf_dynptr_slice.",
+    "Clamp or mask slice_len so the verifier proves it cannot exceed the stack buffer."
+  ],
+  "canonical_fix": "Make the slice length verifier-bounded to the fallback buffer size before the call, or pass a compile-time constant size that is no larger than the buffer.",
+  "case_id": "case-007",
+  "category": "Memory Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The dynptr slice fallback buffer is stack memory, but the length comes from a variable global value with no verifier-proven upper bound. The verifier cannot prove the memory/length pair stays within the fallback buffer.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-thinking/case-007-diagnostic.txt",
+    "case_id": "case-007",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-thinking",
+    "prompt_bytes": 4340,
+    "prompt_path": "public/case-007/prompt_diagnostic.md",
+    "prompt_sha256": "d1d8d7dccaad3f83ecae6c603310091500168180bae26b21eb757e9dd3d1640d",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-thinking/case-007-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "enabled"
+    },
+    "run_id": "43dc554c-c8f0-49b6-93f5-75541f18f142",
+    "started_at": "2026-06-05T03:45:48+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "**Verifier Failure Explanation**\n\nThe failure occurs because `slice_len` is a global variable. In eBPF, globals live in a `.data` map, so loading `slice_len` produces a scalar whose value the verifier cannot bound at compile time:\n\n```\nR4=scalar(smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))\n```\n\n`bpf_dynptr_slice` expects its 3rd argument (`buffer`) and 4th argument (`length`) to form a valid memory/length pair. Because `R4` is completely unbounded, the verifier cannot prove that the requested length fits inside the on-stack `buffer`, so it rejects the call.\n\n**Smallest Fix**\n\nPass a compile-time constant for the length instead of the global variable. The buffer was already declared using `sizeof(*hdr)`, so using that same expression satisfies the verifier and matches the buffer size exactly.\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -1600,7 +1600,7 @@ int entry(struct __sk_buff *skb)\n \tbpf_dynptr_from_skb(skb, 0, &ptr);\n \n-\thdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);\n+\thdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(*hdr));\n \tif (!hdr)\n \t\treturn SK_DROP;\n```\n\nWith this change the length is an immediate constant (`14`), allowing the verifier to verify that the stack memory from `buffer` through `buffer + sizeof(*hdr) - 1` is within bounds and initialized.",
+  "must_mention": [
+    "R4/length is variable or unbounded",
+    "The fallback buffer has fixed stack size",
+    "Verifier needs a length upper bound before the call"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks the returned hdr pointer",
+    "Increases unrelated ringbuf size",
+    "Changes the dynptr source but leaves variable length unbounded"
+  ]
+}

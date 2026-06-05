@@ -1,0 +1,68 @@
+{
+  "acceptable_fixes": [
+    "Check if (offset > 47) exit before using it for a 1-byte access to a 48-byte object.",
+    "Check if (offset + 1 > sizeof(struct value)) exit in a verifier-friendly way that avoids overflow.",
+    "Mask or clamp the offset so the verifier can prove the adjusted pointer remains within the map value."
+  ],
+  "canonical_fix": "Add an upper-bound check on the loaded offset before adding it to the map-value pointer, proving offset + access size <= object size.",
+  "case_id": "case-014",
+  "category": "Memory Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program loads a variable offset from the map value and adds it to the map-value pointer before a helper reads one byte. The verifier knows the offset is non-negative but has no safe upper bound, so it cannot prove offset + size stays within the 48-byte map value.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-medium/case-014-diagnostic.txt",
+    "case_id": "case-014",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-medium",
+    "prompt_bytes": 4492,
+    "prompt_path": "public/case-014/prompt_diagnostic.md",
+    "prompt_sha256": "ac5a2ab54da5cf45e897928788b3ed66a0aaeb6499aac9a13e24b90fac12b24c",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-medium/case-014-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "dd6c3fea-7222-43e9-aac6-7ecf61c42035",
+    "started_at": "2026-06-05T04:05:09+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier rejects the program because `r3` (loaded from `r0+0` as a u32) is unbounded, so `r1 += r3` produces a pointer with an unbounded variable offset. The verifier can't prove the access stays within the map value (size 48).\n\nThe fix is to bounds-check `r3` before adding it to `r1`. Since the map value has size 48 and offset field is at byte 0, the data array starts at byte 4 and has 44 bytes. We need `r3 + 1 <= 48`, i.e., `r3 <= 47`. But since we're reading 1 byte at `r1 + r3` and `r1` already points to the start of the value (offset 0), we need `r3 < 48`.\n\nHere's the fix \u2014 add a bounds check on `r3` before adding it to `r1`:\n\n```c\nSEC(\"tracepoint\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tr2 = r10;\t\t\t\t\t\\\n\tr2 += -8;\t\t\t\t\t\\\n\tr1 = 0;\t\t\t\t\t\t\\\n\t*(u64*)(r2 + 0) = r1;\t\t\t\t\\\n\tr1 = %[map_a] ll;\t\t\t\t\\\n\tcall %[bpf_map_lookup_elem];\t\t\t\\\n\tif r0 == 0 goto l0_%=;\t\t\t\t\\\n\tr1 = r0;\t\t\t\t\t\\\n\tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n\tif r3 >= 48 goto l0_%=;\t\t\t\t\\\n\tr1 += r3;\t\t\t\t\t\\\n\tr2 = 1;\t\t\t\t\t\t\\\n\tr3 = 0;\t\t\t\t\t\t\\\n\tcall %[bpf_probe_read_kernel];\t\t\t\\\nl0_%=:\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_map_lookup_elem),\n\t  __imm(bpf_probe_read_kernel),\n\t  __imm_addr(map_a)\n\t: __clobber_all);\n}\n```\n\nThe added line `if r3 >= 48 goto l0_%=;` constrains `r3` to the range `[0, 47]`, so after `r1 += r3`, the verifier knows the resulting pointer offset is at most 47 within the 48-byte map value, making the 1-byte access safe.",
+  "must_mention": [
+    "The offset is variable and lacks an upper bound",
+    "The object/map value size is finite",
+    "The proof needed is offset plus access size within bounds"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks that map_lookup_elem returned non-NULL",
+    "Adds a lower-bound check only",
+    "Checks after the helper access"
+  ]
+}

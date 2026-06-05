@@ -1,0 +1,48 @@
+I'll analyze this verifier failure step by step.
+
+## Verifier Failure Explanation
+
+The error occurs in `helper_b()` at line 19, specifically when calling `helper_c(val, skb + 1)`.
+
+**The Core Problem:**
+
+In eBPF, **context pointers (`ctx`) cannot be modified before being passed to another function**. The verifier tracks context pointers and requires them to remain in their "original form" when dereferenced or passed to functions.
+
+Looking at the verifier log:
+- Line 16: `r2` receives the `skb` context pointer (`R2=ctx()`)
+- Line 16: `r6 = r2` copies it (`R6=ctx()`)
+- Line 21: `r6 += 192` **modifies** the context pointer (`R6=ctx(imm=192)`)
+- Line 23: `r2 = r6` passes the modified pointer to `helper_c`
+- Line 24: Call to `helper_c` fails because `R2` has `off=192`
+
+The `skb + 1` in the C source is pointer arithmetic on `struct __sk_buff *`. Since `sizeof(struct __sk_buff)` is 192 bytes, this adds 192 to the pointer. The verifier sees this as a modified context pointer and rejects it.
+
+**Why this matters:** Context pointers in eBPF point to kernel-managed data. The verifier must ensure they're accessed correctly. Allowing arbitrary arithmetic on context pointers before passing them to helpers would break the safety model.
+
+## The Fix
+
+The code appears to be trying to pass a different `skb` (or do pointer arithmetic that doesn't make sense for a context pointer). Since `skb` is a context pointer to a single socket buffer, `skb + 1` is almost certainly **unintentional** — it would point past the end of the actual `struct __sk_buff` into invalid memory.
+
+The smallest fix is to **remove the `+ 1`** and pass `skb` directly:
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -16,7 +16,7 @@ int helper_c(int val, struct __sk_buff *skb);
+ __attribute__((noinline))
+ int helper_b(int val, struct __sk_buff *skb)
+ {
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+ }
+ 
+ __attribute__((noinline))
+```
+
+## Why This Fix Works
+
+1. **Preserves the original context pointer**: Passing `skb` directly keeps the pointer unmodified
+2. **Matches the intended semantics**: `helper_c` expects a valid `struct __sk_buff *` to read `skb->ifindex` from. A pointer past the end of the struct would cause invalid memory access.
+3. **Satisfies verifier constraints**: The context pointer `R2` remains with `off=0`, which is allowed.
+
+The `skb + 1` was likely a mistake — perhaps confusion with array indexing, or an attempt to access a field that should use `->` instead. The fix makes `helper_b` correctly pass the socket buffer context to `helper_c`.

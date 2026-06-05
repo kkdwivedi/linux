@@ -1,0 +1,14 @@
+The fix is to move `bpf_copy_from_user` outside the preempt-disabled region. `bpf_copy_from_user` is a sleepable helper and cannot be called while preemption is disabled.
+
+```c
+SEC("?fentry.s/sys_getpgid")
+int entry(void *ctx)
+{
+	u32 data;
+
+	bpf_copy_from_user(&data, sizeof(data), NULL);
+	bpf_preempt_disable();
+	bpf_preempt_enable();
+	return 0;
+}
+```

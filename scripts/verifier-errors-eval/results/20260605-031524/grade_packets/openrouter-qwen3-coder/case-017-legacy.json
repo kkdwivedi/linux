@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Swap the two bpf_local_irq_restore calls.",
+    "Avoid nesting IRQ saves, if only one IRQ-disabled region is needed."
+  ],
+  "canonical_fix": "Restore flags2 first, then restore flags1.",
+  "case_id": "case-017",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program saves two nested IRQ flag states, then restores flags1 before flags2. IRQ-disabled regions must be restored in last-in, first-out order with the matching saved flag variable.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-017-legacy.txt",
+    "case_id": "case-017",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 1745,
+    "prompt_path": "public/case-017/prompt_legacy.md",
+    "prompt_sha256": "7fc465b0f01c16b7f076395e6776f54156c97eb932b04d9dd1f878444e3ec702",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-017-legacy.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "2f75aeb6-4ecb-433e-9711-6cb02f8a47fd",
+    "started_at": "2026-06-05T03:21:06+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "Looking at the verifier log, I can see the issue:\n\nThe error message \"cannot restore irq state out of order, expected id=2 acquired at insn_idx=7\" indicates that the BPF verifier is tracking the order of IRQ save/restore operations and requires them to be properly nested (LIFO - Last In, First Out).\n\nThe program is doing:\n1. Save flags1 (id=1) at instruction 3\n2. Save flags2 (id=2) at instruction 7  \n3. Restore flags1 (id=1) at instruction 9 - This is the error!\n\nThe verifier expects the most recently saved IRQ state (flags2/id=2) to be restored first, but the code is trying to restore flags1 (id=1) first, which breaks the expected nesting order.\n\nThe fix is to restore the IRQ states in the reverse order of how they were saved:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);  // Restore flags2 first (most recent)\n\tbpf_local_irq_restore(&flags1);  // Then restore flags1\n\treturn 0;\n}\n```",
+  "must_mention": [
+    "IRQ flags are nested",
+    "Restore order must be LIFO",
+    "flags2 is the currently active/latest save"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Restores flags1 twice",
+    "Deletes the second restore and leaves IRQ state active",
+    "Treats this as a spin-lock unlock order failure instead of IRQ flag restore order"
+  ]
+}

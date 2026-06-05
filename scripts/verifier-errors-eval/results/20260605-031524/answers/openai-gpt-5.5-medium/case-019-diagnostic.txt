@@ -1,0 +1,39 @@
+The verifier is failing before doing normal state analysis because the subprogram call graph is structurally recursive:
+
+```c
+entry -> helper_a -> helper_a
+```
+
+Even though the recursion is bounded by the runtime condition `r1 < 4`, the verifier does not allow recursive bpf2bpf subprogram calls at all. It requires the subprogram call graph to be finite and acyclic so it can bound stack usage and analysis depth.
+
+The smallest source-level fix is to replace the self-call with an explicit bounded loop inside `helper_a`. That preserves the intended behavior: starting from `r1 = 0`, increment until `r1 == 4`, returning `r0 = 4`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..1111111 100644
+--- a/case.c
++++ b/case.c
+@@ -16,12 +16,11 @@ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+ 	asm volatile ("					\
++l0_%=:							\
+ 	r1 += 1;					\
+ 	r0 = r1;					\
+ 	if r1 < 4 goto l0_%=;				\
+ 	exit;						\
+-l0_%=:	call helper_a;					\
+-	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+After this change, the call graph is only:
+
+```text
+entry -> helper_a
+```
+
+There is no recursive subprogram call anymore. The remaining back-edge is a normal bounded loop, which the verifier should be able to prove terminates because `entry` initializes `r1 = 0`, and `helper_a` increments it until it reaches `4`.

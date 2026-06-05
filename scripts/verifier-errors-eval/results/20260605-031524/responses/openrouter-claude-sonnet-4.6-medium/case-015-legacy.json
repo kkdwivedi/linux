@@ -1,0 +1,118 @@
+{
+  "answer_text": "## Explanation of the Verifier Failure\n\nThe verifier failure happens because `helper_a` \u2192 `helper_b` \u2192 `bpf_skb_pull_data` can **reallocate the packet buffer**. After that call, any previously obtained packet data pointer (`p` / `r7`) is invalidated \u2014 the verifier correctly demotes `r7` from `pkt(r=4,imm=4)` to plain `scalar`. When the code then tries to write through `r7` (`*p = 42`), the verifier rejects it:\n\n```\nR7 invalid mem access 'scalar'\n```\n\nEven though the bounds check on `p` was done before the call, `bpf_skb_pull_data` is specifically designed to potentially move the packet data in memory, so any pre-call packet pointer is considered stale afterward.\n\n## Fix\n\nReload `sk->data` and repeat the bounds check **after** the call to `helper_a`:\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p = (void *)(long)sk->data;\n\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\thelper_a(sk, 0);\n\n\t/* bpf_skb_pull_data may have moved packet data; reload and recheck. */\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nAfter the call to `helper_a`, the packet pointer must be freshly read from `sk->data` and the bounds check must be repeated. Only then does the verifier know that the pointer is valid with at least 4 bytes of range, allowing the store `*p = 42` to succeed.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-sonnet-4.6-medium/case-015-legacy.txt",
+    "case_id": "case-015",
+    "model": "anthropic/claude-sonnet-4.6",
+    "profile": "openrouter-claude-sonnet-4.6-medium",
+    "prompt_bytes": 1984,
+    "prompt_path": "public/case-015/prompt_legacy.md",
+    "prompt_sha256": "dc0fc1e91b61bdf915966f9cbe5ae652d8b1776a8af859d12e6cd23d52604af2",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-sonnet-4.6-medium/case-015-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "ae120ff2-63bf-4a3c-acc2-78f1b6fa85b1",
+    "started_at": "2026-06-05T03:18:49+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.002922,
+    "output_cost_usd": 0.014085,
+    "total_cost_usd": 0.017007
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 974,
+    "output_tokens": 939,
+    "raw_usage": {
+      "completion_tokens": 939,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 189
+      },
+      "cost": 0.017007,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.014085,
+        "upstream_inference_cost": 0.017007,
+        "upstream_inference_prompt_cost": 0.002922
+      },
+      "is_byok": false,
+      "prompt_tokens": 974,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1913
+    },
+    "reasoning_content_chars": 742,
+    "reasoning_tokens": 189,
+    "total_tokens": 1913
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation of the Verifier Failure\n\nThe verifier failure happens because `helper_a` \u2192 `helper_b` \u2192 `bpf_skb_pull_data` can **reallocate the packet buffer**. After that call, any previously obtained packet data pointer (`p` / `r7`) is invalidated \u2014 the verifier correctly demotes `r7` from `pkt(r=4,imm=4)` to plain `scalar`. When the code then tries to write through `r7` (`*p = 42`), the verifier rejects it:\n\n```\nR7 invalid mem access 'scalar'\n```\n\nEven though the bounds check on `p` was done before the call, `bpf_skb_pull_data` is specifically designed to potentially move the packet data in memory, so any pre-call packet pointer is considered stale afterward.\n\n## Fix\n\nReload `sk->data` and repeat the bounds check **after** the call to `helper_a`:\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p = (void *)(long)sk->data;\n\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\thelper_a(sk, 0);\n\n\t/* bpf_skb_pull_data may have moved packet data; reload and recheck. */\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nAfter the call to `helper_a`, the packet pointer must be freshly read from `sk->data` and the bounds check must be repeated. Only then does the verifier know that the pointer is valid with at least 4 bytes of range, allowing the store `*p = 42` to succeed.",
+          "reasoning": "The verifier failure is clear: after calling `helper_a(sk, 0)`, the verifier loses track of the packet pointer `r7` (which previously held `pkt(r=4,imm=4)` - the data pointer with a range of 4 bytes confirmed by the bounds check). After the function call to a global function, the verifier invalidates packet pointers because `bpf_skb_pull_data` can reallocate the packet data, making pointer `p` stale.\n\nThe issue is that after calling `helper_a` (which calls `bpf_skb_pull_data`), the packet data may have been reallocated. \n\nSince `p` becomes invalid after the call, I need to reload it from `sk->data` and redo the bounds check before using it again. I'm showing the corrected approach where the pointer is reloaded after the helper call.",
+          "reasoning_details": [
+            {
+              "format": "anthropic-claude-v1",
+              "index": 0,
+              "signature": "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",
+              "text": "The verifier failure is clear: after calling `helper_a(sk, 0)`, the verifier loses track of the packet pointer `r7` (which previously held `pkt(r=4,imm=4)` - the data pointer with a range of 4 bytes confirmed by the bounds check). After the function call to a global function, the verifier invalidates packet pointers because `bpf_skb_pull_data` can reallocate the packet data, making pointer `p` stale.\n\nThe issue is that after calling `helper_a` (which calls `bpf_skb_pull_data`), the packet data may have been reallocated. \n\nSince `p` becomes invalid after the call, I need to reload it from `sk->data` and redo the bounds check before using it again. I'm showing the corrected approach where the pointer is reloaded after the helper call.",
+              "type": "reasoning.text"
+            }
+          ],
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629529,
+    "id": "gen-1780629529-oiEhhyMiDM7SMuj1gsn2",
+    "model": "anthropic/claude-4.6-sonnet-20260217",
+    "object": "chat.completion",
+    "provider": "Google",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 939,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 189
+      },
+      "cost": 0.017007,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.014085,
+        "upstream_inference_cost": 0.017007,
+        "upstream_inference_prompt_cost": 0.002922
+      },
+      "is_byok": false,
+      "prompt_tokens": 974,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1913
+    }
+  },
+  "reasoning_content": "The verifier failure is clear: after calling `helper_a(sk, 0)`, the verifier loses track of the packet pointer `r7` (which previously held `pkt(r=4,imm=4)` - the data pointer with a range of 4 bytes confirmed by the bounds check). After the function call to a global function, the verifier invalidates packet pointers because `bpf_skb_pull_data` can reallocate the packet data, making pointer `p` stale.\n\nThe issue is that after calling `helper_a` (which calls `bpf_skb_pull_data`), the packet data may have been reallocated. \n\nSince `p` becomes invalid after the call, I need to reload it from `sk->data` and redo the bounds check before using it again. I'm showing the corrected approach where the pointer is reloaded after the helper call."
+}

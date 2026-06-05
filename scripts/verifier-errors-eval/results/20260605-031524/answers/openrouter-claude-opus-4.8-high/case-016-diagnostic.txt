@@ -1,0 +1,52 @@
+## What the verifier is complaining about
+
+`bpf_sk_lookup_tcp()` is an *acquire* helper. Its return value in `r0` is a `sock_or_null` carrying a reference (id=2) that **must be released on every path** before the program exits (or transferred to a release helper like `bpf_sk_release`).
+
+Look at the control flow right after the lookup:
+
+```
+19: call bpf_sk_lookup_tcp     ; R0=sock_or_null(id=2)  refs=2
+20: if r6 == 0 goto l1_%=      ; r6 is the skb->mark, an unknown scalar
+21: exit                       ; <-- leaks id=2
+```
+
+`r6` is loaded from `skb->mark`, so the verifier treats it as an arbitrary scalar (`smin=1,...` on the fall-through branch). When `r6 != 0`, execution falls through to instruction 21 (`exit`) **without ever calling `bpf_sk_release`**, so the acquired socket reference leaks. That is exactly the "Unreleased reference id=2" / "Resource Lifetime Safety" error.
+
+Only the `l1_%=` path releases the socket:
+
+```
+l1_%=: if r0 == 0 goto l2_%=
+       r1 = r0
+       call bpf_sk_release
+l2_%=: exit
+```
+
+The `if r6 == 0 ... exit` early-out bypasses that release entirely.
+
+## Smallest fix
+
+Make the `r6 != 0` path also flow through the release code instead of exiting directly. The minimal edit is to turn the bare early `exit;` into a jump to the release sequence at `l1_%=`:
+
+```c
+	if r6 == 0 goto l1_%=;				\
+	goto l1_%=;					\
+l1_%=:	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+```
+
+After this change, regardless of the value of `r6`, both branches reach `l1_%=`, where the socket is released (when non-NULL) before the final `exit`, so the reference is accounted for on every path.
+
+Equivalently (and more cleanly), since the `r6` test now selects between two identical destinations, you can drop the `r6` conditional altogether and just fall straight into the release path:
+
+```c
+l0_%=:	r6 = *(u32*)(r2 + %[mark]);			\
+	... (stack init, call bpf_sk_lookup_tcp) ...	\
+	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+```
+
+Either form satisfies the verifier because the acquired reference (id=2) is now released (or is NULL) on every exit path.

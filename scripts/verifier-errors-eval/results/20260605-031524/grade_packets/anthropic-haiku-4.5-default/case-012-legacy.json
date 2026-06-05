@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Move helper_a(0) after bpf_local_irq_restore(&flags).",
+    "Split helper_a so the IRQ-disabled path calls only a non-sleepable helper.",
+    "Avoid disabling IRQs around the call if the critical section is not needed."
+  ],
+  "canonical_fix": "Restore IRQ state before calling the sleepable subprogram, or remove/replace the sleepable helper from the subprogram used in the IRQ-disabled region.",
+  "case_id": "case-012",
+  "category": "Execution Context Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The entry program disables IRQs and then calls a global subprogram that can call a sleepable helper. The verifier treats the sleepable call through the subprogram as occurring inside the IRQ-disabled region.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-012-legacy.txt",
+    "case_id": "case-012",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 1526,
+    "prompt_path": "public/case-012/prompt_legacy.md",
+    "prompt_sha256": "3c7396a0a94e22b4ffa05f47bf695c68faeca27ec07a26da548d621cb3473cdb",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-012-legacy.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "e32523e0-a0eb-41c7-be85-e9f0df286b0c",
+    "started_at": "2026-06-05T04:22:31+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Verifier Failure Analysis\n\nThe verifier is rejecting this program for two reasons:\n\n1. **\"arg#0 reference type('UNKNOWN') size cannot be determined: -22\"** - The `bpf_local_irq_save()` helper expects a pointer to a known-sized type, but the verifier cannot determine the size of what `&flags` points to in the generated code context.\n\n2. **\"sleepable global function helper_a() called in IRQ-disabled region\"** - The function `helper_a()` is marked `__noinline` and contains `bpf_copy_from_user()`, which is a sleepable operation. However, it's being called after `bpf_local_irq_save()`, which disables interrupts. The verifier tracks IRQ-disabled regions and prevents sleepable helpers from being called within them.\n\n## Root Cause\n\nThe core issue is the mismatch between:\n- Calling a sleepable function (`bpf_copy_from_user`) inside an IRQ-disabled section (between `bpf_local_irq_save` and `bpf_local_irq_restore`)\n- This violates kernel rules because you cannot sleep when IRQs are disabled\n\n## Smallest Fix\n\nMove the `helper_a(0)` call **outside** the IRQ-disabled region:\n\n```c\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\thelper_a(0);\n\tbpf_local_irq_save(&flags);\n\tbpf_local_irq_restore(&flags);\n\treturn 0;\n}\n```\n\n**Why this works:** By moving `helper_a(0)` before `bpf_local_irq_save()`, the sleepable function is no longer called within an IRQ-disabled region, satisfying the verifier's constraint that sleepable operations cannot execute with interrupts disabled.",
+  "must_mention": [
+    "A sleepable operation is reached through a global subprogram",
+    "IRQs are disabled at that point",
+    "The call must be outside the IRQ-disabled region"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes helper_a's argument value",
+    "Moves bpf_local_irq_restore after the return",
+    "Adds a NULL check for the local buffer"
+  ]
+}

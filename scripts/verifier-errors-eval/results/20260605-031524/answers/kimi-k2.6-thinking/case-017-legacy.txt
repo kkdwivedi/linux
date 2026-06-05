@@ -1,0 +1,30 @@
+**Verifier Failure Explanation**
+
+The eBPF verifier tracks `bpf_local_irq_save` / `bpf_local_irq_restore` pairs with stack-like (LIFO) semantics. Each `bpf_local_irq_save` call is assigned an internal ID, and `bpf_local_irq_restore` must restore the *most recently saved* state first.
+
+In the source:
+1. `bpf_local_irq_save(&flags1)` acquires ID 1.
+2. `bpf_local_irq_save(&flags2)` acquires ID 2.
+3. `bpf_local_irq_restore(&flags1)` tries to restore ID 1, but the verifier expects ID 2 (the most recent one) to be restored first.  
+Hence the error: *“cannot restore irq state out of order, expected id=2”*.
+
+**Fix**
+
+Restore the IRQ states in reverse order of how they were saved:
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -245,8 +245,8 @@ int entry(struct __sk_buff *ctx)
+ 
+ 	bpf_local_irq_save(&flags1);
+ 	bpf_local_irq_save(&flags2);
+-	bpf_local_irq_restore(&flags1);
+-	bpf_local_irq_restore(&flags2);
++	bpf_local_irq_restore(&flags2);
++	bpf_local_irq_restore(&flags1);
+ 	return 0;
+ }
+```
+
+This obeys the LIFO discipline: `flags2` (saved second) is restored first, then `flags1` (saved first).

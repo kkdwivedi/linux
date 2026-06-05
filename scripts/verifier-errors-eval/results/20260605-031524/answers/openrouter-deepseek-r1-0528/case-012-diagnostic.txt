@@ -1,0 +1,30 @@
+The verifier error occurs because the `helper_a` function is called within an IRQ-disabled critical section, but `helper_a` contains a call to `bpf_copy_from_user`, which is a sleepable function. Sleepable functions cannot be used in IRQ-disabled regions due to potential deadlocks.
+
+**Error Explanation:**
+- `bpf_local_irq_save()` starts an IRQ-disabled critical section (depth=1).
+- `helper_a(0)` is called inside this section.
+- `helper_a` conditionally calls `bpf_copy_from_user` (when `i=0`), which is sleepable.
+- Sleepable operations are prohibited in IRQ-disabled regions.
+
+**Fix:**
+Move the call to `helper_a(0)` **outside** the critical section. The critical section (IRQ save/restore) should only contain non-sleepable operations.
+
+**Patch:**
+```diff
+--- a.c
++++ b.c
+@@ -14,8 +14,8 @@
+ 	unsigned long flags;
+ 
+ 	bpf_local_irq_save(&flags);
+-	helper_a(0);
+ 	bpf_local_irq_restore(&flags);
++	helper_a(0);
+ 	return 0;
+ }
+```
+
+**Why this works:**
+- `helper_a(0)` is now executed **after** the critical section ends (`bpf_local_irq_restore`).
+- The sleepable function is no longer called in an IRQ-disabled context.
+- The verifier will allow sleepable operations in normal (non-IRQ-disabled) execution contexts.

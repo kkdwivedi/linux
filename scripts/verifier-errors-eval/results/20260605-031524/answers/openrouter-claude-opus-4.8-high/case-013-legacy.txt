@@ -1,0 +1,41 @@
+## Explanation
+
+The verifier enforces a limit on the **total stack used along a single chain of nested function calls** (`MAX_BPF_STACK` = 512 bytes). This is checked in `check_max_stack_depth()`.
+
+In this program the deepest call chain is:
+
+```
+entry -> helper_c -> helper_b -> helper_a
+```
+
+`helper_a` uses no stack, but both `helper_c` and `helper_b` allocate `volatile char buf[MAX_STACK]` with `MAX_STACK == 260`. Each frame gets rounded up to 16-byte alignment:
+
+```
+260 -> 272 bytes per frame
+272 (helper_c) + 272 (helper_b) = 544 bytes
+```
+
+544 > 512, so the verifier rejects it:
+
+```
+combined stack size of 3 calls is 544. Too large
+```
+
+This has nothing to do with the logic — it's purely the per-chain stack budget.
+
+## Fix
+
+Shrink the per-frame stack so two stacked frames fit in the 512-byte budget. The largest value that works is 256 (256 is already 16-aligned, so `256 + 256 = 512`, which is allowed since the check fails only when the total *exceeds* 512):
+
+```c
+-#define MAX_STACK 260
++#define MAX_STACK 256
+```
+
+With `MAX_STACK == 256`:
+
+```
+256 (helper_c) + 256 (helper_b) = 512  <= 512  ✓
+```
+
+This is the smallest source change that satisfies the verifier’s stack-depth check while keeping the call structure of the test intact.

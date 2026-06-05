@@ -1,0 +1,54 @@
+## Verifier Failure Analysis
+
+The verifier rejects this program because **R7 loses its packet pointer type information after the function call**.
+
+Here's what happens:
+
+1. **Lines 0-5**: R7 is loaded with `sk->data` (packet pointer) and bounds-checked against `sk->data_end`. After the bounds check passes, R7 has type `pkt(r=0)` (packet pointer with 0 bytes read).
+
+2. **Line 8**: `call pc+4` invokes `helper_a()`, which is marked `__noinline` and is a global function.
+
+3. **Line 9**: After the call returns, the verifier treats `helper_a` as an opaque function (marked "assumed valid"). Since the function is not inlined and the verifier cannot track what it does, **R7's type is invalidated** and becomes `scalar`.
+
+4. **Line 10**: When attempting `*(u32 *)(r7 +0) = r1`, the verifier rejects it because R7 is now a scalar, not a packet pointer. The error is `R7 invalid mem access 'scalar'`.
+
+## Root Cause
+
+The BPF verifier cannot preserve packet pointer types across calls to non-inlined functions because it treats them as black boxes. The function `helper_a` doesn't modify R7, but the verifier doesn't know that and conservatively invalidates all potentially-modified registers.
+
+## Solution
+
+**Remove the `__noinline` attribute** from both helper functions to allow them to be inlined. This way, the verifier can see through the function calls and maintain R7's packet pointer type.
+
+### Patch
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+long helper_b(struct __sk_buff *sk, __u32 len)
+{
+	return bpf_skb_pull_data(sk, len);
+}
+
+long helper_a(struct __sk_buff *sk, __u32 len)
+{
+	return helper_b(sk, len);
+}
+
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	int *p = (void *)(long)sk->data;
+
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	helper_a(sk, 0);
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+**Changes**: Remove `__noinline` from both `helper_b` and `helper_a` declarations (lines 3 and 8).
+
+This allows the verifier to inline these functions and track that R7 remains a valid packet pointer throughout execution.

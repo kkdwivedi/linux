@@ -1,0 +1,130 @@
+{
+  "answer_text": "The failure is caused by using a packet pointer that was validated before a helper call that can change the skb data area.\n\nIn the log:\n\n```text\n2: r7 = *(u32 *)(r1 +76)         ; R7=pkt(r=0)\n...\n5: if r3 > r2 goto ...           ; R7 becomes pkt(r=4)\n...\n8: call helper_a\n...\n10: *(u32 *)(r7 +0) = r1\nR7 invalid mem access 'scalar'\n```\n\n`R7` originally holds `sk->data`, and the bounds check proves that 4 bytes are accessible. But `helper_a()` calls `helper_b()`, which calls:\n\n```c\nbpf_skb_pull_data(sk, len);\n```\n\n`bpf_skb_pull_data()` may reallocate/linearize/unclone the skb and may change `sk->data` / `sk->data_end`. Therefore the verifier invalidates all previously checked packet pointers across that call. After the call, the old `p`/`R7` is no longer a valid `PTR_TO_PACKET`; it is treated as a scalar, so the direct packet write fails verification.\n\nThe fix is to do the `bpf_skb_pull_data()` call before loading/checking packet pointers, or reload and recheck `sk->data`/`sk->data_end` after the call.\n\nSmallest source-level fix:\n\n```diff\n SEC(\"tc\")\n int entry(struct __sk_buff *sk)\n {\n-\tint *p = (void *)(long)sk->data;\n+\tint *p;\n \n+\thelper_a(sk, 0);\n+\tp = (void *)(long)sk->data;\n \tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n \t\treturn TCX_DROP;\n-\thelper_a(sk, 0);\n \t*p = 42;\n \treturn TCX_PASS;\n }\n```\n\nAfter this change, the verifier should see the packet pointer load and bounds check after the skb-changing helper call, so the `*p = 42` write uses a fresh, valid, range-checked packet pointer.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-high/case-015-legacy.txt",
+    "case_id": "case-015",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-high",
+    "prompt_bytes": 1984,
+    "prompt_path": "public/case-015/prompt_legacy.md",
+    "prompt_sha256": "dc0fc1e91b61bdf915966f9cbe5ae652d8b1776a8af859d12e6cd23d52604af2",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-high/case-015-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "47883f1b-3897-4dc3-9be1-3e9cd431b36f",
+    "started_at": "2026-06-05T03:16:01+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.003995,
+    "output_cost_usd": 0.18456,
+    "total_cost_usd": 0.188555
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 799,
+    "output_tokens": 6152,
+    "raw_usage": {
+      "input_tokens": 799,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 6152,
+      "output_tokens_details": {
+        "reasoning_tokens": 5696
+      },
+      "total_tokens": 6951
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 5696,
+    "total_tokens": 6951
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629499,
+    "created_at": 1780629361,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0f939d62a19f4464006a223f7165b88192996b5342ff2602fc",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0f939d62a19f4464006a223f72105c8192a27583473e89839f",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is caused by using a packet pointer that was validated before a helper call that can change the skb data area.\n\nIn the log:\n\n```text\n2: r7 = *(u32 *)(r1 +76)         ; R7=pkt(r=0)\n...\n5: if r3 > r2 goto ...           ; R7 becomes pkt(r=4)\n...\n8: call helper_a\n...\n10: *(u32 *)(r7 +0) = r1\nR7 invalid mem access 'scalar'\n```\n\n`R7` originally holds `sk->data`, and the bounds check proves that 4 bytes are accessible. But `helper_a()` calls `helper_b()`, which calls:\n\n```c\nbpf_skb_pull_data(sk, len);\n```\n\n`bpf_skb_pull_data()` may reallocate/linearize/unclone the skb and may change `sk->data` / `sk->data_end`. Therefore the verifier invalidates all previously checked packet pointers across that call. After the call, the old `p`/`R7` is no longer a valid `PTR_TO_PACKET`; it is treated as a scalar, so the direct packet write fails verification.\n\nThe fix is to do the `bpf_skb_pull_data()` call before loading/checking packet pointers, or reload and recheck `sk->data`/`sk->data_end` after the call.\n\nSmallest source-level fix:\n\n```diff\n SEC(\"tc\")\n int entry(struct __sk_buff *sk)\n {\n-\tint *p = (void *)(long)sk->data;\n+\tint *p;\n \n+\thelper_a(sk, 0);\n+\tp = (void *)(long)sk->data;\n \tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n \t\treturn TCX_DROP;\n-\thelper_a(sk, 0);\n \t*p = 42;\n \treturn TCX_PASS;\n }\n```\n\nAfter this change, the verifier should see the packet pointer load and bounds check after the skb-changing helper call, so the `*p = 42` write uses a fresh, valid, range-checked packet pointer.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0f939d62a19f4464006a223ff4f5e88192b241508d38c1394b",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 799,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 6152,
+      "output_tokens_details": {
+        "reasoning_tokens": 5696
+      },
+      "total_tokens": 6951
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

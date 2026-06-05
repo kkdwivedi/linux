@@ -1,0 +1,31 @@
+**Explanation**
+
+The verifier rejects the program because the helper `bpf_ktime_get_coarse_ns` (ID 160) is not in the allow-list for the `kprobe` program type. The error message is explicit:
+
+> *program of this type cannot use helper bpf_ktime_get_coarse_ns#160*
+
+Kprobe programs can, however, use the older `bpf_ktime_get_ns` helper (ID 5), which provides the same monotonic-clock time in nanoseconds.
+
+**Smallest fix**
+
+Replace the disallowed helper with `bpf_ktime_get_ns` in both the assembly string and the `__imm` constraint.
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -8,10 +8,10 @@ SEC("kprobe")
+ __naked void entry(void)
+ {
+ 	asm volatile ("					\
+-	call %[bpf_ktime_get_coarse_ns];		\
++	call %[bpf_ktime_get_ns];			\
+ 	r0 = 0;						\
+ 	exit;						\
+ "	:
+-	: __imm(bpf_ktime_get_coarse_ns)
++	: __imm(bpf_ktime_get_ns)
+ 	: __clobber_all);
+ }
+```
+
+This keeps the program type, structure, and logic identical while using a helper that the verifier permits for kprobes.

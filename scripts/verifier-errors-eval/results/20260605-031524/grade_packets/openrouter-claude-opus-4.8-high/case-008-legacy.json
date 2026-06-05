@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Change char buffer[8] to char buffer[9] or larger.",
+    "Change the bpf_dynptr_slice length argument from 9 to sizeof(buffer) or 8."
+  ],
+  "canonical_fix": "Make the fallback buffer at least 9 bytes or reduce the requested slice length to 8 bytes.",
+  "case_id": "case-008",
+  "category": "Call Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The fallback stack buffer is 8 bytes, but bpf_dynptr_slice is asked to use 9 bytes. The memory/length pair therefore describes a read beyond the stack object.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-opus-4.8-high/case-008-legacy.txt",
+    "case_id": "case-008",
+    "model": "anthropic/claude-opus-4.8",
+    "profile": "openrouter-claude-opus-4.8-high",
+    "prompt_bytes": 1995,
+    "prompt_path": "public/case-008/prompt_legacy.md",
+    "prompt_sha256": "bb69e9d81c52b441a9ca18ed1387cdaf4d358455af3a7eb36dc706949cff365c",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-opus-4.8-high/case-008-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "d880bf25-a26c-43e0-a3e8-23dafa1ad82b",
+    "started_at": "2026-06-05T03:18:22+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Explanation\n\n`bpf_dynptr_slice()` may copy the requested data into the caller-provided stack buffer when it can't return a direct pointer. Its signature is:\n\n```c\nvoid *bpf_dynptr_slice(const struct bpf_dynptr *ptr, u32 offset,\n                       void *buffer, u32 buffer__szk);\n```\n\nThe last argument (`buffer__szk`) is the length of the *buffer*, and the verifier treats `(buffer, len)` as a memory/len pair: the buffer must be at least `len` bytes.\n\nIn the program the buffer is only 8 bytes:\n\n```c\nchar buffer[8] = {};\n...\ndata = bpf_dynptr_slice(&ptr, 0, buffer, 9);\n```\n\nbut a length of `9` is passed. The verifier sees a 9-byte access into an 8-byte stack slot (`fp-24 .. fp-24+8`) and rejects it:\n\n```\ninvalid read from stack R3 off -24+8 size 9\nR3 and R4 memory, len pair leads to invalid memory access\n```\n\n## Fix\n\nMake the length consistent with the buffer size. The smallest fix is to match the two. Either enlarge the buffer or shrink the length.\n\nOption A \u2014 shrink the length to 8:\n\n```c\n\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 8);\n```\n\nOption B \u2014 enlarge the buffer to 9 (note 8-byte alignment for the `__u64` use, but `char[9]` is fine here):\n\n```c\n\tchar buffer[9] = {};\n\t...\n\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 9);\n```\n\nEither makes the `(buffer, len)` pair valid (`len <= sizeof(buffer)`), so the verifier no longer sees an out-of-bounds stack access.\n\nI'd use Option A as the minimal edit:\n\n```c\n-\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 9);\n+\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 8);\n```",
+  "must_mention": [
+    "Requested length is 9",
+    "Buffer size is 8",
+    "The memory/length pair must fit"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks data for NULL after the call",
+    "Changes the dynptr initialization but leaves 9 against an 8-byte buffer",
+    "Treats the problem as a ringbuf capacity issue"
+  ]
+}

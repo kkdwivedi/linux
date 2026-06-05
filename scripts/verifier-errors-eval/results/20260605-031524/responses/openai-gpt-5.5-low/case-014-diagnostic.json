@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier rejects the program because `r3` is loaded from the map value:\n\n```asm\nr3 = *(u32*)(r0 + 0);\n```\n\nThat value is then used as a variable offset into the same map value:\n\n```asm\nr1 = r0;\nr1 += r3;\n...\ncall bpf_probe_read_kernel;\n```\n\nAt the helper call, `r1` is the destination pointer for `bpf_probe_read_kernel(dst, size, src)`. The verifier must prove that `dst` points to writable memory inside the map value for `size = 1`.\n\nThe map value size is 48 bytes:\n\n```c\nstruct value {\n\t__u32 offset;   /* 4 bytes */\n\t__u8 data[44];  /* 44 bytes */\n};\n```\n\nBut `offset` is an unconstrained `u32`, so the verifier sees it as possibly ranging from `0` to `0xffffffff`. Therefore `r0 + offset` may point outside the 48-byte map value.\n\nThe smallest fix is to add a bounds check proving that `offset + 1 <= 48`, i.e. `offset <= 47`, before adding it to the map-value pointer.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -24,6 +24,7 @@ __naked void entry(void)\n \tif r0 == 0 goto l0_%=;\t\t\t\t\\\n \tr1 = r0;\t\t\t\t\t\\\n \tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n+\tif r3 > 47 goto l0_%=;\t\t\t\t\\\n \tr1 += r3;\t\t\t\t\t\\\n \tr2 = 1;\t\t\t\t\t\t\\\n \tr3 = 0;\t\t\t\t\t\t\\\n```\n\nWith this check, the verifier can infer that `r3` is in the range `[0, 47]`, so `r1 = map_value + r3` is guaranteed to point inside the 48-byte map value, and a 1-byte write through `bpf_probe_read_kernel()` is safe.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-low/case-014-diagnostic.txt",
+    "case_id": "case-014",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-low",
+    "prompt_bytes": 4492,
+    "prompt_path": "public/case-014/prompt_diagnostic.md",
+    "prompt_sha256": "ac5a2ab54da5cf45e897928788b3ed66a0aaeb6499aac9a13e24b90fac12b24c",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-low/case-014-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "low"
+    },
+    "run_id": "508f8869-0e85-4147-9812-0be1fcceafb2",
+    "started_at": "2026-06-05T03:15:33+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.007365,
+    "output_cost_usd": 0.02559,
+    "total_cost_usd": 0.032955
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1473,
+    "output_tokens": 853,
+    "raw_usage": {
+      "input_tokens": 1473,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 853,
+      "output_tokens_details": {
+        "reasoning_tokens": 380
+      },
+      "total_tokens": 2326
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 380,
+    "total_tokens": 2326
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629354,
+    "created_at": 1780629333,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0740f5ce522b8e69006a223f5561b4819da9eb338eec762395",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0740f5ce522b8e69006a223f5633ac819d8f1dd2b765c018d4",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier rejects the program because `r3` is loaded from the map value:\n\n```asm\nr3 = *(u32*)(r0 + 0);\n```\n\nThat value is then used as a variable offset into the same map value:\n\n```asm\nr1 = r0;\nr1 += r3;\n...\ncall bpf_probe_read_kernel;\n```\n\nAt the helper call, `r1` is the destination pointer for `bpf_probe_read_kernel(dst, size, src)`. The verifier must prove that `dst` points to writable memory inside the map value for `size = 1`.\n\nThe map value size is 48 bytes:\n\n```c\nstruct value {\n\t__u32 offset;   /* 4 bytes */\n\t__u8 data[44];  /* 44 bytes */\n};\n```\n\nBut `offset` is an unconstrained `u32`, so the verifier sees it as possibly ranging from `0` to `0xffffffff`. Therefore `r0 + offset` may point outside the 48-byte map value.\n\nThe smallest fix is to add a bounds check proving that `offset + 1 <= 48`, i.e. `offset <= 47`, before adding it to the map-value pointer.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -24,6 +24,7 @@ __naked void entry(void)\n \tif r0 == 0 goto l0_%=;\t\t\t\t\\\n \tr1 = r0;\t\t\t\t\t\\\n \tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n+\tif r3 > 47 goto l0_%=;\t\t\t\t\\\n \tr1 += r3;\t\t\t\t\t\\\n \tr2 = 1;\t\t\t\t\t\t\\\n \tr3 = 0;\t\t\t\t\t\t\\\n```\n\nWith this check, the verifier can infer that `r3` is in the range `[0, 47]`, so `r1 = map_value + r3` is guaranteed to point inside the 48-byte map value, and a 1-byte write through `bpf_probe_read_kernel()` is safe.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0740f5ce522b8e69006a223f626380819d8d572447804efca5",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "low",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1473,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 853,
+      "output_tokens_details": {
+        "reasoning_tokens": 380
+      },
+      "total_tokens": 2326
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

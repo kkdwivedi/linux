@@ -1,0 +1,117 @@
+{
+  "answer_text": "The verifier failure occurs because the program accesses memory at an offset within a map value without bounds checking. The map value is a 48-byte struct (`struct value`), but the offset (`r3`) is loaded from the map and can be any 32-bit value (0-4294967295). When this offset is added to the base pointer (`r1`) and passed to `bpf_probe_read_kernel`, the verifier cannot guarantee the access stays within the 48-byte bounds.\n\n**Fix Explanation:**\nAdd a bounds check after loading the offset (`r3`) to ensure it's less than 48 (the struct size). If the offset is >= 48, jump to the existing exit label (`l0_%=`), skipping the unsafe access. This guarantees the pointer arithmetic stays within bounds.\n\n**Fixed Source:**\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nstruct value {\n\t__u32 offset;\n\t__u8 data[44];\n};\n\nstruct {\n\t__uint(type, BPF_MAP_TYPE_HASH);\n\t__uint(max_entries, 1);\n\t__type(key, __u64);\n\t__type(value, struct value);\n} map_a SEC(\".maps\");\n\nSEC(\"tracepoint\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tr2 = r10;\t\t\t\t\t\\\n\tr2 += -8;\t\t\t\t\t\\\n\tr1 = 0;\t\t\t\t\t\t\\\n\t*(u64*)(r2 + 0) = r1;\t\t\t\t\\\n\tr1 = %[map_a] ll;\t\t\t\t\\\n\tcall %[bpf_map_lookup_elem];\t\t\t\\\n\tif r0 == 0 goto l0_%=;\t\t\t\t\\\n\tr1 = r0;\t\t\t\t\t\\\n\tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n\tif r3 >= 48 goto l0_%=;\t\t\t\t\\  // Bounds check added\n\tr1 += r3;\t\t\t\t\t\\\n\tr2 = 1;\t\t\t\t\t\t\\\n\tr3 = 0;\t\t\t\t\t\t\\\n\tcall %[bpf_probe_read_kernel];\t\t\t\\\nl0_%=:\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_map_lookup_elem),\n\t  __imm(bpf_probe_read_kernel),\n\t  __imm_addr(map_a)\n\t: __clobber_all);\n}\n```\n\n**Key Changes:**\n1. Added `if r3 >= 48 goto l0_%=;` after loading `r3`.\n2. This ensures `r3` is in [0, 47] before pointer arithmetic.\n3. The access size (1 byte) + max offset (47) = 48, staying within bounds.\n4. Reuses the existing `l0_%=` label for clean error handling.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-r1-0528/case-014-diagnostic.txt",
+    "case_id": "case-014",
+    "model": "deepseek/deepseek-r1-0528",
+    "profile": "openrouter-deepseek-r1-0528",
+    "prompt_bytes": 4492,
+    "prompt_path": "public/case-014/prompt_diagnostic.md",
+    "prompt_sha256": "ac5a2ab54da5cf45e897928788b3ed66a0aaeb6499aac9a13e24b90fac12b24c",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-r1-0528/case-014-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "75a61d71-01a9-44e5-a66d-10792a4e915d",
+    "started_at": "2026-06-05T03:19:14+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000765,
+    "output_cost_usd": 0.00466765,
+    "total_cost_usd": 0.00543265
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1530,
+    "output_tokens": 2171,
+    "raw_usage": {
+      "completion_tokens": 2171,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 1567
+      },
+      "cost": 0.00549778,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.00473278,
+        "upstream_inference_cost": 0.00549778,
+        "upstream_inference_prompt_cost": 0.000765
+      },
+      "is_byok": false,
+      "prompt_tokens": 1530,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 3701
+    },
+    "reasoning_content_chars": 4977,
+    "reasoning_tokens": 1567,
+    "total_tokens": 3701
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "The verifier failure occurs because the program accesses memory at an offset within a map value without bounds checking. The map value is a 48-byte struct (`struct value`), but the offset (`r3`) is loaded from the map and can be any 32-bit value (0-4294967295). When this offset is added to the base pointer (`r1`) and passed to `bpf_probe_read_kernel`, the verifier cannot guarantee the access stays within the 48-byte bounds.\n\n**Fix Explanation:**\nAdd a bounds check after loading the offset (`r3`) to ensure it's less than 48 (the struct size). If the offset is >= 48, jump to the existing exit label (`l0_%=`), skipping the unsafe access. This guarantees the pointer arithmetic stays within bounds.\n\n**Fixed Source:**\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nstruct value {\n\t__u32 offset;\n\t__u8 data[44];\n};\n\nstruct {\n\t__uint(type, BPF_MAP_TYPE_HASH);\n\t__uint(max_entries, 1);\n\t__type(key, __u64);\n\t__type(value, struct value);\n} map_a SEC(\".maps\");\n\nSEC(\"tracepoint\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tr2 = r10;\t\t\t\t\t\\\n\tr2 += -8;\t\t\t\t\t\\\n\tr1 = 0;\t\t\t\t\t\t\\\n\t*(u64*)(r2 + 0) = r1;\t\t\t\t\\\n\tr1 = %[map_a] ll;\t\t\t\t\\\n\tcall %[bpf_map_lookup_elem];\t\t\t\\\n\tif r0 == 0 goto l0_%=;\t\t\t\t\\\n\tr1 = r0;\t\t\t\t\t\\\n\tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n\tif r3 >= 48 goto l0_%=;\t\t\t\t\\  // Bounds check added\n\tr1 += r3;\t\t\t\t\t\\\n\tr2 = 1;\t\t\t\t\t\t\\\n\tr3 = 0;\t\t\t\t\t\t\\\n\tcall %[bpf_probe_read_kernel];\t\t\t\\\nl0_%=:\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_map_lookup_elem),\n\t  __imm(bpf_probe_read_kernel),\n\t  __imm_addr(map_a)\n\t: __clobber_all);\n}\n```\n\n**Key Changes:**\n1. Added `if r3 >= 48 goto l0_%=;` after loading `r3`.\n2. This ensures `r3` is in [0, 47] before pointer arithmetic.\n3. The access size (1 byte) + max offset (47) = 48, staying within bounds.\n4. Reuses the existing `l0_%=` label for clean error handling.",
+          "reasoning": "We are given a BPF program that fails verification due to an unbounded memory access.\n\nThe issue is in the following part of the assembly:\n\n```\n\tr1 = r0;\t\t\t\t\t// r1 = pointer to map value (struct value)\n\tr3 = *(u32*)(r0 + 0);\t\t\t// r3 = value->offset (a 32-bit unsigned integer)\n\tr1 += r3;\t\t\t\t\t// r1 = r1 + r3 (so r1 points to value->data[0] + offset)\n\tr2 = 1;\t\t\t\t\t\t// r2 = 1 (size to read)\n\tr3 = 0;\t\t\t\t\t\t// r3 = 0 (flags for bpf_probe_read_kernel)\n\tcall %[bpf_probe_read_kernel];\t// bpf_probe_read_kernel(r1, 1, ...)\n```\n\nThe verifier log indicates:\n  R1 unbounded memory access, make sure to bounds check any such access\n\nSpecifically, the problem is that we are using `value->offset` (stored in r3) to compute a new pointer (r1 = r0 + r3) and then using that pointer to read 1 byte (via `bpf_probe_read_kernel`). The verifier cannot prove that the computed pointer (r1) is within the bounds of the map value.\n\nThe map value is of type `struct value` which has:\n  - `__u32 offset` (4 bytes)\n  - `__u8 data[44]` (44 bytes)\n\nSo the total size is 48 bytes.\n\nThe offset `r3` is read from the map value (at offset 0). Since it is a 32-bit value, it can be any value in [0, 4294967295]. The verifier sees that we are adding this arbitrary offset to the base pointer (r0) of the map value (which is 48 bytes long). Therefore, the pointer `r1` might point outside the map value.\n\nWe are only reading 1 byte (r2=1), so we need to ensure that:\n  r3 (the offset) + 1 <= 48\n\nBut currently, there is no check on the value of r3.\n\nThe verifier requires that we prove the access is safe.\n\nProposed fix:\nWe must add a bounds check on r3 (the offset) to ensure that the access (r3 + 1) is within the 48-byte struct.\n\nWe can do:\n  if r3 >= 48 goto exit   // because then r3+1 would be at least 49, which is beyond 48.\n\nBut note: the struct has 4 bytes for `offset` and then 44 bytes for `data`. The entire struct is 48 bytes.\n\nHowever, note that the offset we are reading is from the beginning of the struct. The pointer `r0` points to the beginning of the struct. We are reading the offset at `r0+0` (which is the first 4 bytes). Then we are adding that offset to `r0` to form a pointer that is `r0 + r3`.\n\nWe want to read 1 byte at `r0 + r3`. The safe condition is:\n  r3 must be in [0, 47]   (because 47+1=48, which is the last byte of the struct)\n\nBut note: the struct has the `offset` field at [0,3] and the `data` array at [4,47] (because 4+44=48). So if r3 is 0,1,2,3, then we are reading the `offset` field. If r3 is 4 to 47, we are reading the `data` array.\n\nHowever, the program does not care about which field we are reading. We just need to ensure that the read is within the 48 bytes.\n\nTherefore, we can add a check:\n\n  if r3 > 47 goto exit   // because then the read of 1 byte would be from [r3, r3] which must be <=47\n\nAlternatively, we can check:\n\n  if r3 >= 48 goto exit\n\nBut note: if r3 is 48, then the read would be at offset 48, which is one byte beyond the struct. So we must check that r3 < 48.\n\nWe can do:\n\n  if r3 >= 48 goto l0_%=\n\nBut note: we already have a label `l0_%=` that we jump to if the map lookup fails. We can reuse that label for the error case? However, note that the map lookup failure jumps to `l0_%=` and then exits. We want the same behavior: if the offset is out of bounds, we skip the read and exit.\n\nAlternatively, we can create a new label, but to keep the fix minimal, we can jump to the existing `l0_%=` label.\n\nSo the plan is:\n\nAfter loading r3 (the offset), we check if r3 is greater than or equal to 48. If so, we jump to `l0_%=` (the same label we use for the map lookup failure). Otherwise, we proceed.\n\nWe insert:\n\n  if r3 >= 48 goto l0_%=;\n\nafter the instruction that loads r3.\n\nSo the fixed assembly would be:\n\n```\n\tr2 = r10;\t\t\t\t\t\\\n\tr2 += -8;\t\t\t\t\t\\\n\tr1 = 0;\t\t\t\t\t\t\\\n\t*(u64*)(r2 + 0) = r1;\t\t\t\t\\\n\tr1 = %[map_a] ll;\t\t\t\t\\\n\tcall %[bpf_map_lookup_elem];\t\t\t\\\n\tif r0 == 0 goto l0_%=;\t\t\t\t\\\n\tr1 = r0;\t\t\t\t\t\\\n\tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n\t// Check bounds: if r3 >= 48, skip the read\n\tif r3 >= 48 goto l0_%=;\t\t\t\t\\\n\tr1 += r3;\t\t\t\t\t\\\n\tr2 = 1;\t\t\t\t\t\t\\\n\tr3 = 0;\t\t\t\t\t\t\\\n\tcall %[bpf_probe_read_kernel];\t\t\t\\\nl0_%=:\texit;\t\t\t\t\t\t\\\n```\n\nThis way, if the offset is out of bounds, we skip the probe read and exit.\n\nNow, the verifier will see that we only do the pointer arithmetic and the probe read if r3 is in [0,47]. Then, when we do `r1 += r3`, the verifier knows that r3 is at most 47, so the maximum offset is 47. Then we read 1 byte, so the access is from [r0+47] to [r0+47] (one byte). The total object is 48 bytes, so the access is within [0,47] (which is safe because 47+1=48, the end of the object).\n\nTherefore, the verifier should be satisfied.\n\nLet's write the fixed source code with the added instruction.\n\nNote: We must be cautious about the label. We are reusing `l0_%=` for two conditions: map lookup failure and offset out of bounds. That is acceptable because both lead to the same exit.\n\nWe add one line: `if r3 >= 48 goto l0_%=;`\n\nThe fixed source:\n",
+          "reasoning_details": [
+            {
+              "format": "unknown",
+              "index": 0,
+              "text": "We are given a BPF program that fails verification due to an unbounded memory access.\n\nThe issue is in the following part of the assembly:\n\n```\n\tr1 = r0;\t\t\t\t\t// r1 = pointer to map value (struct value)\n\tr3 = *(u32*)(r0 + 0);\t\t\t// r3 = value->offset (a 32-bit unsigned integer)\n\tr1 += r3;\t\t\t\t\t// r1 = r1 + r3 (so r1 points to value->data[0] + offset)\n\tr2 = 1;\t\t\t\t\t\t// r2 = 1 (size to read)\n\tr3 = 0;\t\t\t\t\t\t// r3 = 0 (flags for bpf_probe_read_kernel)\n\tcall %[bpf_probe_read_kernel];\t// bpf_probe_read_kernel(r1, 1, ...)\n```\n\nThe verifier log indicates:\n  R1 unbounded memory access, make sure to bounds check any such access\n\nSpecifically, the problem is that we are using `value->offset` (stored in r3) to compute a new pointer (r1 = r0 + r3) and then using that pointer to read 1 byte (via `bpf_probe_read_kernel`). The verifier cannot prove that the computed pointer (r1) is within the bounds of the map value.\n\nThe map value is of type `struct value` which has:\n  - `__u32 offset` (4 bytes)\n  - `__u8 data[44]` (44 bytes)\n\nSo the total size is 48 bytes.\n\nThe offset `r3` is read from the map value (at offset 0). Since it is a 32-bit value, it can be any value in [0, 4294967295]. The verifier sees that we are adding this arbitrary offset to the base pointer (r0) of the map value (which is 48 bytes long). Therefore, the pointer `r1` might point outside the map value.\n\nWe are only reading 1 byte (r2=1), so we need to ensure that:\n  r3 (the offset) + 1 <= 48\n\nBut currently, there is no check on the value of r3.\n\nThe verifier requires that we prove the access is safe.\n\nProposed fix:\nWe must add a bounds check on r3 (the offset) to ensure that the access (r3 + 1) is within the 48-byte struct.\n\nWe can do:\n  if r3 >= 48 goto exit   // because then r3+1 would be at least 49, which is beyond 48.\n\nBut note: the struct has 4 bytes for `offset` and then 44 bytes for `data`. The entire struct is 48 bytes.\n\nHowever, note that the offset we are reading is from the beginning of the struct. The pointer `r0` points to the beginning of the struct. We are reading the offset at `r0+0` (which is the first 4 bytes). Then we are adding that offset to `r0` to form a pointer that is `r0 + r3`.\n\nWe want to read 1 byte at `r0 + r3`. The safe condition is:\n  r3 must be in [0, 47]   (because 47+1=48, which is the last byte of the struct)\n\nBut note: the struct has the `offset` field at [0,3] and the `data` array at [4,47] (because 4+44=48). So if r3 is 0,1,2,3, then we are reading the `offset` field. If r3 is 4 to 47, we are reading the `data` array.\n\nHowever, the program does not care about which field we are reading. We just need to ensure that the read is within the 48 bytes.\n\nTherefore, we can add a check:\n\n  if r3 > 47 goto exit   // because then the read of 1 byte would be from [r3, r3] which must be <=47\n\nAlternatively, we can check:\n\n  if r3 >= 48 goto exit\n\nBut note: if r3 is 48, then the read would be at offset 48, which is one byte beyond the struct. So we must check that r3 < 48.\n\nWe can do:\n\n  if r3 >= 48 goto l0_%=\n\nBut note: we already have a label `l0_%=` that we jump to if the map lookup fails. We can reuse that label for the error case? However, note that the map lookup failure jumps to `l0_%=` and then exits. We want the same behavior: if the offset is out of bounds, we skip the read and exit.\n\nAlternatively, we can create a new label, but to keep the fix minimal, we can jump to the existing `l0_%=` label.\n\nSo the plan is:\n\nAfter loading r3 (the offset), we check if r3 is greater than or equal to 48. If so, we jump to `l0_%=` (the same label we use for the map lookup failure). Otherwise, we proceed.\n\nWe insert:\n\n  if r3 >= 48 goto l0_%=;\n\nafter the instruction that loads r3.\n\nSo the fixed assembly would be:\n\n```\n\tr2 = r10;\t\t\t\t\t\\\n\tr2 += -8;\t\t\t\t\t\\\n\tr1 = 0;\t\t\t\t\t\t\\\n\t*(u64*)(r2 + 0) = r1;\t\t\t\t\\\n\tr1 = %[map_a] ll;\t\t\t\t\\\n\tcall %[bpf_map_lookup_elem];\t\t\t\\\n\tif r0 == 0 goto l0_%=;\t\t\t\t\\\n\tr1 = r0;\t\t\t\t\t\\\n\tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n\t// Check bounds: if r3 >= 48, skip the read\n\tif r3 >= 48 goto l0_%=;\t\t\t\t\\\n\tr1 += r3;\t\t\t\t\t\\\n\tr2 = 1;\t\t\t\t\t\t\\\n\tr3 = 0;\t\t\t\t\t\t\\\n\tcall %[bpf_probe_read_kernel];\t\t\t\\\nl0_%=:\texit;\t\t\t\t\t\t\\\n```\n\nThis way, if the offset is out of bounds, we skip the probe read and exit.\n\nNow, the verifier will see that we only do the pointer arithmetic and the probe read if r3 is in [0,47]. Then, when we do `r1 += r3`, the verifier knows that r3 is at most 47, so the maximum offset is 47. Then we read 1 byte, so the access is from [r0+47] to [r0+47] (one byte). The total object is 48 bytes, so the access is within [0,47] (which is safe because 47+1=48, the end of the object).\n\nTherefore, the verifier should be satisfied.\n\nLet's write the fixed source code with the added instruction.\n\nNote: We must be cautious about the label. We are reusing `l0_%=` for two conditions: map lookup failure and offset out of bounds. That is acceptable because both lead to the same exit.\n\nWe add one line: `if r3 >= 48 goto l0_%=;`\n\nThe fixed source:\n",
+              "type": "reasoning.text"
+            }
+          ],
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "stop"
+      }
+    ],
+    "created": 1780629555,
+    "id": "gen-1780629555-gEqDOxjz5RRfGCNDEuV5",
+    "model": "deepseek/deepseek-r1-0528",
+    "object": "chat.completion",
+    "provider": "SiliconFlow",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 2171,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 1567
+      },
+      "cost": 0.00549778,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.00473278,
+        "upstream_inference_cost": 0.00549778,
+        "upstream_inference_prompt_cost": 0.000765
+      },
+      "is_byok": false,
+      "prompt_tokens": 1530,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 3701
+    }
+  },
+  "reasoning_content": "We are given a BPF program that fails verification due to an unbounded memory access.\n\nThe issue is in the following part of the assembly:\n\n```\n\tr1 = r0;\t\t\t\t\t// r1 = pointer to map value (struct value)\n\tr3 = *(u32*)(r0 + 0);\t\t\t// r3 = value->offset (a 32-bit unsigned integer)\n\tr1 += r3;\t\t\t\t\t// r1 = r1 + r3 (so r1 points to value->data[0] + offset)\n\tr2 = 1;\t\t\t\t\t\t// r2 = 1 (size to read)\n\tr3 = 0;\t\t\t\t\t\t// r3 = 0 (flags for bpf_probe_read_kernel)\n\tcall %[bpf_probe_read_kernel];\t// bpf_probe_read_kernel(r1, 1, ...)\n```\n\nThe verifier log indicates:\n  R1 unbounded memory access, make sure to bounds check any such access\n\nSpecifically, the problem is that we are using `value->offset` (stored in r3) to compute a new pointer (r1 = r0 + r3) and then using that pointer to read 1 byte (via `bpf_probe_read_kernel`). The verifier cannot prove that the computed pointer (r1) is within the bounds of the map value.\n\nThe map value is of type `struct value` which has:\n  - `__u32 offset` (4 bytes)\n  - `__u8 data[44]` (44 bytes)\n\nSo the total size is 48 bytes.\n\nThe offset `r3` is read from the map value (at offset 0). Since it is a 32-bit value, it can be any value in [0, 4294967295]. The verifier sees that we are adding this arbitrary offset to the base pointer (r0) of the map value (which is 48 bytes long). Therefore, the pointer `r1` might point outside the map value.\n\nWe are only reading 1 byte (r2=1), so we need to ensure that:\n  r3 (the offset) + 1 <= 48\n\nBut currently, there is no check on the value of r3.\n\nThe verifier requires that we prove the access is safe.\n\nProposed fix:\nWe must add a bounds check on r3 (the offset) to ensure that the access (r3 + 1) is within the 48-byte struct.\n\nWe can do:\n  if r3 >= 48 goto exit   // because then r3+1 would be at least 49, which is beyond 48.\n\nBut note: the struct has 4 bytes for `offset` and then 44 bytes for `data`. The entire struct is 48 bytes.\n\nHowever, note that the offset we are reading is from the beginning of the struct. The pointer `r0` points to the beginning of the struct. We are reading the offset at `r0+0` (which is the first 4 bytes). Then we are adding that offset to `r0` to form a pointer that is `r0 + r3`.\n\nWe want to read 1 byte at `r0 + r3`. The safe condition is:\n  r3 must be in [0, 47]   (because 47+1=48, which is the last byte of the struct)\n\nBut note: the struct has the `offset` field at [0,3] and the `data` array at [4,47] (because 4+44=48). So if r3 is 0,1,2,3, then we are reading the `offset` field. If r3 is 4 to 47, we are reading the `data` array.\n\nHowever, the program does not care about which field we are reading. We just need to ensure that the read is within the 48 bytes.\n\nTherefore, we can add a check:\n\n  if r3 > 47 goto exit   // because then the read of 1 byte would be from [r3, r3] which must be <=47\n\nAlternatively, we can check:\n\n  if r3 >= 48 goto exit\n\nBut note: if r3 is 48, then the read would be at offset 48, which is one byte beyond the struct. So we must check that r3 < 48.\n\nWe can do:\n\n  if r3 >= 48 goto l0_%=\n\nBut note: we already have a label `l0_%=` that we jump to if the map lookup fails. We can reuse that label for the error case? However, note that the map lookup failure jumps to `l0_%=` and then exits. We want the same behavior: if the offset is out of bounds, we skip the read and exit.\n\nAlternatively, we can create a new label, but to keep the fix minimal, we can jump to the existing `l0_%=` label.\n\nSo the plan is:\n\nAfter loading r3 (the offset), we check if r3 is greater than or equal to 48. If so, we jump to `l0_%=` (the same label we use for the map lookup failure). Otherwise, we proceed.\n\nWe insert:\n\n  if r3 >= 48 goto l0_%=;\n\nafter the instruction that loads r3.\n\nSo the fixed assembly would be:\n\n```\n\tr2 = r10;\t\t\t\t\t\\\n\tr2 += -8;\t\t\t\t\t\\\n\tr1 = 0;\t\t\t\t\t\t\\\n\t*(u64*)(r2 + 0) = r1;\t\t\t\t\\\n\tr1 = %[map_a] ll;\t\t\t\t\\\n\tcall %[bpf_map_lookup_elem];\t\t\t\\\n\tif r0 == 0 goto l0_%=;\t\t\t\t\\\n\tr1 = r0;\t\t\t\t\t\\\n\tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n\t// Check bounds: if r3 >= 48, skip the read\n\tif r3 >= 48 goto l0_%=;\t\t\t\t\\\n\tr1 += r3;\t\t\t\t\t\\\n\tr2 = 1;\t\t\t\t\t\t\\\n\tr3 = 0;\t\t\t\t\t\t\\\n\tcall %[bpf_probe_read_kernel];\t\t\t\\\nl0_%=:\texit;\t\t\t\t\t\t\\\n```\n\nThis way, if the offset is out of bounds, we skip the probe read and exit.\n\nNow, the verifier will see that we only do the pointer arithmetic and the probe read if r3 is in [0,47]. Then, when we do `r1 += r3`, the verifier knows that r3 is at most 47, so the maximum offset is 47. Then we read 1 byte, so the access is from [r0+47] to [r0+47] (one byte). The total object is 48 bytes, so the access is within [0,47] (which is safe because 47+1=48, the end of the object).\n\nTherefore, the verifier should be satisfied.\n\nLet's write the fixed source code with the added instruction.\n\nNote: We must be cautious about the label. We are reusing `l0_%=` for two conditions: map lookup failure and offset out of bounds. That is acceptable because both lead to the same exit.\n\nWe add one line: `if r3 >= 48 goto l0_%=;`\n\nThe fixed source:\n"
+}

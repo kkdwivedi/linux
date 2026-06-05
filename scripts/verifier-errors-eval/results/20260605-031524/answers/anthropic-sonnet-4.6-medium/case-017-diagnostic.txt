@@ -1,0 +1,6 @@
+The verifier requires IRQ flags to be restored in LIFO order. The code saves flags1 then flags2, but restores flags1 before flags2. Fix by swapping the restore order:
+
+```c
+	bpf_local_irq_restore(&flags2);
+	bpf_local_irq_restore(&flags1);
+```

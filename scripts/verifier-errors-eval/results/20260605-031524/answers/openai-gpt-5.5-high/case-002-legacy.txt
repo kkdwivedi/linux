@@ -1,0 +1,63 @@
+The verifier failure is a reference leak.
+
+`bpf_cpumask_create()` returns a refcounted `struct bpf_cpumask *`:
+
+```text
+0: call bpf_cpumask_create ... R0=trusted_ptr_or_null_bpf_cpumask(id=2) refs=2
+```
+
+`make_object()` correctly releases the object on the failure path where the mask is unexpectedly non-empty:
+
+```c
+if (!bpf_cpumask_empty(cast(cpumask))) {
+	bpf_cpumask_release(cpumask);
+	return NULL;
+}
+```
+
+But on the success path it returns the owning reference to `entry()`:
+
+```c
+return cpumask;
+```
+
+Then `entry()` only does:
+
+```c
+cpumask = make_object();
+__sink(cpumask);
+return 0;
+```
+
+`__sink(cpumask)` does not release or transfer ownership. In the verifier log it only becomes a stack spill:
+
+```text
+19: *(u64 *)(r10 -8) = r6
+20: w0 = 0
+21: exit
+Unreleased reference id=2 alloc_insn=0
+```
+
+So the verifier rejects the program because the reference created by `bpf_cpumask_create()` can reach program exit without a matching `bpf_cpumask_release()`.
+
+Smallest likely fix: release the returned cpumask in `entry()` when it is non-NULL.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -33,6 +33,8 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ 
+ 	cpumask = make_object();
+ 	__sink(cpumask);
++	if (cpumask)
++		bpf_cpumask_release(cpumask);
+ 
+ 	return 0;
+ }
+```
+
+The null check is needed because `make_object()` may return `NULL`, and `bpf_cpumask_release()` expects a valid owned `struct bpf_cpumask *`. This should satisfy the verifier because every path that obtains reference id `2` will now release it before exit.

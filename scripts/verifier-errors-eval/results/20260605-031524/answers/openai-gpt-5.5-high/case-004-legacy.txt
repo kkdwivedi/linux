@@ -1,0 +1,52 @@
+The verifier is rejecting `helper_a()` because it is being verified as a global BPF subprogram, independently of the only visible caller.
+
+At the start of `helper_a()` the verifier has:
+
+```text
+R1=mem_or_null(id=1,sz=4)
+```
+
+So the argument `s` is known to be either a valid 4-byte memory region or `NULL`. The program then does:
+
+```text
+10: (61) r2 = *(u32 *)(r6 +0)
+```
+
+which is `s->x`. Since there was no prior NULL check, `r6` is still `mem_or_null`, and the verifier rejects the dereference:
+
+```text
+R6 invalid mem access 'mem_or_null'
+```
+
+### Smallest direct verifier fix
+
+Add an explicit NULL check before dereferencing `s`:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -9,6 +9,9 @@ struct Item {
+ 
+ __noinline int helper_a(const struct Item *s)
+ {
++	if (!s)
++		return 0;
++
+ 	return bpf_get_prandom_u32() < s->x;
+ }
+```
+
+After the `if (!s)` check, the verifier can refine the non-NULL branch from `mem_or_null` to `mem`, so the load of `s->x` at offset `0` within the known 4-byte object should be accepted.
+
+### Even smaller alternative if global linkage is not needed
+
+Since `helper_a()` is only called from this file, another likely-valid one-token fix is:
+
+```diff
+-__noinline int helper_a(const struct Item *s)
++static __noinline int helper_a(const struct Item *s)
+```
+
+That makes it a static subprogram, allowing the verifier to use the actual call-site state, where `&s` is a non-NULL stack pointer. But if the function is intentionally global, prefer the explicit NULL check.

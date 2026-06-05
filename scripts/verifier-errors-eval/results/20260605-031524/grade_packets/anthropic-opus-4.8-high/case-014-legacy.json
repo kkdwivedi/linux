@@ -1,0 +1,68 @@
+{
+  "acceptable_fixes": [
+    "Check if (offset > 47) exit before using it for a 1-byte access to a 48-byte object.",
+    "Check if (offset + 1 > sizeof(struct value)) exit in a verifier-friendly way that avoids overflow.",
+    "Mask or clamp the offset so the verifier can prove the adjusted pointer remains within the map value."
+  ],
+  "canonical_fix": "Add an upper-bound check on the loaded offset before adding it to the map-value pointer, proving offset + access size <= object size.",
+  "case_id": "case-014",
+  "category": "Memory Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program loads a variable offset from the map value and adds it to the map-value pointer before a helper reads one byte. The verifier knows the offset is non-negative but has no safe upper bound, so it cannot prove offset + size stays within the 48-byte map value.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-014-legacy.txt",
+    "case_id": "case-014",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 2516,
+    "prompt_path": "public/case-014/prompt_legacy.md",
+    "prompt_sha256": "5f09191198944721d81d22840eb8d1d26f07b6ac8add806cab2dfef9c5fd1103",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-014-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "40a144bc-e74e-48bf-ba33-e2d5e39c26e3",
+    "started_at": "2026-06-05T03:17:40+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## What the verifier is complaining about\n\nAt instruction 9 the program loads the `offset` field out of the map value into `r3`:\n\n```\n9: (61) r3 = *(u32 *)(r0 +0)   ; R3=scalar(... umax=0xffffffff ...)\n```\n\nSince this value came from map memory, the verifier only knows it is some\n`u32`, i.e. an **unbounded scalar** in `[0, 0xffffffff]`.\n\nThen:\n\n```\n10: (0f) r1 += r3              ; R1=map_value(...,var_off=(0x0; 0xffffffff))\n...\n13: (85) call bpf_probe_read_kernel#113\nR1 unbounded memory access, make sure to bounds check any such access\n```\n\n`r1` is now a *map_value pointer with an unbounded variable offset*. When it is\npassed as the destination buffer (`ARG_PTR_TO_MEM`) to `bpf_probe_read_kernel`,\nthe verifier cannot prove that the write stays inside the 48\u2011byte map value, so\nit rejects the program with \u201cunbounded memory access\u201d.\n\nThe root cause is simply that the variable offset taken from the map is never\nbounds-checked before being used as a pointer offset.\n\n## Smallest fix\n\nConstrain `r3` to a range that keeps `r1` (and the 1\u2011byte write) inside the\n48\u2011byte value before adding it to the pointer. A single masking instruction is\nenough:\n\n```c\n\tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n\tr3 &= 0x1f;\t/* bound offset to [0,31] */\t\\\n\tr1 += r3;\t\t\t\t\t\\\n```\n\nWith `r3 &= 0x1f`, the verifier knows `0 <= r3 <= 31`, so `r1` becomes a\nmap_value pointer with offset in `[0,31]`. A 1\u2011byte access (`r2 = 1`) then has a\nmaximum reach of offset 32, well within the value size `vs=48`, and the access\nis provably in-bounds.\n\nEquivalently, an explicit compare-and-branch would also work:\n\n```c\n\tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n\tif r3 > 44 goto l0_%=;\t\t\t\t\\\n\tr1 += r3;\t\t\t\t\t\\\n```\n\nEither edit gives the verifier the bound it needs; the mask is the minimal,\nsingle-instruction change.\n\n## Why this satisfies the verifier\n\nThe error is specifically about an *unbounded* variable offset on a pointer used\nin a memory-access helper argument. Once `r3` has a known finite range, the\nresulting pointer `r1` has a bounded `var_off`, and the verifier can verify that\n`offset + access_size <= map_value_size`, clearing the\n\u201cR1 unbounded memory access\u201d rejection.",
+  "must_mention": [
+    "The offset is variable and lacks an upper bound",
+    "The object/map value size is finite",
+    "The proof needed is offset plus access size within bounds"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks that map_lookup_elem returned non-NULL",
+    "Adds a lower-bound check only",
+    "Checks after the helper access"
+  ]
+}

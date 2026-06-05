@@ -1,0 +1,42 @@
+The verifier is rejecting this due to **BPF-to-BPF call stack depth**, not per-function stack.
+
+### Why it fails
+
+`helper_c()` and `helper_b()` both allocate:
+
+```c
+volatile char buf[MAX_STACK] = {};
+```
+
+with `MAX_STACK = 260`.
+
+In BPF, each function’s frame gets aligned/expanded, so this becomes roughly **272 bytes per frame**.  
+On the chain:
+
+- `entry` → `helper_c` (≈272)
+- `helper_c` → `helper_b` (≈272)
+
+combined depth is ≈ **544 bytes**, which matches the log:
+
+> combined stack size of 3 calls is 544. Too large
+
+Verifier limit is **512 bytes total across nested calls**, so it fails.
+
+---
+
+### Smallest likely fix
+
+Reduce stack allocation so two nested frames stay ≤ 512.  
+A one-line safe change is lowering `MAX_STACK` from `260` to `240`.
+
+#### Patch
+
+```diff
+--- a/case.c
++++ b/case.c
+@@
+-#define MAX_STACK 260
++#define MAX_STACK 240
+```
+
+This should bring each frame down enough that `helper_c + helper_b` (and `helper_c + helper_d`) no longer exceed the 512-byte combined limit.

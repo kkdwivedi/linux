@@ -1,0 +1,79 @@
+The verifier failure is due to lock release order.
+
+The program acquires locks in this order:
+
+```c
+bpf_res_spin_lock(&lock_a);
+bpf_res_spin_lock(&lock_b);
+```
+
+That means `lock_b` is nested inside `lock_a`. The verifier requires nested resource locks to be released in strict LIFO order:
+
+```text
+acquire A
+acquire B
+release B
+release A
+```
+
+But the current success path does:
+
+```c
+bpf_res_spin_unlock(&lock_a);
+bpf_res_spin_unlock(&lock_b);
+```
+
+That releases `lock_a` while `lock_b` is still active, so the verifier reports:
+
+```text
+bpf_res_spin_unlock cannot be out of order
+Verification failed: Resource Lifetime Safety: Unlock out of order
+```
+
+The failure path where locking `lock_b` fails is fine, because only `lock_a` is held there, so unlocking `lock_a` is correct.
+
+The smallest source-level fix is to swap the two unlock calls on the success path.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -12,7 +12,7 @@ int entry(struct __sk_buff *ctx)
+ 		bpf_res_spin_unlock(&lock_a);
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+ 	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+Fixed program:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+struct bpf_res_spin_lock lock_a __hidden SEC(".data.A");
+struct bpf_res_spin_lock lock_b __hidden SEC(".data.B");
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```
+
+This satisfies the verifier because every path releases only currently-held locks, and the nested successful acquisition path now releases them in reverse acquisition order.

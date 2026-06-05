@@ -1,0 +1,18 @@
+The verifier failure occurs because the `bpf_dynptr_slice` call attempts to access 9 bytes of stack memory from `buffer`, which is only 8 bytes long. This violates the verifier's memory safety checks, as the requested access exceeds the buffer's bounds.
+
+The fix is to correct the size argument in `bpf_dynptr_slice` to match the actual buffer size (8 bytes). Using `sizeof(buffer)` ensures consistency if the buffer declaration changes later.
+
+Patch:
+```diff
+--- a.c
++++ b.c
+@@ -12,7 +12,7 @@
+ 	if (bpf_dynptr_from_skb(skb, 0, &ptr))
+ 		return 1;
+ 
+-	data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
++	data = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+ 
+ 	return !!data;
+ }
+```

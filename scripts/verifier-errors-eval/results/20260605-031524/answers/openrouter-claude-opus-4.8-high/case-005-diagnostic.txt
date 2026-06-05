@@ -1,0 +1,32 @@
+## Explanation
+
+`bpf_copy_from_user()` is a **sleepable** helper — it may fault in user pages and therefore may sleep. `bpf_preempt_disable()` opens a **non-preemptible** critical section. Calling anything that can sleep while preemption is disabled is illegal, so the verifier rejects the call:
+
+```
+sleepable helper bpf_copy_from_user#148 in non-preemptible region
+```
+
+The verifier is correct: the program disables preemption (depth 1), then issues a sleepable call before re-enabling preemption.
+
+## Fix
+
+Move the sleepable helper out of the preempt-disabled region. The smallest change is to perform `bpf_copy_from_user()` before `bpf_preempt_disable()` (or after `bpf_preempt_enable()`), leaving the critical section empty / containing only non-sleepable work.
+
+```c
+SEC("?fentry.s/sys_getpgid")
+int entry(void *ctx)
+{
+	u32 data;
+
+	bpf_copy_from_user(&data, sizeof(data), NULL);
+
+	bpf_preempt_disable();
+	/* only non-sleepable operations allowed here */
+	bpf_preempt_enable();
+	return 0;
+}
+```
+
+This satisfies the verifier because no sleepable helper is invoked while preemption is disabled; the preempt-disable/enable pair now brackets only safe, non-sleepable code.
+
+(If the intent of the test is specifically to keep the copy inside the section, the alternative is to replace it with a non-sleepable equivalent such as `bpf_probe_read_user()`, but that changes semantics; moving the call out is the minimal source edit.)

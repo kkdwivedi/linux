@@ -1,0 +1,31 @@
+## Explanation
+
+`helper_c` takes a `struct __sk_buff *` and dereferences it (`skb->ifindex`). Because `helper_c` is a *global* function (it's referenced before definition via the prototype and treated as a separately-verified global subprogram), the verifier checks it independently and assumes its `skb` argument is a valid, **original** context pointer.
+
+In `helper_b` you call it as:
+
+```c
+helper_c(val, skb + 1);
+```
+
+`skb + 1` advances the pointer by `sizeof(struct __sk_buff)` (192 bytes), producing a context pointer with `off=192`. When `helper_c` later does `skb->ifindex`, the verifier rejects it:
+
+```
+dereference of modified ctx ptr R2 off=192 disallowed
+```
+
+A context (`ctx`) pointer must be dereferenced in its original, unmodified form — you cannot pass an offset ctx pointer into a function that dereferences it.
+
+## Fix
+
+Pass the unmodified `skb` pointer instead of `skb + 1`:
+
+```c
+__attribute__((noinline))
+int helper_b(int val, struct __sk_buff *skb)
+{
+	return helper_a(skb) + helper_c(val, skb);
+}
+```
+
+The `+ 1` was the only thing creating the illegal offset; removing it makes `helper_c` receive the original ctx pointer, satisfying the verifier's requirement that ctx be dereferenced in its original form.

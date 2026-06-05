@@ -1,0 +1,47 @@
+The verifier failure is at:
+
+```c
+acquired = bpf_task_acquire(value->task);
+```
+
+`value` is a map value, and `value->task` is a kptr stored in the map. When the verifier loads it, it gets:
+
+```text
+R1=rcu_ptr_or_null_task_struct
+```
+
+So the pointer may be `NULL`. But `bpf_task_acquire()` requires a non-NULL `struct task_struct *` argument. The verifier does not infer that `value->task` must be non-NULL just because `helper_a()` inserted/acquired one earlier; map contents can be NULL or changed, and a kptr load from a map is treated as nullable.
+
+The smallest safe fix is to load `value->task` into a temporary, check it for NULL, and only then call `bpf_task_acquire()` on the checked pointer. Use a temporary so the verifier sees the same register being NULL-checked and passed to the kfunc.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..1111111 100644
+--- a/case.c
++++ b/case.c
+@@ -66,7 +66,7 @@ static struct map_value *helper_a(struct task_struct *task)
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct task_struct *acquired;
++	struct task_struct *acquired, *stored;
+ 	struct map_value *value;
+ 
+ 	value = helper_a(task);
+@@ -74,7 +74,11 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ 		return 0;
+ 
+-	acquired = bpf_task_acquire(value->task);
++	stored = value->task;
++	if (!stored)
++		return 0;
++
++	acquired = bpf_task_acquire(stored);
+ 	if (!acquired)
+ 		return 0;
+ 
+```
+
+After this change, the verifier should refine `stored` from `rcu_ptr_or_null_task_struct` to non-NULL `rcu_ptr_task_struct` on the fallthrough path, satisfying the argument requirements for `bpf_task_acquire()`.

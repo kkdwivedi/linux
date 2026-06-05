@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Check if (offset > 47) exit before using it for a 1-byte access to a 48-byte object.",
+    "Check if (offset + 1 > sizeof(struct value)) exit in a verifier-friendly way that avoids overflow.",
+    "Mask or clamp the offset so the verifier can prove the adjusted pointer remains within the map value."
+  ],
+  "canonical_fix": "Add an upper-bound check on the loaded offset before adding it to the map-value pointer, proving offset + access size <= object size.",
+  "case_id": "case-014",
+  "category": "Memory Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program loads a variable offset from the map value and adds it to the map-value pointer before a helper reads one byte. The verifier knows the offset is non-negative but has no safe upper bound, so it cannot prove offset + size stays within the 48-byte map value.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-014-legacy.txt",
+    "case_id": "case-014",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 2516,
+    "prompt_path": "public/case-014/prompt_legacy.md",
+    "prompt_sha256": "5f09191198944721d81d22840eb8d1d26f07b6ac8add806cab2dfef9c5fd1103",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-014-legacy.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "13fb497b-fd2b-4cc6-be4d-56dc384cbbcf",
+    "started_at": "2026-06-05T04:22:44+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Verifier Failure Analysis\n\nThe verifier rejects this program because at instruction 13 (the `bpf_probe_read_kernel` call), **register R1 is unbounded**. Here's why:\n\n1. At instruction 9, `r3` is loaded from offset 0 of the map value: `r3 = *(u32 *)(r0 + 0)`\n   - This gives `r3` a range of `[0, 0xffffffff]` (any 32-bit unsigned value)\n\n2. At instruction 10, `r1 += r3` adds this unbounded value to the map_value pointer\n   - `r1` becomes `map_value + (0 to 0xffffffff)`, which could point anywhere in memory\n\n3. At instruction 13, `bpf_probe_read_kernel(r1, r2, r3)` is called with this unbounded pointer\n   - The verifier cannot allow unbounded memory access because it could read outside the allocated map value\n\nThe `offset` field (which is the `__u32` at offset 0) needs to be bounds-checked before being used as an offset into the map value.\n\n## Root Cause\n\nThe map value structure is 48 bytes (4-byte offset + 44-byte data array). The `offset` field is read but never validated to ensure that `r0 + offset` stays within bounds `[r0, r0 + 48)`.\n\n## Fix\n\nBounds-check the offset before adding it to `r1`. The offset must not exceed the remaining size of the map value (48 bytes):\n\n```c\nSEC(\"tracepoint\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tr2 = r10;\t\t\t\t\t\\\n\tr2 += -8;\t\t\t\t\t\\\n\tr1 = 0;\t\t\t\t\t\t\\\n\t*(u64*)(r2 + 0) = r1;\t\t\t\t\\\n\tr1 = %[map_a] ll;\t\t\t\t\\\n\tcall %[bpf_map_lookup_elem];\t\t\t\\\n\tif r0 == 0 goto l0_%=;\t\t\t\t\\\n\tr1 = r0;\t\t\t\t\t\\\n\tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n\tif r3 > 48 goto l0_%=;\t\t\t\t\\\n\tr1 += r3;\t\t\t\t\t\\\n\tr2 = 1;\t\t\t\t\t\t\\\n\tr3 = 0;\t\t\t\t\t\t\\\n\tcall %[bpf_probe_read_kernel];\t\t\t\\\nl0_%=:\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_map_lookup_elem),\n\t  __imm(bpf_probe_read_kernel),\n\t  __imm_addr(map_a)\n\t: __clobber_all);\n}\n```\n\n**Change:** Add the line `if r3 > 48 goto l0_%=;` after loading `r3` and before the addition. This bounds-checks the offset, ensuring `r1 + r3` cannot exceed the map value bounds. The verifier will then recognize that the pointer passed to `bpf_probe_read_kernel` is properly bounded.",
+  "must_mention": [
+    "The offset is variable and lacks an upper bound",
+    "The object/map value size is finite",
+    "The proof needed is offset plus access size within bounds"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks that map_lookup_elem returned non-NULL",
+    "Adds a lower-bound check only",
+    "Checks after the helper access"
+  ]
+}

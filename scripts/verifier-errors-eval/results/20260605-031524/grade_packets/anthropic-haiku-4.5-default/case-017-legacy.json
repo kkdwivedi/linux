@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Swap the two bpf_local_irq_restore calls.",
+    "Avoid nesting IRQ saves, if only one IRQ-disabled region is needed."
+  ],
+  "canonical_fix": "Restore flags2 first, then restore flags1.",
+  "case_id": "case-017",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program saves two nested IRQ flag states, then restores flags1 before flags2. IRQ-disabled regions must be restored in last-in, first-out order with the matching saved flag variable.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-017-legacy.txt",
+    "case_id": "case-017",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 1745,
+    "prompt_path": "public/case-017/prompt_legacy.md",
+    "prompt_sha256": "7fc465b0f01c16b7f076395e6776f54156c97eb932b04d9dd1f878444e3ec702",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-017-legacy.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "e202188d-37b0-4fd4-ad20-a5954a06790d",
+    "started_at": "2026-06-05T04:23:01+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Explanation of the Verifier Failure\n\nThe BPF verifier is enforcing a stack discipline for IRQ state management. When you call `bpf_local_irq_save()`, it tracks the acquisition of an IRQ state with an ID. The verifier requires that `bpf_local_irq_restore()` calls must restore states in **LIFO (Last-In-First-Out) order** \u2014 the reverse order in which they were acquired.\n\nIn this code:\n1. Line 246: `bpf_local_irq_save(&flags1)` acquires state with ID=1\n2. Line 247: `bpf_local_irq_save(&flags2)` acquires state with ID=2\n3. Line 248: `bpf_local_irq_restore(&flags1)` tries to restore ID=1\n\nThe problem: You're trying to restore ID=1 (the older one) while ID=2 (the newer one) is still active. This violates the LIFO requirement. The verifier expects you to restore ID=2 first (the most recently acquired state).\n\n## Fix\n\nSwap the order of the two `bpf_local_irq_restore()` calls to restore in reverse acquisition order:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);  // Restore in reverse order\n\tbpf_local_irq_restore(&flags1);\n\treturn 0;\n}\n```\n\nThis ensures that `flags2` (acquired last at insn_idx=7, ID=2) is restored first, and then `flags1` (acquired first at insn_idx=3, ID=1) is restored second, satisfying the LIFO discipline that the verifier enforces.",
+  "must_mention": [
+    "IRQ flags are nested",
+    "Restore order must be LIFO",
+    "flags2 is the currently active/latest save"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Restores flags1 twice",
+    "Deletes the second restore and leaves IRQ state active",
+    "Treats this as a spin-lock unlock order failure instead of IRQ flag restore order"
+  ]
+}

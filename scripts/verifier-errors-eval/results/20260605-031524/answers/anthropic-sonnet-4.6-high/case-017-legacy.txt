@@ -1,0 +1,33 @@
+## Explanation
+
+The BPF verifier enforces that `bpf_local_irq_save`/`bpf_local_irq_restore` pairs must follow **LIFO (stack) order** — the most recently saved IRQ state must be restored first.
+
+The program does:
+1. `bpf_local_irq_save(&flags1)` → acquires ref id=1
+2. `bpf_local_irq_save(&flags2)` → acquires ref id=2
+3. `bpf_local_irq_restore(&flags1)` → tries to release id=1, but verifier expects id=2 (the most recent)
+
+The verifier rejects this because restoring `flags1` before `flags2` violates the required nesting order.
+
+## Fix
+
+Swap the two `bpf_local_irq_restore` calls so they unwind in LIFO order:
+
+```c
+-	bpf_local_irq_restore(&flags1);
+-	bpf_local_irq_restore(&flags2);
++	bpf_local_irq_restore(&flags2);
++	bpf_local_irq_restore(&flags1);
+```
+
+The corrected function body:
+
+```c
+	bpf_local_irq_save(&flags1);
+	bpf_local_irq_save(&flags2);
+	bpf_local_irq_restore(&flags2);   // restore last-saved first
+	bpf_local_irq_restore(&flags1);   // then restore first-saved
+	return 0;
+```
+
+This matches the verifier's expectation: after both saves, ref id=2 is on top of the "stack" and must be released before id=1.

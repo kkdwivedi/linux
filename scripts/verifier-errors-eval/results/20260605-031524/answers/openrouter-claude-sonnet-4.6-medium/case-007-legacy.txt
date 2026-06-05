@@ -1,0 +1,28 @@
+## Explanation
+
+The verifier rejects the program at instruction 16 because `slice_len` is a **global variable** (`__u32 slice_len`). When the verifier loads it from the map-value (`.data` section) into `R4`, it only knows it is a 32-bit scalar in the range `[0, 0xffffffff]` — completely unbounded. The `bpf_dynptr_slice` helper requires the `len` argument to be provably bounded so the verifier can confirm the supplied buffer is large enough. Since `slice_len` has no established upper bound at the call site, the verifier rejects it:
+
+```
+R4 unbounded memory access, use 'var &= const' or 'if (var < const)'
+R3 and R4 memory, len pair leads to invalid memory access
+```
+
+## Fix
+
+The simplest fix is to replace the variable `slice_len` with the compile-time constant `sizeof(*hdr)` (which equals `sizeof(struct ethhdr)`) directly in the call. This makes `R4` a known constant that the verifier can check against the buffer size.
+
+```diff
+-	hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
++	hdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(*hdr));
+```
+
+If the intent is to keep `slice_len` as a runtime value, adding a bounds check before the call would also work:
+
+```c
+__u32 len = slice_len;
+if (len > sizeof(buffer))
+    return SK_DROP;
+hdr = bpf_dynptr_slice(&ptr, 0, buffer, len);
+```
+
+But the minimal change is simply to use `sizeof(*hdr)` as the length argument, since the buffer is already declared with exactly that size.

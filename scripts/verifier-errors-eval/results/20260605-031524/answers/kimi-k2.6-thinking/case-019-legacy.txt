@@ -1,0 +1,46 @@
+**Explanation**
+
+The BPF verifier rejects programs that contain recursive calls between subprograms.  
+`helper_a()` calls itself, forming a cycle in the call graph, so the verifier aborts
+immediately with:
+
+```
+recursive call from helper_a() to helper_a()
+```
+
+The recursion is tail-recursive and bounded (it executes at most 4 times for the
+initial input `r1 = 0`). The BPF verifier does support *bounded loops*, so the
+smallest fix is to replace the recursive `call` with a backward branch to a label
+at the top of the function. This turns the tail recursion into an equivalent
+local loop while keeping the function a separate, non-inlined subprogram.
+
+**Patch**
+
+```diff
+--- a/source.c
++++ b/source.c
+@@ -16,11 +16,9 @@ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+ 	asm volatile ("					\
+-	r1 += 1;					\
++l0_%=:	r1 += 1;					\
+ 	r0 = r1;					\
+ 	if r1 < 4 goto l0_%=;				\
+ 	exit;						\
+-l0_%=:	call helper_a;					\
+-	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+What changed:
+
+* Added label `l0_%=:` before the first instruction.
+* Kept the existing conditional branch `if r1 < 4 goto l0_%=;` so that when the
+  loop condition is true, control flows back to the start of the function.
+* Removed the recursive `call helper_a;` and the now-redundant `exit;` after it.
+
+The resulting control flow is a simple bounded loop: `r1` is incremented until
+it reaches 4, at which point the function falls through to `exit`. The verifier
+can track the increasing scalar bound and will accept the program.

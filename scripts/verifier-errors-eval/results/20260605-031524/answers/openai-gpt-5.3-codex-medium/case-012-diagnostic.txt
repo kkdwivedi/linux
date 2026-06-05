@@ -1,0 +1,32 @@
+The verifier is rejecting this because `helper_a()` is classified as **sleepable** (it contains `bpf_copy_from_user()`), and you call it while IRQs are disabled:
+
+```c
+bpf_local_irq_save(&flags);   // enter IRQ-disabled region
+helper_a(0);                  // sleepable global function call -> reject
+bpf_local_irq_restore(&flags);
+```
+
+In BPF, IRQ-disabled critical sections cannot contain operations that may sleep.
+
+### Smallest likely fix
+Move `helper_a(0)` outside the IRQ-disabled section.
+
+#### Patch
+```diff
+@@
+ SEC("?syscall")
+ int entry(void *ctx)
+ {
+ 	unsigned long flags;
+ 
+-	bpf_local_irq_save(&flags);
+-	helper_a(0);
+-	bpf_local_irq_restore(&flags);
++	helper_a(0);
++	bpf_local_irq_save(&flags);
++	bpf_local_irq_restore(&flags);
+ 	return 0;
+ }
+```
+
+This keeps both behaviors present, but avoids the forbidden context combination that the verifier reports.

@@ -1,0 +1,24 @@
+The failure is **not** a safety bug in `helper_g`; it is verifier **complexity blow-up** during inter-procedural liveness.
+
+### Why it blows up
+Each `CALL_AT()` builds `r1 = fp - <offset>` and calls the next subprog.  
+Across 7 call levels, with many call sites and multiple stack offsets, the verifier keeps re-running callee liveness propagation for many call-path/arg combinations, eventually hitting:
+
+- `liveness analysis exceeded complexity limit (10001 calls)`
+
+So `helper_g` is just where the limit is tripped, not where logic is wrong.
+
+---
+
+### Smallest likely source fix
+Reduce distinct argument patterns reaching callees by using a single stack offset in `CALL_AT`.
+
+#### Patch
+```diff
+-#define CALL_AT(fn, off) "r1 = r10;" "r1 += -" #off ";" "call " #fn ";"
++#define CALL_AT(fn, off) "r1 = r10;" "r1 += -8;" "call " #fn ";"
+```
+
+This is a one-line change and should drastically reduce liveness recomputation while keeping the overall structure intact.
+
+If it still hits limits on your kernel, the next minimal step is reducing fan-out (e.g. make `CALLS_50` call `CALLS_10` only once).

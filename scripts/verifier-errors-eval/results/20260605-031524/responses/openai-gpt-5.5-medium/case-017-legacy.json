@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier failure is due to the order of `bpf_local_irq_restore()` calls.\n\n`bpf_local_irq_save(&flags1)` creates an IRQ-state \u201creference\u201d with id `1`.  \n`bpf_local_irq_save(&flags2)` creates another one with id `2`.\n\nThe verifier requires these stateful resources to be restored in LIFO order, like a stack:\n\n```text\nsave flags1   -> id 1\nsave flags2   -> id 2\nrestore flags2\nrestore flags1\n```\n\nBut the program currently does:\n\n```c\nbpf_local_irq_restore(&flags1);\nbpf_local_irq_restore(&flags2);\n```\n\nSo at instruction 9, it tries to restore id `1` while id `2` is still the most recent outstanding IRQ state. That is why the verifier reports:\n\n```text\ncannot restore irq state out of order, expected id=2 acquired at insn_idx=7\n```\n\nSmallest fix: restore `flags2` before `flags1`.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -8,8 +8,8 @@ int entry(struct __sk_buff *ctx)\n \n \tbpf_local_irq_save(&flags1);\n \tbpf_local_irq_save(&flags2);\n-\tbpf_local_irq_restore(&flags1);\n \tbpf_local_irq_restore(&flags2);\n+\tbpf_local_irq_restore(&flags1);\n \treturn 0;\n }\n```\n\nFixed source:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);\n\tbpf_local_irq_restore(&flags1);\n\treturn 0;\n}\n```\n\nThis should satisfy the verifier because the IRQ state references are released in the reverse order in which they were acquired.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-medium/case-017-legacy.txt",
+    "case_id": "case-017",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-medium",
+    "prompt_bytes": 1745,
+    "prompt_path": "public/case-017/prompt_legacy.md",
+    "prompt_sha256": "7fc465b0f01c16b7f076395e6776f54156c97eb932b04d9dd1f878444e3ec702",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-medium/case-017-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "3a704642-3a61-406c-acfd-3d9b799e94a0",
+    "started_at": "2026-06-05T03:15:42+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00329,
+    "output_cost_usd": 0.01866,
+    "total_cost_usd": 0.02195
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 658,
+    "output_tokens": 622,
+    "raw_usage": {
+      "input_tokens": 658,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 622,
+      "output_tokens_details": {
+        "reasoning_tokens": 175
+      },
+      "total_tokens": 1280
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 175,
+    "total_tokens": 1280
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629355,
+    "created_at": 1780629342,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0f1f4e672d13c13e006a223f5e8234819293b53cf4757b32e0",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0f1f4e672d13c13e006a223f5f57e481928b3b041ac2376127",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier failure is due to the order of `bpf_local_irq_restore()` calls.\n\n`bpf_local_irq_save(&flags1)` creates an IRQ-state \u201creference\u201d with id `1`.  \n`bpf_local_irq_save(&flags2)` creates another one with id `2`.\n\nThe verifier requires these stateful resources to be restored in LIFO order, like a stack:\n\n```text\nsave flags1   -> id 1\nsave flags2   -> id 2\nrestore flags2\nrestore flags1\n```\n\nBut the program currently does:\n\n```c\nbpf_local_irq_restore(&flags1);\nbpf_local_irq_restore(&flags2);\n```\n\nSo at instruction 9, it tries to restore id `1` while id `2` is still the most recent outstanding IRQ state. That is why the verifier reports:\n\n```text\ncannot restore irq state out of order, expected id=2 acquired at insn_idx=7\n```\n\nSmallest fix: restore `flags2` before `flags1`.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -8,8 +8,8 @@ int entry(struct __sk_buff *ctx)\n \n \tbpf_local_irq_save(&flags1);\n \tbpf_local_irq_save(&flags2);\n-\tbpf_local_irq_restore(&flags1);\n \tbpf_local_irq_restore(&flags2);\n+\tbpf_local_irq_restore(&flags1);\n \treturn 0;\n }\n```\n\nFixed source:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);\n\tbpf_local_irq_restore(&flags1);\n\treturn 0;\n}\n```\n\nThis should satisfy the verifier because the IRQ state references are released in the reverse order in which they were acquired.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0f1f4e672d13c13e006a223f64e2f88192ba53204c2923711c",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 658,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 622,
+      "output_tokens_details": {
+        "reasoning_tokens": 175
+      },
+      "total_tokens": 1280
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

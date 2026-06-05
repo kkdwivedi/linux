@@ -1,0 +1,28 @@
+The verifier error indicates that the helper function `bpf_ktime_get_coarse_ns` is not permitted for the `kprobe` program type. The log explicitly states: "program of this type cannot use helper bpf_ktime_get_coarse_ns#160".
+
+### Fix Explanation:
+Replace `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns`, which is allowed for `kprobe` programs. This helper provides a high-resolution timestamp and is permitted in the kprobe context.
+
+### Fixed Source:
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("kprobe")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_ns];			\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+```
+
+### Key Changes:
+1. Replaced `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns` in both the assembly call and the `__imm` macro.
+2. This maintains the program's structure while using a helper permitted for kprobe contexts.

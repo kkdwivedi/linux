@@ -1,0 +1,41 @@
+## Analysis of the Verifier Failure
+
+The verifier rejects the program with:
+```
+sleepable global function helper_a() called in IRQ-disabled region
+```
+
+There are two compounding problems:
+
+1. **`helper_a` is a global (non-`static`) `__noinline` function.** The BPF verifier verifies global functions *independently*, and because `helper_a` calls `bpf_copy_from_user` (a sleepable helper), the verifier marks it as a "sleepable global function." Any call to such a function from an IRQ-disabled region is unconditionally rejected — this is the immediate error.
+
+2. **Even if we fix the global/static issue, the sleepable helper is called on the IRQ-disabled path.** `entry` calls `helper_a(0)`, so `i=0`, meaning `!i` is `true`, so `bpf_copy_from_user` *is* executed while IRQs are disabled.
+
+The first error line `arg#0 reference type('UNKNOWN ') size cannot be determined: -22` also comes from the independent global-function verification of `helper_a` where the helper call context is unresolvable.
+
+## Fix
+
+Two changes are needed:
+
+1. Make `helper_a` **`static`** so it is verified at each call site in context (not independently as a global). The verifier will then propagate `R1=0` into the subprogram.
+
+2. Change `if (!i)` to `if (i)` so that with the actual argument `i=0`, the sleepable helper is **not reached**, making the call safe under IRQ-disabled context.
+
+```diff
+-int __noinline helper_a(int i)
++static int __noinline helper_a(int i)
+ {
+ 	char data[8];
+ 
+-	if (!i)
++	if (i)
+ 		bpf_copy_from_user(data, sizeof(data), NULL);
+ 	return i;
+ }
+```
+
+With these changes, when `entry` calls `helper_a(0)`:
+- The verifier propagates `R1=0` into the static subprogram.
+- `if (i)` → `if (0)` → branch not taken → `bpf_copy_from_user` is unreachable.
+- No sleepable operation occurs in the IRQ-disabled region.
+- Verification passes.

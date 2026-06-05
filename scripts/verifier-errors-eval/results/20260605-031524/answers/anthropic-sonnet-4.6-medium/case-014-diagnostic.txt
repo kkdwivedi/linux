@@ -1,0 +1,35 @@
+The verifier rejects the program because `r3` (loaded from `r0+0` as a u32) is unbounded, so `r1 += r3` produces a pointer with an unbounded variable offset. The verifier can't prove the access stays within the map value (size 48).
+
+The fix is to bounds-check `r3` before adding it to `r1`. Since the map value has size 48 and offset field is at byte 0, the data array starts at byte 4 and has 44 bytes. We need `r3 + 1 <= 48`, i.e., `r3 <= 47`. But since we're reading 1 byte at `r1 + r3` and `r1` already points to the start of the value (offset 0), we need `r3 < 48`.
+
+Here's the fix — add a bounds check on `r3` before adding it to `r1`:
+
+```c
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = 0;						\
+	*(u64*)(r2 + 0) = r1;				\
+	r1 = %[map_a] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l0_%=;				\
+	r1 = r0;					\
+	r3 = *(u32*)(r0 + 0);				\
+	if r3 >= 48 goto l0_%=;				\
+	r1 += r3;					\
+	r2 = 1;						\
+	r3 = 0;						\
+	call %[bpf_probe_read_kernel];			\
+l0_%=:	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm(bpf_probe_read_kernel),
+	  __imm_addr(map_a)
+	: __clobber_all);
+}
+```
+
+The added line `if r3 >= 48 goto l0_%=;` constrains `r3` to the range `[0, 47]`, so after `r1 += r3`, the verifier knows the resulting pointer offset is at most 47 within the 48-byte map value, making the 1-byte access safe.

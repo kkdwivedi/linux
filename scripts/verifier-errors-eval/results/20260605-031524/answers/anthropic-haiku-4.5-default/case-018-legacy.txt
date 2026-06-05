@@ -1,0 +1,47 @@
+## Analysis of the Verifier Failure
+
+The verifier is rejecting this program with the error: **"bpf_res_spin_unlock cannot be out of order"**
+
+### Root Cause
+
+The issue is with the **lock ordering and control flow**. The verifier tracks spin lock acquisition order to prevent deadlocks. Here's what happens:
+
+1. Lock `lock_a` is acquired at instruction 0
+2. Lock `lock_b` is acquired at instruction 4
+3. At instruction 8, the code attempts to unlock `lock_a`
+
+The problem is that `lock_a` was acquired **before** `lock_b`, so locks should be released in **reverse order** (LIFO - Last In, First Out). The code is trying to unlock `lock_a` while `lock_b` is still held, which violates the spin lock ordering rules that prevent deadlocks.
+
+### The Fix
+
+The simplest fix is to reverse the unlock order to match the reverse order of acquisition:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+struct bpf_res_spin_lock lock_a __hidden SEC(".data.A");
+struct bpf_res_spin_lock lock_b __hidden SEC(".data.B");
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```
+
+### Change Summary
+
+**Line to modify:** Swap the order of the two `bpf_res_spin_unlock` calls at the end of the function:
+- **Before:** `bpf_res_spin_unlock(&lock_a); bpf_res_spin_unlock(&lock_b);`
+- **After:** `bpf_res_spin_unlock(&lock_b); bpf_res_spin_unlock(&lock_a);`
+
+This ensures locks are always released in reverse order of acquisition, satisfying the verifier's deadlock prevention requirements.

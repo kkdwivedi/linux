@@ -1,0 +1,40 @@
+## Explanation of the Verifier Failure
+
+The verifier is rejecting this program because:
+
+1. `bpf_preempt_disable()` is called, which enters a non-preemptible region (depth 1)
+2. `bpf_copy_from_user()` is a **sleepable helper** that may block/sleep
+3. Sleepable helpers cannot be called within non-preemptible regions because sleeping while preemption is disabled would violate kernel execution context safety
+
+The verifier correctly identifies that the code structure violates execution context constraints.
+
+## Proposed Fix
+
+The smallest fix is to **remove the preemption disable/enable calls** around the `bpf_copy_from_user()` call, since:
+- There's no apparent reason to disable preemption for a single `bpf_copy_from_user()` call
+- `bpf_copy_from_user()` is designed to be used outside of non-preemptible regions
+
+**Patch:**
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("?fentry.s/sys_getpgid")
+int entry(void *ctx)
+{
+	u32 data;
+
+	bpf_copy_from_user(&data, sizeof(data), NULL);
+	return 0;
+}
+```
+
+**Why this works:**
+- Removes the non-preemptible region entirely
+- Allows `bpf_copy_from_user()` to execute in its natural context where it's safe to sleep
+- Maintains the original functionality (copying data from user space)
+
+If the preemption disabling was intentional for some other reason, the alternative would be to use a non-sleepable helper instead, but no such alternative exists for copying from user space.

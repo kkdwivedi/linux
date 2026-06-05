@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Release cpumask after __sink(cpumask) if cpumask is non-NULL.",
+    "Transfer the owned cpumask into a kptr/map in a verifier-accepted way so the program no longer owns it."
+  ],
+  "canonical_fix": "After make_object returns a non-NULL cpumask, call bpf_cpumask_release(cpumask) before returning on every path that still owns it.",
+  "case_id": "case-002",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "easy",
+  "expected_explanation": "make_object acquires an owned cpumask reference. The entry program stores/sinks it and returns without releasing or transferring ownership, so one exit path leaks the reference.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-002-diagnostic.txt",
+    "case_id": "case-002",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 5048,
+    "prompt_path": "public/case-002/prompt_diagnostic.md",
+    "prompt_sha256": "63788e59d8129296d6b2d78c878578b65f355ef76b449bf180000c418be58a88",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-002-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "bdd79d21-a82b-4067-9593-596d042b7bbd",
+    "started_at": "2026-06-05T03:18:56+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation of the Verifier Failure\n\nThe verifier is detecting a **resource leak** of the `bpf_cpumask` object. Here's the issue:\n\n1. `bpf_cpumask_create()` is called at instruction 0, acquiring a reference (id=2) that must be released\n2. The code checks `if (!cpumask)` and returns NULL on failure (this path is safe)\n3. The code then checks `if (!bpf_cpumask_empty(cast(cpumask)))` and calls `bpf_cpumask_release()` in that branch\n4. **However**, when `bpf_cpumask_empty()` returns false (the `if` condition is not taken), the function returns the cpumask without releasing it\n5. The caller (`BPF_PROG(entry, ...)`) receives this cpumask but never releases it before exiting\n\nThe verifier traces the path where:\n- `bpf_cpumask_create()` succeeds (instruction 0)\n- `!cpumask` check fails, so we continue (instruction 2)\n- `!bpf_cpumask_empty(cast(cpumask))` check fails, so we skip the release (instruction 11)\n- The function returns the unreleased cpumask to the caller\n- The caller exits without releasing it (instruction 21)\n\n## The Fix\n\nThe issue is in the `entry` function: it calls `make_object()` which returns a cpumask, but never releases it. The simplest fix is to release the cpumask before returning:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *cpumask;\n\n\tcpumask = make_object();\n\t__sink(cpumask);\n\tif (cpumask)\n\t\tbpf_cpumask_release(cpumask);\n\n\treturn 0;\n}\n```\n\n**Why this works:** The verifier will now see that on all paths where `cpumask` is non-NULL (and thus holds a reference), it is released before the exit. The `if (cpumask)` check ensures we only call `bpf_cpumask_release()` when there's actually a reference to release.",
+  "must_mention": [
+    "An owned cpumask reference is acquired",
+    "Every exit path must release or transfer ownership",
+    "The NULL path does not need release"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Removes the acquisition without preserving the intended object use",
+    "Calls release without considering NULL when the API requires non-NULL",
+    "Releases only on an error path and still returns with ownership on success"
+  ]
+}

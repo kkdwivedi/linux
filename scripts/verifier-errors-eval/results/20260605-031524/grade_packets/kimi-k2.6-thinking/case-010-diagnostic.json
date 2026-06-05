@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Change helper_c(val, skb + 1) to helper_c(val, skb).",
+    "Preserve the original context pointer in another variable/register and pass that original pointer to functions that dereference ctx fields."
+  ],
+  "canonical_fix": "Pass the original skb pointer to helper_c, or keep an unmodified copy for context dereferences and perform any needed offset arithmetic only in verifier-allowed ways.",
+  "case_id": "case-010",
+  "category": "Register Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "helper_b passes skb + 1 to helper_c, whose argument is later dereferenced as a context pointer. The verifier rejects dereferencing a modified ctx pointer because the callee no longer receives the original context pointer form.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-thinking/case-010-diagnostic.txt",
+    "case_id": "case-010",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-thinking",
+    "prompt_bytes": 3922,
+    "prompt_path": "public/case-010/prompt_diagnostic.md",
+    "prompt_sha256": "c9975b0bd7d86b4edddce6166024784483798109ab83deeb5185dbddd366cae7",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-thinking/case-010-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "enabled"
+    },
+    "run_id": "5df50def-a562-4190-82b3-1fdc90c35f04",
+    "started_at": "2026-06-05T03:48:33+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "**Explanation**\n\nIn BPF, the `struct __sk_buff *` context pointer is a special pointer type (`PTR_TO_CTX`).  \nThe verifier tracks its offset and does **not** allow passing a context pointer that has been\nmodified by arithmetic to another function that expects the original context type.\n\nIn `helper_b()` the expression `skb + 1` adds `sizeof(struct __sk_buff)` (192 bytes) to the\npointer. The resulting register is still a `PTR_TO_CTX`, but with offset `192`. When that\nmodified pointer is passed to `helper_c()`, the verifier rejects it:\n\n```\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\nThe program only ever needs the original, unmodified `skb` pointer, so the arithmetic is\nunnecessary and unsafe.\n\n**Fix**\n\nPass the unmodified `skb` pointer to `helper_c`.\n\n**Patch**\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -17,7 +17,7 @@ int helper_c(int val, struct __sk_buff *skb);\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n```\n\nWith this change `helper_b` retains the original `PTR_TO_CTX` (offset 0) for both calls,\nso the verifier will accept the argument passed to `helper_c` and the program will pass\nverification.",
+  "must_mention": [
+    "skb + 1 modifies the ctx pointer",
+    "helper_c dereferences the ctx pointer",
+    "The callee needs the original ctx pointer"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check to skb",
+    "Changes helper_c's field access but still passes skb + 1 as ctx",
+    "Treats the error as stack depth or packet bounds"
+  ]
+}

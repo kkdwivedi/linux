@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Verifier Failure Analysis\n\nThe verifier is detecting a **reference leak**. The program reserves two dynptrs (`ptr1` and `ptr2`) but only submits/discards `ptr1`. The second dynptr (`ptr2`) at `fp-32` is never released before the program exits.\n\nFrom the verifier log:\n- Line 7: `ptr1` is reserved (id=2)\n- Line 14: `ptr2` is reserved (id=4, parent_id=3)\n- Line 32: Only `ptr1` is submitted\n- Line 34: Program exits with `refs=3` (meaning reference id=3 is still held)\n\nThe error message confirms: `Unreleased reference id=3 alloc_insn=14`\n\n## Root Cause\n\nThe code path where `sample` is NULL (lines 105-108) discards both dynptrs correctly. However, the success path (lines 110-111) only submits `ptr1` and never releases `ptr2`, causing a leak when the function returns.\n\n## Fix\n\nAdd a call to discard `ptr2` before returning on the success path:\n\n```c\nSEC(\"?raw_tp\")\nint entry(void *ctx)\n{\n\tstruct bpf_dynptr ptr1, ptr2;\n\tstruct sample *sample;\n\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n\n\tsample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));\n\tif (!sample) {\n\t\tbpf_ringbuf_discard_dynptr(&ptr1, 0);\n\t\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\t\treturn 0;\n\t}\n\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);  // ADD THIS LINE\n\n\treturn 0;\n}\n```\n\nThis ensures that `ptr2` is always released (either discarded on error or discarded on success), eliminating the reference leak and allowing the program to pass verification.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-011-legacy.txt",
+    "case_id": "case-011",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 3372,
+    "prompt_path": "public/case-011/prompt_legacy.md",
+    "prompt_sha256": "762b0c608dbde5c1090172be3b10e7e17988b9698301148bebea627aedc1c8f8",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-011-legacy.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "be260044-8cf7-424e-8849-82f35bfc2a4b",
+    "started_at": "2026-06-05T03:19:01+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.001595,
+    "output_cost_usd": 0.002725,
+    "total_cost_usd": 0.00432
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1595,
+    "output_tokens": 545,
+    "raw_usage": {
+      "completion_tokens": 545,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.00432,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002725,
+        "upstream_inference_cost": 0.00432,
+        "upstream_inference_prompt_cost": 0.001595
+      },
+      "is_byok": false,
+      "prompt_tokens": 1595,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 2140
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 2140
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Verifier Failure Analysis\n\nThe verifier is detecting a **reference leak**. The program reserves two dynptrs (`ptr1` and `ptr2`) but only submits/discards `ptr1`. The second dynptr (`ptr2`) at `fp-32` is never released before the program exits.\n\nFrom the verifier log:\n- Line 7: `ptr1` is reserved (id=2)\n- Line 14: `ptr2` is reserved (id=4, parent_id=3)\n- Line 32: Only `ptr1` is submitted\n- Line 34: Program exits with `refs=3` (meaning reference id=3 is still held)\n\nThe error message confirms: `Unreleased reference id=3 alloc_insn=14`\n\n## Root Cause\n\nThe code path where `sample` is NULL (lines 105-108) discards both dynptrs correctly. However, the success path (lines 110-111) only submits `ptr1` and never releases `ptr2`, causing a leak when the function returns.\n\n## Fix\n\nAdd a call to discard `ptr2` before returning on the success path:\n\n```c\nSEC(\"?raw_tp\")\nint entry(void *ctx)\n{\n\tstruct bpf_dynptr ptr1, ptr2;\n\tstruct sample *sample;\n\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n\n\tsample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));\n\tif (!sample) {\n\t\tbpf_ringbuf_discard_dynptr(&ptr1, 0);\n\t\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\t\treturn 0;\n\t}\n\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);  // ADD THIS LINE\n\n\treturn 0;\n}\n```\n\nThis ensures that `ptr2` is always released (either discarded on error or discarded on success), eliminating the reference leak and allowing the program to pass verification.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629542,
+    "id": "gen-1780629542-OF7PbgIUdbXxiKMjIgVx",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 545,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.00432,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002725,
+        "upstream_inference_cost": 0.00432,
+        "upstream_inference_prompt_cost": 0.001595
+      },
+      "is_byok": false,
+      "prompt_tokens": 1595,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 2140
+    }
+  },
+  "reasoning_content": ""
+}

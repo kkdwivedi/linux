@@ -1,0 +1,195 @@
+Looking at this verifier failure, I need to understand what's happening and find the smallest fix.
+
+## Analysis of the Failure
+
+The error is:
+```
+liveness analysis exceeded complexity limit (10001 calls)
+```
+
+The log shows `subprog#7 helper_g:` being analyzed at `depth 7` repeatedly, many times over. The suggestion says:
+> Reduce the number of distinct call paths or argument patterns reaching these subprograms.
+
+### Understanding the Program Structure
+
+The program creates an extremely large call graph using nested macros:
+- `CALLS_50(fn)` expands to 50 calls to `fn`
+- `helper_g` is a leaf function (just returns 0)
+- `helper_f` calls `helper_g` 50 times
+- `helper_e` calls `helper_f` 50 times → 50×50 = 2,500 calls to `helper_g` at next level down
+- This continues through `helper_d`, `helper_c`, `helper_b`, `helper_a`, and finally `entry`
+
+The total call graph is enormous: 50^7 = 78,125,000,000,000,000 potential paths to `helper_g`.
+
+However, the actual issue is **liveness analysis** - the verifier tracks which registers and stack slots are "live" (read before written) across function calls. When a subprogram can be reached via many different call paths with different liveness patterns, the verifier re-analyzes it multiple times.
+
+### Why `helper_g` is Re-analyzed So Many Times
+
+Each call to `helper_g` passes through `r1 = r10; r1 += -offset` - this sets up `r1` as a pointer to a different stack offset. Even though `helper_g` doesn't use `r1`, the **caller's liveness state differs** based on:
+- Which call site in the parent (different stack offsets → different stack frame liveness)
+- The depth of call stack and what registers are live at each level
+
+The verifier caches subprogram analysis results, but the cache key includes the liveness state. With 50 call sites per function, each with different stack offsets, and 7 levels of nesting, the number of distinct liveness states reaching `helper_g` explodes.
+
+## The Fix
+
+The smallest fix is to **reduce the number of distinct call sites** - specifically, make all calls to the same helper use the **same stack offset**, or better yet, **reduce the branching factor** of the call tree.
+
+Looking at `CALL_AT(fn, off)`, each call uses a different offset (8, 16, 24, ...). This creates distinct liveness patterns because each call writes to a different stack slot.
+
+The simplest fix: **Reduce `CALLS_50` to `CALLS_10`** or even smaller, or reduce the nesting depth. But let's think more carefully...
+
+Actually, the most targeted fix: **Use the same offset for all calls within a function**. This way all calls to `helper_g` from `helper_f` have identical liveness patterns, allowing the verifier to cache the analysis of `helper_g` after just one call.
+
+But wait - we need `CALL_AT` to use different offsets because each call needs a valid stack frame? No, actually for these leaf/near-leaf functions, the stack offset doesn't matter if they don't use it.
+
+Let me re-read: `r1 = r10; r1 += -offset; call fn` - this sets `r1` to point at `r10 - offset` on the stack. If `helper_g` never reads `r1`, this is just setting up an unused argument.
+
+The key insight: **Use a single offset for all calls, or reduce the call multiplicity.**
+
+Smallest fix: Change `CALLS_50` to `CALLS_10` everywhere, and/or reduce nesting. But actually, even better - we can make all calls in a given function use the same stack offset by changing the macro structure.
+
+Actually, the cleanest minimal fix: **Reduce from 50 to a smaller number**. The problem is specifically the 50× branching. Changing to 10 calls per level: 10^7 = 10,000,000 paths - still a lot, but the liveness cache might handle it better since many paths collapse.
+
+But looking more carefully at the error - it's 10001 calls in liveness analysis. With depth 7 and 50 branches, we're way over. 
+
+The most minimal change that preserves the test structure: **Reduce CALLS_50 to CALLS_10** and adjust accordingly, OR reduce the depth by removing some helper layers.
+
+Actually, looking at typical fixes for such test cases: reduce the branching factor. Change `CALLS_50` to use fewer calls, like `CALLS_10` or even `CALLS_5`.
+
+Let me check: with `CALLS_10` and 7 levels: 10^7 = 10,000,000. The liveness analysis limit is 10001. The issue is that each distinct call site creates a distinct liveness state.
+
+If we use **the same offset for all calls**, then all calls from a given function have the same liveness pattern. The key is `CALL_AT(fn, off)` - if all calls use the same `off`, they're identical.
+
+But the macro `CALLS_10` uses offsets 8,16,24,... - different each time.
+
+**Minimal fix: Make all calls use offset 8 (or any single value):**
+
+```c
+#define CALLS_10(fn) \
+	CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) \
+	CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8)
+```
+
+Wait, but then they all write to the same stack slot. Is that safe? Since `helper_g` doesn't use `r1`, and the calls are sequential (not recursive), this should be fine - we're just setting up the same unused argument repeatedly.
+
+Actually, even simpler: **Reduce to fewer calls per level and fewer levels**. The test seems designed to stress the verifier. We need to find the boundary.
+
+With 50^7 being too much, what about 10^6? That's 1,000,000. Or 5^7 = 78,125?
+
+Let me think about this differently. The log shows depth 7 for `helper_g`. The call chain is: entry → helper_a → helper_b → helper_c → helper_d → helper_e → helper_f → helper_g. That's 7 levels of calls, with `helper_g` at depth 7.
+
+The liveness analysis re-analyzes `helper_g` for each distinct calling context. If we have 50 call sites in `helper_f`, and each leads to `helper_g`, but all with the same liveness state at entry to `helper_g`, it would only be analyzed once.
+
+The problem is the stack offsets differ, so the "stack is read/written" liveness differs.
+
+**Best minimal fix: Use a single call site pattern (same offset), or reduce to fewer distinct offsets.**
+
+Actually, re-reading the code more carefully - the functions are `__naked` with inline asm. The `r1 = r10; r1 += -offset` is setting up the first argument. For BPF, `r1` is the context pointer. These are being set to different stack locations, presumably to simulate different context pointers or arguments.
+
+If we make all offsets the same, all calls look identical to the liveness analyzer (since `r1` is written before the call, its previous liveness doesn't matter).
+
+Let me try: change `CALLS_50` to `CALLS_10` and `CALLS_10` to use a single repeated offset, or just reduce the number of calls.
+
+Actually, looking at similar kernel test cases, the typical fix for "liveness analysis exceeded complexity limit" is to **reduce the number of call paths**. 
+
+The smallest structural change: reduce 50 to 10 in the outer macro name, but also need to reduce total combinations. Let's try reducing to `CALLS_10` which does 10 calls:
+
+```c
+#define CALLS_10(fn) \
+	CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) \
+	CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8)
+```
+
+And rename `CALLS_50` to `CALLS_10`. But we need to check if 10^7 = 10,000,000 is still too many distinct paths... Actually with same offset, it's 1 distinct liveness pattern per caller, not 10.
+
+With all same offsets: each function has 1 distinct call pattern. `helper_g` is analyzed once per distinct caller liveness state. Since all calls to `helper_f` from `helper_e` are identical, `helper_f` is analyzed once, then `helper_g` once. Total: 8 subprograms, each analyzed once = 8 analyses. Well under 10001.
+
+## Proposed Patch
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -5,8 +5,8 @@
+ #define CALL_AT(fn, off) "r1 = r10;" "r1 += -" #off ";" "call " #fn ";"
+ #define CALLS_10(fn) \
+-	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \
+-	CALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)
++	CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) \
++	CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8)
+ #define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
+```
+
+Wait, that's not enough - `CALLS_50` still does 50 calls with 5 groups of 10. The issue is 50 calls total. Let me reduce `CALLS_50` to `CALLS_10` as well, or just make `CALLS_50` do fewer calls.
+
+Actually, with all same offsets, even 50 calls should be fine - they're all identical liveness patterns. Let me verify my reasoning: the verifier caches subprogram analysis by the liveness state at entry. If all 50 calls to `helper_g` from `helper_f` have the same liveness state (because the stack setup is identical), then `helper_g` is analyzed once for `helper_f`'s context.
+
+But wait - each call in `helper_f` is at a different instruction offset. Does that matter for liveness caching? The liveness state is what's live before the call instruction. Since each call is sequential and `helper_g` doesn't clobber anything important (it only sets `r0`), the liveness state before each call should be the same if the stack offset is the same.
+
+Actually, I need to be more careful. After a call, the liveness of return value `r0` matters, and registers the callee clobbers. But `helper_g` is simple: sets `r0=0`, exits. It doesn't clobber `r1`-`r5` (well, in BPF, the callee can clobber `r0`-`r5`).
+
+Hmm, actually in BPF calling convention, `r0`-`r5` are caller-saved. So after `call helper_g`, `r0` is the return value, and `r1`-`r5` are undefined/clobbered. `r6`-`r9` are callee-saved.
+
+Since `helper_f` sets `r1` before each call, and `r1` is caller-saved, the liveness of `r1` after the call doesn't matter. But the liveness of other registers might.
+
+Let me think again... The key is that with **identical stack offsets**, the verifier sees identical "stack liveness" patterns. The instruction-level liveness analysis tracks which stack slots are read. If all calls use `offset 8`, then each call writes to `[fp-8]` and calls. The liveness state before each call is the same pattern.
+
+I think using the same offset for all calls in `CALLS_10` should work, but we also need to reduce `CALLS_50` since 50 identical calls might still create 50 call sites that the verifier tracks separately in some way.
+
+Let me try a more conservative fix: reduce to `CALLS_10` overall (10 calls per function), with same offsets:
+
+```c
+#define CALLS_10(fn) \
+	CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) \
+	CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8)
+#define CALLS_50(fn) CALLS_10(fn)  /* Just 10 calls, not 50 */
+```
+
+Or rename `CALLS_50` to `CALLS_10` in all uses. Actually, the simplest is to redefine `CALLS_50`:
+
+```c
+#define CALLS_50(fn) CALLS_10(fn)
+```
+
+But that's confusing. Better to change uses of `CALLS_50` to `CALLS_10` and reduce `CALLS_10` to use same offsets.
+
+Actually, let me re-examine: the original `CALLS_10` uses offsets 8,16,24,32,40,48,56,64,72,80 - ten different offsets. `CALLS_50` repeats this pattern 5 times, so offsets 8,16,...,80,8,16,...,80,etc. So there are only 10 distinct offsets, each used 5 times.
+
+The issue is 50 call sites with 10 distinct liveness patterns. But wait, `helper_f` calls `helper_g` 50 times. The verifier analyzes `helper_g` for each distinct liveness state reaching it. If there are 10 distinct stack offset patterns, `helper_g` is analyzed 10 times for `helper_f`.
+
+Then `helper_e` calls `helper_f` 50 times, with 10 distinct patterns. Each pattern leads to `helper_f` being analyzed with that pattern. But `helper_f`'s analysis includes `helper_g`'s analysis. 
+
+The total number of distinct context paths is 10^7 = 10,000,000 (since there are 7 levels and 10 distinct patterns per level). That's huge.
+
+If we make all offsets the same (just 1 distinct pattern per level), then each level contributes only 1 distinct context. Total: 1 path. That's way under the limit.
+
+So the fix is: **make all calls use the same stack offset**.
+
+```c
+#define CALLS_10(fn) \
+	CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) \
+	CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8)
+```
+
+And keep `CALLS_50` as is (it will just repeat the same pattern 5 times, still 1 distinct liveness state).
+
+Wait, but `CALLS_50` does 50 calls. Is 50 calls with identical liveness still a problem? The liveness analysis counts "calls" to the analysis, not instructions. If `helper_g` is cached after first analysis, subsequent identical calls reuse the cache. So 50 identical calls should be fine.
+
+Let me verify with the log: it says "10001 calls" - this is calls to the liveness analysis routine, not BPF call instructions. With caching of identical liveness states, we'd have ~8 subprograms × maybe a few contexts each.
+
+I'm confident the fix is to make all `CALLS_10` offsets identical. Here's the patch:
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -5,8 +5,8 @@
+ #define CALL_AT(fn, off) "r1 = r10;" "r1 += -" #off ";" "call " #fn ";"
+ #define CALLS_10(fn) \
+-	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \
+-	CALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)
++	CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) \
++	CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8)
+ #define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
+```
+
+This change makes all calls within each function use the same stack offset (`-8`), eliminating the distinct liveness patterns that were causing exponential re-analysis of subprograms.

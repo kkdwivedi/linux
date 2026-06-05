@@ -1,0 +1,46 @@
+## Explanation of the Failure
+
+The verifier enforces **LIFO (last-in, first-out)** ordering for `bpf_res_spin_lock`/`bpf_res_spin_unlock` pairs. Looking at the verifier log's generated instructions:
+
+```
+insn 6:  call bpf_res_spin_lock(&lock_b)   ← lock_b acquired (last)
+insn 7:  w6 = w0                           ← save result
+insn 8-9: r1 = &lock_a
+insn 10: call bpf_res_spin_unlock(&lock_a) ← UNLOCK lock_a FIRST → ERROR
+insn 11: if w6 != 0 goto ...               ← then check lock_b result
+```
+
+The compiler optimized the code by **hoisting** the common `bpf_res_spin_unlock(&lock_a)` call (which appeared in both the error-path and the fall-through path) to *before* the conditional check on lock_b's return value. The result is that `lock_a` is unlocked while `lock_b` is still the most recently acquired lock — a LIFO violation.
+
+The root cause in the source is that the success-path unlocks are in the wrong order:
+```c
+bpf_res_spin_unlock(&lock_a);  // acquired FIRST — must be released LAST
+bpf_res_spin_unlock(&lock_b);  // acquired SECOND — must be released FIRST
+```
+
+Because `unlock(&lock_a)` appears identically in both the `if` body and the fall-through, the compiler hoists it unconditionally.
+
+## Fix
+
+Swap the unlock order in the success path to LIFO order (`lock_b` first, then `lock_a`). This also prevents the compiler from hoisting `unlock(&lock_a)` before `unlock(&lock_b)`.
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -12,7 +12,7 @@ int entry(struct __sk_buff *ctx)
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+ 	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+### Result
+
+With this change the code correctly follows LIFO in both paths:
+- **Error path** (`lock_b` failed → not held): only `lock_a` was acquired, so `unlock(&lock_a)` is correct.
+- **Success path**: `lock_b` was acquired last, so `unlock(&lock_b)` → `unlock(&lock_a)` is correct LIFO order.
+
+Because the two occurrences of `unlock(&lock_a)` now appear in *different relative positions* (before return in the error path vs. *after* `unlock(&lock_b)` in the success path), the compiler cannot hoist them to a common location before the branch, eliminating the verifier error.

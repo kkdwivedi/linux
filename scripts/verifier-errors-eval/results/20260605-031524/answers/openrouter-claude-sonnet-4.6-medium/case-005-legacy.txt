@@ -1,0 +1,32 @@
+## Explanation of the Failure
+
+The verifier log shows the key error:
+
+```
+sleepable helper bpf_copy_from_user#148 in non-preemptible region
+```
+
+`bpf_copy_from_user` is a **sleepable** (blocking) helper — it may sleep because it can trigger page faults when copying from user space. The BPF verifier rejects any sleepable helper called inside a `bpf_preempt_disable()` / `bpf_preempt_enable()` region, because preemption-disabled regions must not sleep.
+
+The current code calls `bpf_copy_from_user` **between** `bpf_preempt_disable()` and `bpf_preempt_enable()`, which is illegal.
+
+(There is also a secondary warning about the `ctx` argument type, but that comes from the `UNKNOWN` type of `sys_getpgid`'s first argument and is not the cause of the hard failure.)
+
+## Fix
+
+Move `bpf_copy_from_user` **outside** the preempt-disabled region:
+
+```c
+SEC("?fentry.s/sys_getpgid")
+int entry(void *ctx)
+{
+	u32 data;
+
+	bpf_copy_from_user(&data, sizeof(data), NULL);
+	bpf_preempt_disable();
+	bpf_preempt_enable();
+	return 0;
+}
+```
+
+This way the sleepable helper is called in a preemptible context (the program is `fentry.s`, i.e., a sleepable fentry program), and the `bpf_preempt_disable/enable` pair wraps only non-sleepable work. The verifier will accept this ordering.

@@ -1,0 +1,41 @@
+The verifier error occurs because the program passes a constant scalar value (`0x123456`) as the first argument to `bpf_cpumask_populate`, but the helper expects a valid pointer to a `struct bpf_cpumask`. The verifier log shows "R1 type=scalar expected=fp", indicating register R1 contains a scalar (constant) instead of a valid frame pointer (stack address) or other valid pointer type.
+
+The issue is that `invalid` is an arbitrary numeric constant cast to a pointer, which the verifier cannot validate as a legitimate memory location. The helper requires a pointer to a valid `struct bpf_cpumask`, typically obtained via `bpf_cpumask_create()`.
+
+**Proposed fix:**
+Replace the constant pointer with a dynamically allocated `bpf_cpumask` using `bpf_cpumask_create()`, and properly release it after use to avoid resource leaks.
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *cpumask;
+	u64 bits;
+	int ret;
+
+	cpumask = bpf_cpumask_create();
+	if (!cpumask)
+		return 0;
+
+	ret = bpf_cpumask_populate((struct cpumask *)cpumask, &bits, sizeof(bits));
+	bpf_cpumask_release(cpumask);
+	if (!ret)
+		return 2;
+
+	return 0;
+}
+```
+
+**Explanation:**
+- `bpf_cpumask_create()` returns a valid `struct bpf_cpumask *` that the verifier recognizes as a legitimate pointer type (PTR_TO_BTF_ID).
+- The pointer is passed to `bpf_cpumask_populate`, satisfying the helper's memory type requirements.
+- `bpf_cpumask_release()` ensures proper cleanup of the allocated cpumask object.
+- The `bits` variable remains on the stack, providing a valid pointer for the second argument.
+
+This fix addresses the verifier's type-checking error while maintaining the original program's logic.

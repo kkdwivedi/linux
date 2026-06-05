@@ -1,0 +1,42 @@
+## Explanation
+
+The verifier flatly rejects **recursive BPF subprogram calls**. BPF programs must have a finite, statically-verifiable call graph with bounded stack depth, so a subprogram calling itself (directly or via a cycle) is disallowed. The message:
+
+```
+recursive call from helper_a() to helper_a()
+```
+
+comes from the verifier's call-graph check (`check_max_stack_depth` / subprog cycle detection), which runs **before** any instructions are processed — note `processed 0 insns`. The offending instruction is the `call helper_a;` inside `helper_a` itself.
+
+## Fix
+
+Remove the self-recursion. The function already has a perfectly good bounded exit (`if r1 < 4 ... exit`); the recursive branch just needs to stop calling itself. The smallest change is to drop the recursive `call` and simply return:
+
+```c
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l0_%=;				\
+	exit;						\
+l0_%=:	exit;						\
+"	::: __clobber_all);
+}
+```
+
+This keeps the same control-flow shape (two exit paths) but eliminates the recursive edge in the call graph, so the call-graph/stack-depth check passes.
+
+If the intent was to actually iterate, replace the recursion with a bounded in-function loop instead of a call, e.g. branch back to the top:
+
+```c
+	asm volatile ("					\
+l1_%=:	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l1_%=;				\
+	exit;						\
+"	::: __clobber_all);
+```
+
+Both avoid recursion; the first is the minimal edit to get past the verifier error.

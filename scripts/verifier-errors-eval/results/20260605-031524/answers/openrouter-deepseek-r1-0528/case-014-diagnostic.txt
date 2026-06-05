@@ -1,0 +1,54 @@
+The verifier failure occurs because the program accesses memory at an offset within a map value without bounds checking. The map value is a 48-byte struct (`struct value`), but the offset (`r3`) is loaded from the map and can be any 32-bit value (0-4294967295). When this offset is added to the base pointer (`r1`) and passed to `bpf_probe_read_kernel`, the verifier cannot guarantee the access stays within the 48-byte bounds.
+
+**Fix Explanation:**
+Add a bounds check after loading the offset (`r3`) to ensure it's less than 48 (the struct size). If the offset is >= 48, jump to the existing exit label (`l0_%=`), skipping the unsafe access. This guarantees the pointer arithmetic stays within bounds.
+
+**Fixed Source:**
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+struct value {
+	__u32 offset;
+	__u8 data[44];
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1);
+	__type(key, __u64);
+	__type(value, struct value);
+} map_a SEC(".maps");
+
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = 0;						\
+	*(u64*)(r2 + 0) = r1;				\
+	r1 = %[map_a] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l0_%=;				\
+	r1 = r0;					\
+	r3 = *(u32*)(r0 + 0);				\
+	if r3 >= 48 goto l0_%=;				\  // Bounds check added
+	r1 += r3;					\
+	r2 = 1;						\
+	r3 = 0;						\
+	call %[bpf_probe_read_kernel];			\
+l0_%=:	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm(bpf_probe_read_kernel),
+	  __imm_addr(map_a)
+	: __clobber_all);
+}
+```
+
+**Key Changes:**
+1. Added `if r3 >= 48 goto l0_%=;` after loading `r3`.
+2. This ensures `r3` is in [0, 47] before pointer arithmetic.
+3. The access size (1 byte) + max offset (47) = 48, staying within bounds.
+4. Reuses the existing `l0_%=` label for clean error handling.

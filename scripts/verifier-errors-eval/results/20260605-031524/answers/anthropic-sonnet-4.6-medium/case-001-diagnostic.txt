@@ -1,0 +1,27 @@
+The verifier requires that the first argument to `bpf_cpumask_populate` be verifier-known memory (stack, map value, etc.), not an arbitrary integer cast to a pointer. The fix is to use a stack-allocated `struct bpf_cpumask *` (or rather, allocate a properly-sized buffer on the stack) instead of casting an integer.
+
+The smallest fix is to declare a local buffer of the appropriate size on the stack and pass that:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct cpumask local_mask;
+	u64 bits;
+	int ret;
+
+	ret = bpf_cpumask_populate(&local_mask, &bits, sizeof(bits));
+	if (!ret)
+		return 2;
+
+	return 0;
+}
+```
+
+The key change: replace the bogus `(struct bpf_cpumask *)0x123456` with a stack-allocated `struct cpumask local_mask` and pass `&local_mask` as the first argument. This gives the verifier a known stack memory location of the right type/size instead of an integer scalar.

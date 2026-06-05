@@ -1,0 +1,39 @@
+## Explanation
+
+`helper_a()` is a `__noinline` global function. The BPF verifier verifies global functions **independently** of their callers — it does not propagate the caller's knowledge that `&s` is a valid stack pointer. Instead, any pointer-to-memory argument of a global function is given the type `PTR_TO_MEM_OR_NULL` (shown as `mem_or_null` in the log).
+
+That means inside `helper_a`, the verifier assumes `s` may be NULL. When the code does `s->x` (insn `10: r2 = *(u32 *)(r6 +0)`), it dereferences a possibly-NULL pointer, which the verifier rejects:
+
+```
+R6 invalid mem access 'mem_or_null'
+```
+
+The fix the verifier itself suggests: **only dereference on the non-NULL path** (or tell the verifier the argument is never NULL).
+
+## Smallest fix
+
+Add an explicit NULL check at the top of `helper_a`:
+
+```c
+__noinline int helper_a(const struct Item *s)
+{
+	if (!s)
+		return 0;
+	return bpf_get_prandom_u32() < s->x;
+}
+```
+
+After the `if (!s)` branch, the verifier refines `s` to `PTR_TO_MEM` (non-NULL, size 4) on the fall-through path, so `s->x` becomes a provably safe read.
+
+## Alternative
+
+If your libbpf/kernel supports argument tags, you can instead annotate the parameter as non-NULL so the verifier requires/assumes the caller passes a valid pointer:
+
+```c
+__noinline int helper_a(const struct Item *s __arg_nonnull)
+{
+	return bpf_get_prandom_u32() < s->x;
+}
+```
+
+Both approaches eliminate the `mem_or_null` dereference. The explicit `if (!s) return 0;` is the most portable, minimal source change.

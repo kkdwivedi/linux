@@ -1,0 +1,42 @@
+## Explanation of the Failure
+
+The BPF verifier enforces a **combined stack depth limit of 512 bytes** across all nested call frames. The verifier traces the deepest call chain and accumulates each frame's stack usage.
+
+The problematic chain here is:
+
+```
+entry → helper_c → helper_b (→ helper_a uses no stack)
+```
+
+Stack accounting:
+| Frame | Stack used |
+|-------|-----------|
+| `entry` | ~24 bytes (spills return values of `helper_a`/`helper_b` before calling `helper_c`) |
+| `helper_c` | 260 bytes (`volatile char buf[MAX_STACK]`) |
+| `helper_b` | 260 bytes (`volatile char buf[MAX_STACK]`) |
+| **Total** | **544 bytes > 512** |
+
+The parallel chain `entry → helper_c → helper_d` is identical in depth (260 + 260 + 24 = 544).
+
+## Fix
+
+Reduce `MAX_STACK` so the combined stack fits within 512 bytes:
+
+```
+entry(24) + helper_c(MAX_STACK) + helper_b(MAX_STACK) ≤ 512
+⟹ MAX_STACK ≤ 244
+```
+
+Using 240 (a multiple of 8 to avoid alignment surprises) gives a comfortable margin of 504 bytes.
+
+### Patch
+
+```diff
+-#define MAX_STACK 260
++#define MAX_STACK 240
+```
+
+With this change:
+- `entry → helper_c → helper_b`: 24 + 240 + 240 = **504 bytes ≤ 512** ✓  
+- `entry → helper_c → helper_d`: 24 + 240 + 240 = **504 bytes ≤ 512** ✓  
+- All shallower chains remain well within the limit.

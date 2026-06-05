@@ -1,0 +1,33 @@
+## Explanation of the Verifier Failure
+
+The program stores the `ctx` pointer (R1) at stack offset `r10 - 8`, then writes the byte value `0x23` to `r10 - 7` — which is the **second byte** of the same 8-byte stack slot. This partially overwrites the stored pointer. When the 8-byte value is read back from `r10 - 8` into R0, the verifier can no longer track it as the original `ctx` pointer — it becomes an unknown scalar. The subsequent dereference `*(u64*)(r0 + 8)` then fails because R0 is a scalar, not a pointer.
+
+**Causal chain:**
+1. `*(u64*)(r10 - 8) = r1` — stores ctx pointer at fp-8
+2. `*(u8*)(r10 - 7) = r0` — overwrites byte 1 of that pointer, invalidating the tracked type
+3. `r0 = *(u64*)(r10 - 8)` — reads back a scalar (no longer recognized as ctx)
+4. `r0 = *(u64*)(r0 + 8)` — **invalid dereference of scalar**
+
+## Fix
+
+Move the byte write to a stack slot that doesn't overlap with the stored pointer. Changing `r10 - 7` to `r10 - 16` uses a separate stack location:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	*(u64*)(r10 - 8) = r1;				\
+	r0 = 0x23;					\
+	*(u8*)(r10 - 16) = r0;				\
+	r0 = *(u64*)(r10 - 8);				\
+	r0 = *(u64*)(r0 + 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+This preserves the ctx pointer at `r10 - 8` intact, so when it's read back, the verifier still recognizes R0 as a `ctx` pointer and allows the dereference at `r0 + 8`.

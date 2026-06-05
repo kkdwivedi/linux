@@ -1,0 +1,55 @@
+The verifier rejects the program because the first argument to `bpf_cpumask_populate()` is not a verifier-known memory pointer.
+
+In the source:
+
+```c
+struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+...
+ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
+```
+
+the pointer value is a constant integer cast to a pointer. The verifier tracks this as a plain scalar:
+
+```text
+2: (b7) r1 = 1193046 ; R1=0x123456
+...
+R1 type=scalar expected=fp
+```
+
+`bpf_cpumask_populate()` expects its first argument to point to valid `struct cpumask` storage. According to the log, it expects 16 bytes of verifier-known memory. A fake pointer like `0x123456` cannot be proven safe, so the call is rejected.
+
+The smallest likely fix is to pass real stack memory for the `struct cpumask` instead of an invalid constant pointer. Since the verifier says it expects 16 bytes, a local `struct cpumask` object should satisfy the contract, assuming `struct cpumask` is available from `vmlinux.h`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -7,12 +7,12 @@ char _license[] SEC("license") = "GPL";
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
++	struct cpumask mask = {};
+ 	u64 bits;
+ 	int ret;
+ 
+-	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
++	ret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));
+ 	if (!ret)
+ 		return 2;
+ 
+ 	return 0;
+ }
+```
+
+Why this should pass:
+
+- `&mask` is a stack pointer, so the verifier can track it as valid memory.
+- `struct cpumask mask = {};` ensures the stack object is initialized.
+- The object should have at least the 16 bytes required by the kfunc contract.
+- The second argument, `&bits`, was already stack memory and was accepted in the log as `R2=fp-8`.
+
+So the failure is not about `bits` or the return-value check; it is specifically caused by passing an arbitrary scalar as the cpumask pointer.

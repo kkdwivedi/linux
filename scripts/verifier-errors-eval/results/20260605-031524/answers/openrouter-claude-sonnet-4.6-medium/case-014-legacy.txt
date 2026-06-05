@@ -1,0 +1,58 @@
+## Verifier Failure Explanation
+
+The error occurs at instruction 13 (`bpf_probe_read_kernel` call):
+```
+R1 unbounded memory access, make sure to bounds check any such access
+```
+
+**What happens:**
+1. `r0` holds a pointer to a 48-byte map value (`vs=48`)
+2. `r3 = *(u32*)(r0 + 0)` loads the `offset` field — the verifier assigns it a scalar range of `[0, 0xffffffff]`
+3. `r1 += r3` offsets the map value pointer by this unbounded amount
+4. The verifier sees `R1=map_value(...,smin=0,smax=umax=0xffffffff,...)` — an **unbounded pointer offset** that might point far outside the map value
+
+The verifier rejects calling `bpf_probe_read_kernel` with `r1` as the destination buffer because it cannot ensure `r1` stays within the valid 48-byte map value region.
+
+## Fix
+
+Add an upper-bound check on `r3` (the offset) **before** the pointer arithmetic. Since the map value is 48 bytes and we write 1 byte, the offset must be ≤ 47:
+
+```diff
+-	r3 = *(u32*)(r0 + 0);				\
+-	r1 += r3;					\
++	r3 = *(u32*)(r0 + 0);				\
++	if r3 > 47 goto l0_%=;				\
++	r1 += r3;					\
+```
+
+### Complete fixed program
+
+```c
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = 0;						\
+	*(u64*)(r2 + 0) = r1;				\
+	r1 = %[map_a] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l0_%=;				\
+	r1 = r0;					\
+	r3 = *(u32*)(r0 + 0);				\
+	if r3 > 47 goto l0_%=;				\
+	r1 += r3;					\
+	r2 = 1;						\
+	r3 = 0;						\
+	call %[bpf_probe_read_kernel];			\
+l0_%=:	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm(bpf_probe_read_kernel),
+	  __imm_addr(map_a)
+	: __clobber_all);
+}
+```
+
+**Why it works:** After `if r3 > 47 goto l0_%=`, the verifier knows `r3 ∈ [0, 47]`. Therefore `r1 = map_value + r3` is within `[map_value+0, map_value+47]`, and the 1-byte `bpf_probe_read_kernel` destination access is fully contained within the 48-byte map value region.

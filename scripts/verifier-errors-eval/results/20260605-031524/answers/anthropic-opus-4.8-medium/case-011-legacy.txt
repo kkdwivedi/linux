@@ -1,0 +1,38 @@
+## Explanation
+
+The verifier tracks acquired references. Two ringbuf dynptrs are reserved:
+- `ptr1` → reference id=1 (dynptr id=2)
+- `ptr2` → reference id=3 (dynptr id=4)
+
+Each `bpf_ringbuf_reserve_dynptr` acquires a reference that *must* be released on every path by a matching `submit`/`discard`.
+
+In the `if (!sample)` (failure) branch, **both** `ptr1` and `ptr2` are discarded — that path is fine.
+
+But in the success path (`sample != NULL`), only `ptr1` is submitted:
+
+```c
+bpf_ringbuf_submit_dynptr(&ptr1, 0);
+return 0;
+```
+
+`ptr2` is never released here, so when `exit` is reached the verifier still holds `refs=3`:
+
+```
+Unreleased reference id=3 alloc_insn=14
+BPF_EXIT instruction in main prog would lead to reference leak
+```
+
+(The first log line `arg#0 reference type('UNKNOWN ')...` is a separate informational message from probing; the actual fatal error is the unreleased reference.)
+
+## Fix
+
+Release `ptr2` on the success path too. The smallest fix is to submit (or discard) `ptr2` before the final `return`:
+
+```c
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_submit_dynptr(&ptr2, 0);
+
+	return 0;
+```
+
+This ensures every acquired ringbuf dynptr reference is released on all program paths, eliminating the reference leak.

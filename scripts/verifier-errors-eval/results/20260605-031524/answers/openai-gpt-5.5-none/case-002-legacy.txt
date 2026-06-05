@@ -1,0 +1,67 @@
+The verifier failure is a reference leak.
+
+`bpf_cpumask_create()` returns a refcounted `struct bpf_cpumask *`:
+
+```text
+R0=trusted_ptr_or_null_bpf_cpumask(id=2) refs=2
+```
+
+After the NULL check, the verifier tracks `cpumask` as a live referenced object:
+
+```text
+R6=trusted_ptr_bpf_cpumask(id=2) refs=2
+```
+
+Inside `make_object()`, the failure path does release it:
+
+```c
+if (!bpf_cpumask_empty(cast(cpumask))) {
+	bpf_cpumask_release(cpumask);
+	return NULL;
+}
+```
+
+But on the success path, `make_object()` returns the referenced cpumask to the caller. In `entry()` the returned pointer is only passed to `__sink(cpumask)` and then the program exits:
+
+```c
+cpumask = make_object();
+__sink(cpumask);
+
+return 0;
+```
+
+`__sink()` does not consume or release the reference. So when the program exits, the verifier still sees the object allocated by `bpf_cpumask_create()` as unreleased:
+
+```text
+Unreleased reference id=2 alloc_insn=0
+BPF_EXIT instruction in main prog would lead to reference leak
+```
+
+The smallest source-level fix is to release the returned cpumask in `entry()` if it is non-NULL.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..1111111 100644
+--- a/case.c
++++ b/case.c
+@@ -30,8 +30,12 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ 	struct bpf_cpumask *cpumask;
+ 
+ 	cpumask = make_object();
+ 	__sink(cpumask);
++	if (cpumask)
++		bpf_cpumask_release(cpumask);
+ 
+ 	return 0;
+ }
+```
+
+With this change, all paths are balanced:
+
+- `bpf_cpumask_create()` returns `NULL`: no reference to release.
+- `bpf_cpumask_empty()` returns false/non-empty path in `make_object()`: `make_object()` releases before returning `NULL`.
+- success path: `make_object()` returns the live reference, and `entry()` releases it before exit.
+
+That should satisfy the verifier because no referenced `bpf_cpumask` object remains live at `BPF_EXIT`.

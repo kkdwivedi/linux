@@ -1,0 +1,17 @@
+0: R1=ctx() R10=fp0
+; int entry(struct __sk_buff *ctx) @ case.c:241
+0: (bf) r6 = r10                      ; R6=fp0 R10=fp0
+1: (07) r6 += -8                      ; R6=fp-8
+; bpf_local_irq_save(&flags1); @ case.c:246
+2: (bf) r1 = r6                       ; R1=fp-8 R6=fp-8
+3: (85) call bpf_local_irq_save#62664         ; fp-8=ffffffff refs=1
+4: (bf) r7 = r10                      ; R7=fp0 R10=fp0 refs=1
+5: (07) r7 += -16                     ; R7=fp-16 refs=1
+; bpf_local_irq_save(&flags2); @ case.c:247
+6: (bf) r1 = r7                       ; R1=fp-16 R7=fp-16 refs=1
+7: (85) call bpf_local_irq_save#62664         ; fp-16=ffffffff refs=1,2
+; bpf_local_irq_restore(&flags1); @ case.c:248
+8: (bf) r1 = r6                       ; R1=fp-8 R6=fp-8 refs=1,2
+9: (85) call bpf_local_irq_restore#62663
+cannot restore irq state out of order, expected id=2 acquired at insn_idx=7
+processed 10 insns (limit 1000000) max_states_per_insn 0 total_states 1 peak_states 1 mark_read 0

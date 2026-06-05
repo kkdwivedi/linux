@@ -1,0 +1,68 @@
+{
+  "acceptable_fixes": [
+    "Reduce CALLS_50 fan-out or the number of helper layers.",
+    "Pass a stable non-FP-derived argument pattern when possible.",
+    "Replace the generated call tree with a simpler bounded loop or less duplicated call structure."
+  ],
+  "canonical_fix": "Reduce the number of distinct call paths or argument patterns reaching the subprograms, for example by reducing fan-out/depth, consolidating calls, or avoiding many distinct FP-offset arguments.",
+  "case_id": "case-020",
+  "category": "Verifier Limit",
+  "difficulty": "hard",
+  "expected_explanation": "The program creates an enormous number of distinct bpf2bpf call paths and frame-pointer-derived argument patterns. Liveness analysis exceeds its complexity limit while recomputing subprogram liveness across those paths.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-medium/case-020-diagnostic.txt",
+    "case_id": "case-020",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-medium",
+    "prompt_bytes": 4110,
+    "prompt_path": "public/case-020/prompt_diagnostic.md",
+    "prompt_sha256": "cb7344658f86bd080c64c73a9c8ee3095a7de5b045356c00872dce60afb5bfb8",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-medium/case-020-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "ee8f7e49-fe0b-4937-a01d-f094088b4aed",
+    "started_at": "2026-06-05T04:06:25+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation\n\nThe verifier performs liveness analysis (tracking which registers/stack slots are live across call paths) and enforces a limit of **10 001** such analyses. The program builds a call tree of depth 8 (entry \u2192 a \u2192 b \u2192 c \u2192 d \u2192 e \u2192 f \u2192 g), with each level calling the next **50 times**. The total number of distinct call paths reaching `helper_g` is 50\u2077 \u2248 7.8 \u00d7 10\u00b9\u00b9, which vastly exceeds the limit.\n\nThe fix is to reduce the call depth so that the total number of liveness-analysis passes stays below 10 001. With a branching factor of 50:\n\n| Depth (levels of CALLS_50) | Max paths |\n|---|---|\n| 2 | 50\u00b2 = 2 500 \u2714 |\n| 3 | 50\u00b3 = 125 000 \u2716 |\n\nSo we need **at most 2** levels of 50-call functions (plus a leaf that just exits).\n\n## Minimal Patch\n\nKeep `entry \u2192 helper_a \u2192 helper_b`, make `helper_b` a plain leaf, and remove `helper_c` through `helper_g`.\n\n```diff\n-__naked __noinline __used\n-static unsigned long helper_g(void)\n-{\n-\tasm volatile (\n-\t\t\"r0 = 0;\"\n-\t\t\"exit;\"\n-\t\t::: __clobber_all);\n-}\n-\n-__naked __noinline __used\n-static unsigned long helper_f(void)\n-{\n-\tasm volatile (\n-\t\tCALLS_50(helper_g)\n-\t\t\"r0 = 0;\"\n-\t\t\"exit;\"\n-\t\t::: __clobber_all);\n-}\n-\n-__naked __noinline __used\n-static unsigned long helper_e(void)\n-{\n-\tasm volatile (\n-\t\tCALLS_50(helper_f)\n-\t\t\"r0 = 0;\"\n-\t\t\"exit;\"\n-\t\t::: __clobber_all);\n-}\n-\n-__naked __noinline __used\n-static unsigned long helper_d(void)\n-{\n-\tasm volatile (\n-\t\tCALLS_50(helper_e)\n-\t\t\"r0 = 0;\"\n-\t\t\"exit;\"\n-\t\t::: __clobber_all);\n-}\n-\n-__naked __noinline __used\n-static unsigned long helper_c(void)\n-{\n-\tasm volatile (\n-\t\tCALLS_50(helper_d)\n-\t\t\"r0 = 0;\"\n-\t\t\"exit;\"\n-\t\t::: __clobber_all);\n-}\n-\n __naked __noinline __used\n static unsigned long helper_b(void)\n {\n \tasm volatile (\n-\t\tCALLS_50(helper_c)\n \t\t\"r0 = 0;\"\n \t\t\"exit;\"\n \t\t::: __clobber_all);\n }\n```\n\nThis leaves the call graph as:\n\n```\nentry --50x--> helper_a --50x--> helper_b (leaf)\n```\n\nTotal liveness passes \u2264 50 \u00d7 50 = 2 500, well below the 10 001 limit.",
+  "must_mention": [
+    "The failure is verifier liveness complexity, not runtime recursion",
+    "Many call paths or distinct FP offsets drive the limit",
+    "The fix is to simplify the call/argument pattern"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only increases a runtime loop bound",
+    "Adds packet or memory bounds checks",
+    "Suggests releasing a resource"
+  ]
+}

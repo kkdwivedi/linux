@@ -1,0 +1,46 @@
+## What the verifier is complaining about
+
+`R7` holds the packet pointer `p` (loaded from `sk->data`). You validate it against `sk->data_end`, which is correct. But then you call:
+
+```c
+helper_a(sk, 0);   // -> helper_b -> bpf_skb_pull_data(sk, len)
+```
+
+`bpf_skb_pull_data()` can **reallocate / move the packet buffer**. Any helper that can resize the packet causes the verifier to invalidate all existing packet pointers (`pkt`) by turning them into plain scalars. The verifier message says exactly this:
+
+```
+invalidated: R7: packet data may have moved; previous value was pkt at offset 0
+```
+
+So when you later do `*p = 42;`, `R7` is no longer a verified packet pointer — it's a scalar — and the store is rejected.
+
+Note this happens even though `helper_a`/`helper_b` are global functions "assumed valid": the propagation of `bpf_skb_pull_data`'s pkt-invalidating effect happens at the call boundary in the caller.
+
+## The fix
+
+Reload the pointer from `sk->data` **after** the helper call and re-validate it against `sk->data_end` before dereferencing. The bounds check done *before* the call is meaningless because the buffer may have moved.
+
+```c
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	int *p;
+
+	helper_a(sk, 0);
+
+	/* reload and re-validate after the helper that may move packet data */
+	p = (void *)(long)sk->data;
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+### Why this satisfies the verifier
+- After `helper_a()`, `p` is freshly loaded from `sk->data`, so `R7` becomes a `pkt` pointer again with range 0.
+- The subsequent comparison against `sk->data_end` establishes a verified range of at least 4 bytes for `p`.
+- `*p = 42;` now operates on a properly bounded packet pointer, so the store is accepted.
+
+The key principle (also stated in the log's suggestion): any packet pointer must be (re)loaded and (re)validated *after* any call that can resize/move the packet, such as `bpf_skb_pull_data`.

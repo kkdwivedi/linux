@@ -1,0 +1,62 @@
+The failure is caused by `slice_len` being a mutable global in `.data`.
+
+Even though it is initialized as:
+
+```c
+__u32 slice_len = sizeof(struct ethhdr);
+```
+
+the verifier cannot assume it is always `sizeof(struct ethhdr)`. In the log, it loads it as:
+
+```text
+R4=scalar(smin=0,smax=umax=0xffffffff)
+```
+
+So for the helper call:
+
+```c
+bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
+```
+
+the verifier sees:
+
+- `R3 = buffer`, a stack pointer to `char buffer[14]`
+- `R4 = slice_len`, an unbounded `u32`
+
+`bpf_dynptr_slice()` treats args 3/4 as a memory/length pair. Since `R4` could be larger than 14, the helper could access past the end of the stack buffer, so verification fails.
+
+The smallest fix, if the intended length is always the Ethernet header size, is to pass a compile-time bounded size:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -19,7 +19,7 @@ int entry(struct __sk_buff *skb)
+ 
+ 	bpf_dynptr_from_skb(skb, 0, &ptr);
+ 
+-	hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
++	hdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+ 	if (!hdr)
+ 		return SK_DROP;
+ 
+```
+
+That should make `R4` a verifier-known constant `14`, matching the size of `buffer`.
+
+If `slice_len` must remain mutable, then bound a local copy before the call instead:
+
+```c
+__u32 len;
+
+bpf_dynptr_from_skb(skb, 0, &ptr);
+
+len = slice_len;
+if (len > sizeof(buffer))
+	return SK_DROP;
+
+hdr = bpf_dynptr_slice(&ptr, 0, buffer, len);
+```
+
+The key requirement is that the length passed with `buffer` must have verifier-known upper bound `<= sizeof(buffer)`.

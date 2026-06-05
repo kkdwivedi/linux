@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Swap the two unlock calls on the success path.",
+    "Avoid taking lock_b while lock_a is still held if nesting is unnecessary."
+  ],
+  "canonical_fix": "On the path where both locks are held, call bpf_res_spin_unlock(&lock_b) before bpf_res_spin_unlock(&lock_a).",
+  "case_id": "case-018",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program acquires lock_a and then lock_b, but releases lock_a before lock_b on the success path. Nested resource spin locks must be unlocked in last-in, first-out order.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-018-legacy.txt",
+    "case_id": "case-018",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 1656,
+    "prompt_path": "public/case-018/prompt_legacy.md",
+    "prompt_sha256": "f85594106276b08f72d5a03ad0c0892a8771dbe55514dd329b7aff0246cc5b64",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-018-legacy.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "80584808-f0f8-4905-9676-d440efd335fd",
+    "started_at": "2026-06-05T03:21:09+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "Looking at the verifier log, the issue is clear: the verifier is detecting that `bpf_res_spin_unlock` calls are being made out of order. The error message \"bpf_res_spin_unlock cannot be out of order\" indicates that the BPF verifier enforces strict lock ordering to prevent potential deadlocks and ensure proper lock semantics.\n\nIn the current code, the locks are acquired in this order:\n1. `lock_a` (first)\n2. `lock_b` (second)\n\nBut when unlocking, the code does:\n1. Unlock `lock_a` (first acquired, first released)\n2. Unlock `lock_b` (second acquired, second released)\n\nWait, that's actually the correct order for nested locks. Let me re-read the code more carefully.\n\nLooking at the code flow:\n- Lock A succeeds\n- Lock B fails \u2192 unlock A and return\n- If both succeed \u2192 unlock A then unlock B\n\nThe issue is in the error handling path where if `bpf_res_spin_lock(&lock_b)` fails, we unlock `lock_a` and return. But the verifier is tracking that we're unlocking in an order that doesn't match the acquisition order tracking.\n\nActually, re-reading the error more carefully: the problem is that we're calling `bpf_res_spin_unlock` on `lock_a` at instruction 10, but the verifier expects locks to be unlocked in LIFO (last-in, first-out) order for safety reasons.\n\nThe fix is to ensure that we always unlock in the reverse order of locking, even in error paths. Since we acquire A then B, we should release B then A. But in the error case where B fails to lock, we should not have locked B, so we can only unlock A.\n\nHowever, looking at this more carefully, the real issue might be that the verifier is being overly strict about the order. But the actual problem is that we're trying to unlock `lock_a` after having attempted (and failed) to lock `lock_b`.\n\nThe cleanest fix is to restructure the code to make the locking pattern clearer to the verifier:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nstruct bpf_res_spin_lock lock_a __hidden SEC(\".data.A\");\nstruct bpf_res_spin_lock lock_b __hidden SEC(\".data.B\");\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tint ret_a, ret_b;\n\n\tret_a = bpf_res_spin_lock(&lock_a);\n\tif (ret_a)\n\t\treturn 0;\n\t\n\tret_b = bpf_res_spin_lock(&lock_b);\n\tif (ret_b) {\n\t\tbpf_res_spin_unlock(&lock_a);\n\t\treturn 0;\n\t}\n\t\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n\treturn 0;\n}\n```\n\nThe key change is unlocking in reverse order: B first, then A, which is the proper nested lock release pattern. This should satisfy the verifier's ordering requirements.",
+  "must_mention": [
+    "lock_b was acquired after lock_a",
+    "Unlock order must be LIFO",
+    "The success path unlocks the wrong lock first"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Changes only the error path where lock_b acquisition fails",
+    "Drops one unlock and leaks a held lock",
+    "Confuses spin lock order with IRQ flag variable order"
+  ]
+}

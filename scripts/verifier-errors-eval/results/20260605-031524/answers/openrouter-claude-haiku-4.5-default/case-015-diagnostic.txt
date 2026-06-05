@@ -1,0 +1,42 @@
+## Explanation of the Verifier Failure
+
+The verifier is rejecting this program because:
+
+1. **Initial state**: `R7` holds `sk->data` (a packet pointer with `pkt(r=0)`)
+2. **After the bounds check** (line 5): The verifier knows that `p + 1` is within bounds, so `R7` remains valid
+3. **After `helper_a()` call** (line 8): The verifier **invalidates R7** because:
+   - `helper_a()` calls `helper_b()` which calls `bpf_skb_pull_data()`
+   - `bpf_skb_pull_data()` can modify packet data pointers
+   - The verifier conservatively assumes packet pointers may be stale after helper calls that can adjust packet boundaries
+   - R7 is downgraded from `pkt(r=0)` to a scalar
+4. **At the dereference** (line 10): `*p = 42` attempts to dereference `R7`, but it's now a scalar, causing the "invalid mem access" error
+
+## Root Cause
+
+The packet pointer `p` is invalidated by the helper call because `bpf_skb_pull_data()` can move packet data. The verifier requires re-validation of packet pointers after such operations.
+
+## Fix
+
+Reload and re-validate the packet pointer after the helper call:
+
+```c
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	int *p = (void *)(long)sk->data;
+
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	helper_a(sk, 0);
+	
+	// Reload and re-validate after helper call
+	p = (void *)(long)sk->data;
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+This re-establishes that `p` is a valid packet pointer before dereferencing it, satisfying the verifier's requirement that packet pointers be re-validated after helper calls that can invalidate them.

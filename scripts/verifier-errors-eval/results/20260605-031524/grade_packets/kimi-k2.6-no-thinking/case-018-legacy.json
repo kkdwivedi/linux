@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Swap the two unlock calls on the success path.",
+    "Avoid taking lock_b while lock_a is still held if nesting is unnecessary."
+  ],
+  "canonical_fix": "On the path where both locks are held, call bpf_res_spin_unlock(&lock_b) before bpf_res_spin_unlock(&lock_a).",
+  "case_id": "case-018",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program acquires lock_a and then lock_b, but releases lock_a before lock_b on the success path. Nested resource spin locks must be unlocked in last-in, first-out order.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-no-thinking/case-018-legacy.txt",
+    "case_id": "case-018",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-no-thinking",
+    "prompt_bytes": 1656,
+    "prompt_path": "public/case-018/prompt_legacy.md",
+    "prompt_sha256": "f85594106276b08f72d5a03ad0c0892a8771dbe55514dd329b7aff0246cc5b64",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-no-thinking/case-018-legacy.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "disabled"
+    },
+    "run_id": "028a93b1-7afd-4155-91ec-d57bffe58c97",
+    "started_at": "2026-06-05T03:18:06+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "I'll analyze this verifier failure step by step.\n\n## Verifier Failure Analysis\n\nLooking at the verifier log, the failure occurs at instruction 10 with the error:\n```\nbpf_res_spin_unlock cannot be out of order\n```\n\nLet me trace through the execution path:\n\n1. **Instruction 0-2**: `bpf_res_spin_lock(&lock_a)` is called, succeeds (R0=0)\n2. **Instruction 3**: Branch not taken (R0=0, so we fall through)\n3. **Instruction 4-6**: `bpf_res_spin_lock(&lock_b)` is called, succeeds (R0=0)\n4. **Instruction 7**: `w6 = w0` (saves return value 0 into R6)\n5. **Instruction 8-10**: Attempts `bpf_res_spin_unlock(&lock_a)` \u2014 **FAILS**\n\nThe problem is that the verifier tracks lock acquisition state per-instruction, not per-register. When we reach instruction 8-10, the verifier sees we're trying to unlock `lock_a`, but from its perspective, the most recently acquired lock is `lock_b` (at instruction 6). The verifier enforces strict **LIFO (Last-In-First-Out)** ordering for spin locks \u2014 you must unlock the most recently acquired lock first.\n\n## The Bug\n\nThe source code unlocks `lock_a` before `lock_b`:\n```c\nbpf_res_spin_unlock(&lock_a);  // wrong: lock_b was acquired after lock_a\nbpf_res_spin_unlock(&lock_b);\n```\n\nBut locks must be released in reverse order of acquisition. Since `lock_a` was acquired first, then `lock_b`, we must unlock `lock_b` first, then `lock_a`.\n\n## The Fix\n\nSwap the unlock order to maintain LIFO ordering:\n\n```patch\n--- a/case.c\n+++ b/case.c\n@@ -180,8 +180,8 @@ int entry(struct __sk_buff *ctx)\n \tif (bpf_res_spin_lock(&lock_b)) {\n \t\tbpf_res_spin_unlock(&lock_a);\n \t\treturn 0;\n \t}\n-\tbpf_res_spin_unlock(&lock_a);\n \tbpf_res_spin_unlock(&lock_b);\n+\tbpf_res_spin_unlock(&lock_a);\n \treturn 0;\n }\n```\n\nThis ensures:\n- `lock_a` acquired first\n- `lock_b` acquired second\n- `lock_b` unlocked first (LIFO)\n- `lock_a` unlocked last\n\nThis matches the error path too: when `bpf_res_spin_lock(&lock_b)` fails, we only have `lock_a` held, so unlocking just `lock_a` is correct.",
+  "must_mention": [
+    "lock_b was acquired after lock_a",
+    "Unlock order must be LIFO",
+    "The success path unlocks the wrong lock first"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Changes only the error path where lock_b acquisition fails",
+    "Drops one unlock and leaks a held lock",
+    "Confuses spin lock order with IRQ flag variable order"
+  ]
+}

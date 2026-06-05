@@ -1,0 +1,56 @@
+## What the verifier is complaining about
+
+This isn't a "bad instruction" or "unbounded loop" error. The program is a deliberately fan‑out call tree:
+
+```
+entry → helper_a (×50) → helper_b (×50) → helper_c (×50)
+       → helper_d (×50) → helper_e (×50) → helper_f (×50) → helper_g (×50)
+```
+
+Each `CALLS_50()` expands to 50 `call` instructions, and the helpers are chained 7 deep (`a→b→c→d→e→f→g`). Because the verifier's **liveness analysis** recomputes each subprogram's stack/register read information for every distinct *call path* that reaches it, the work grows multiplicatively:
+
+```
+50 + 50^2 + 50^3 + ... + 50^7   ≈  50^7
+```
+
+That is astronomically larger than the verifier's cap, so it bails out:
+
+```
+liveness analysis exceeded complexity limit (10001 calls)
+Verification failed: Verifier Limit: Limit exceeded
+```
+
+The log shows `helper_g` (the deepest leaf) being re-analyzed over and over (`subprog#7: analyzing (depth 7)...`) — exactly the symptom of the same leaf being reached through exponentially many call paths.
+
+So the failure is purely a *complexity / scalability* limit, not a logic bug. The fix is to keep the same structure but cut the branching factor so the total number of liveness recomputations stays under the 10001 limit.
+
+## Smallest fix
+
+Reduce the per‑level fan‑out. With branching factor `b` over 7 levels you need
+
+```
+b + b^2 + ... + b^7  <  10001
+```
+
+`b = 3` gives `3+9+27+81+243+729+2187 = 3279`, comfortably under the limit, while `b = 4` already overflows. So shrink each level to 3 calls (any value ≤3 works).
+
+The minimal one‑line edit is to redefine the fan‑out macro:
+
+```c
+/* was: 50 calls per level -> 50^7 liveness recomputations */
+#undef CALLS_50
+#define CALLS_50(fn) CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)
+```
+
+i.e. replace
+
+```c
+#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
+```
+
+with a definition that expands to only 3 (or fewer) `CALL_AT(...)` invocations.
+
+### Why this satisfies the verifier
+The call graph (entry + 7 helper levels, each `__noinline`) is preserved, so the test still exercises deep nested subprogram calls and liveness propagation across many call paths. But by dropping the branching factor from 50 to 3, the number of liveness recomputations drops from ~`50^7` to ~`3^7`, which is below the 10001‑call complexity cap, letting verification complete.
+
+(Equivalently, you could keep 50 calls per level but drop several of the helper levels so the depth is small enough; the key is the product of branching×depth, not any single instruction.)

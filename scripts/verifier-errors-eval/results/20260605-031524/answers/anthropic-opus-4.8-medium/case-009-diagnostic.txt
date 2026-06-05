@@ -1,0 +1,53 @@
+## What the verifier is complaining about
+
+At the end, `entry()` does:
+
+```c
+acquired = bpf_task_acquire(value->task);
+```
+
+`value->task` is a kptr field. When the verifier loads it:
+
+```
+3: (79) r1 = *(u64 *)(r0 +0)   ; R1=rcu_ptr_or_null_task_struct(id=10)
+```
+
+the result type is **`rcu_ptr_or_null_task_struct`** — i.e. it may be NULL. `bpf_task_acquire()` is a kfunc whose first argument must be a *non-NULL* trusted pointer (`KF_TRUSTED_ARGS`). Passing a possibly-NULL pointer violates that contract, so the verifier rejects the call:
+
+```
+Possibly NULL pointer passed to trusted R1
+```
+
+The kptr loaded from the map is legitimately allowed to be NULL (nothing guaranteed `value->task` was set), and the code never tests it before passing it to the acquire kfunc.
+
+## The fix
+
+Load the kptr into a local variable, NULL-check it, and only call `bpf_task_acquire()` on the non-NULL path. This is exactly the verifier's suggestion ("Add a NULL check and call the kfunc only on the non-NULL path").
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct task_struct *acquired, *kptr;
+	struct map_value *value;
+
+	value = helper_a(task);
+	if (!value)
+		return 0;
+
+	kptr = value->task;
+	if (!kptr)
+		return 0;
+
+	acquired = bpf_task_acquire(kptr);
+	if (!acquired)
+		return 0;
+
+	bpf_task_release(acquired);
+	return 0;
+}
+```
+
+After `if (!kptr) return 0;`, the verifier narrows `kptr` from `rcu_ptr_or_null_task_struct` to a non-NULL `rcu_ptr_task_struct`, which satisfies the trusted/non-NULL requirement of `bpf_task_acquire()`, and verification proceeds.
+
+(Equivalently, you could inline the test as `if (!value->task) return 0;` then `bpf_task_acquire(value->task);`, but storing into a local and checking that is the clearest minimal change.)

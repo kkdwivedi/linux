@@ -1,0 +1,115 @@
+Looking at this eBPF program, I need to analyze why the verifier rejects it and find the smallest fix.
+
+## Verifier Failure Analysis
+
+The verifier log states: `recursive call from helper_a() to helper_a()`
+
+The eBPF verifier **does not support recursive function calls**. In the `helper_a` function, there's a direct recursive call:
+
+```
+l0_%=:	call helper_a;    // helper_a calls itself!
+```
+
+This is a classic recursive pattern where `helper_a` increments `r1`, and if `r1 < 4`, it calls itself again. The eBPF verifier explicitly forbids this because:
+1. Recursion makes static analysis of maximum stack depth impossible
+2. It could lead to unbounded execution
+3. The verifier cannot guarantee program termination
+
+## The Fix
+
+The program needs to be restructured to eliminate recursion. Since this appears to be a loop-like pattern (increment counter until it reaches 4), we should replace the recursive call with a loop structure using backward jumps.
+
+However, eBPF also has constraints on loops. Traditional backward jumps were historically restricted, but bounded loops are now supported in newer kernels with proper structure.
+
+The simplest fix is to **unroll the loop** — replace the recursion with sequential code that does the same operation a fixed number of times without any calls.
+
+Looking at the logic: `helper_a` increments `r1` and repeats until `r1 >= 4`. Starting from 0 (set in `entry`), this would execute 4 times total (r1 becomes 1, 2, 3, 4, then exits).
+
+Since the recursion depth is bounded (at most 4 calls including the initial call from `entry`), we can unroll this:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r1 = 0;						\
+	/* unrolled: helper_a called 4 times, but last just returns */ \
+	/* iteration 1 */				\
+	r1 += 1;					\
+	r0 = r1;					\
+	if r1 >= 4 goto l_done_%=;			\
+	/* iteration 2 */				\
+	r1 += 1;					\
+	r0 = r1;					\
+	if r1 >= 4 goto l_done_%=;			\
+	/* iteration 3 */				\
+	r1 += 1;					\
+	r0 = r1;					\
+	if r1 >= 4 goto l_done_%=;			\
+	/* iteration 4 */				\
+	r1 += 1;					\
+	r0 = r1;					\
+l_done_%=:						\
+	exit;						\
+"	::: __clobber_all);
+}
+
+/* helper_a removed - no longer needed */
+```
+
+Wait — let me re-check. The original `entry` calls `helper_a` once. Then `helper_a` does `r1 += 1`, sets `r0 = r1`, and if `r1 < 4`, calls itself again.
+
+So from `entry` with `r1 = 0`:
+- Call helper_a: r1=1, r0=1, r1<4 so recurse
+- Call helper_a: r1=2, r0=2, r1<4 so recurse
+- Call helper_a: r1=3, r0=3, r1<4 so recurse
+- Call helper_a: r1=4, r0=4, r1>=4 so exit
+- Returns... but wait, `exit` terminates the program, not returns from function!
+
+Actually, in eBPF, `exit` from a function called via `call` returns to the caller. But `exit` from the main program exits. Let me re-read...
+
+In eBPF, `exit` instruction: if called from a function, it returns. If in main program, it exits. Actually no — `exit` always returns from the current frame, and if it's the main frame, the program terminates.
+
+Hmm, but the verifier says "recursive call" — the issue is purely the recursive call pattern. The `exit` in `helper_a` when `r1 >= 4` would return to the previous caller, but there are 3 nested calls. Actually with `exit` in the tail position when `r1 >= 4`, and `exit` after the recursive call... wait, let me trace again.
+
+Actually in eBPF, `exit` returns from the current function. So:
+- `helper_a` with r1=4: hits `exit`, returns to caller (previous `helper_a`)
+- That caller had: `call helper_a; exit;` — so after `call helper_a` returns, it hits `exit`, returns to its caller, etc.
+
+So it's proper tail-call-like but using regular calls with returns.
+
+The simplest fix: **replace the recursive call with a bounded loop using backward jump**:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r1 = 0;						\
+	call helper_a;					\
+	exit;						\
+"	::: __clobber_all);
+}
+
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l0_%=:							\
+	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l0_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+This converts the recursive call into a **backward jump loop**, which modern eBPF verifiers support (with bounded loop analysis). The logic is identical: increment r1 until it's >= 4, then exit.
+
+This is the smallest fix: remove the `call helper_a` after `l0_%=:` and instead jump back to `l0_%=:` directly, making it a loop rather than recursion.

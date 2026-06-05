@@ -1,0 +1,57 @@
+The verifier is tracking the lifetime of IRQ-disabled regions created by `bpf_local_irq_save()` / `bpf_local_irq_restore()`.
+
+In the program:
+
+```c
+bpf_local_irq_save(&flags1);   // acquire IRQ state id=1
+bpf_local_irq_save(&flags2);   // acquire IRQ state id=2, nested inside id=1
+bpf_local_irq_restore(&flags1); // tries to restore id=1 first
+bpf_local_irq_restore(&flags2);
+```
+
+The second save is nested inside the first one, so the verifier requires the restores to happen in strict last-in, first-out order. At the first restore, the currently active IRQ state is `flags2`, but the program restores `flags1`, so verification fails with:
+
+```text
+cannot restore irq state out of order, expected id=2 acquired at insn_idx=7
+```
+
+The smallest fix is to restore `flags2` first, then `flags1`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -8,8 +8,8 @@ int entry(struct __sk_buff *ctx)
+ 
+ 	bpf_local_irq_save(&flags1);
+ 	bpf_local_irq_save(&flags2);
+-	bpf_local_irq_restore(&flags1);
+ 	bpf_local_irq_restore(&flags2);
++	bpf_local_irq_restore(&flags1);
+ 	return 0;
+ }
+```
+
+Fixed source:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	unsigned long flags1, flags2;
+
+	bpf_local_irq_save(&flags1);
+	bpf_local_irq_save(&flags2);
+	bpf_local_irq_restore(&flags2);
+	bpf_local_irq_restore(&flags1);
+	return 0;
+}
+```
+
+This satisfies the verifier because the nested IRQ state is restored in reverse acquisition order.

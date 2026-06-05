@@ -1,0 +1,92 @@
+The verifier is rejecting the program because `ptr2` is a ringbuf dynptr reservation that is not released on the successful path.
+
+`bpf_ringbuf_reserve_dynptr()` creates an owned reference that must be consumed by either:
+
+- `bpf_ringbuf_submit_dynptr()`, or
+- `bpf_ringbuf_discard_dynptr()`
+
+In this program:
+
+```c
+bpf_ringbuf_reserve_dynptr(..., &ptr1);
+bpf_ringbuf_reserve_dynptr(..., &ptr2);
+```
+
+both `ptr1` and `ptr2` acquire verifier-tracked references.
+
+On the `!sample` path, both are discarded:
+
+```c
+bpf_ringbuf_discard_dynptr(&ptr1, 0);
+bpf_ringbuf_discard_dynptr(&ptr2, 0);
+return 0;
+```
+
+That path is fine.
+
+But on the successful path, only `ptr1` is submitted:
+
+```c
+bpf_ringbuf_submit_dynptr(&ptr1, 0);
+
+return 0;
+```
+
+`ptr2` is still live at exit, so the verifier reports:
+
+```text
+Unreleased reference id=3 alloc_insn=14
+```
+
+That corresponds to the second reservation:
+
+```c
+bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);
+```
+
+The smallest fix is to release `ptr2` before returning on the success path. Since `ptr2` is unused, discard it.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -25,6 +25,7 @@ int entry(void *ctx)
+ 	}
+ 
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
++	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+ 
+ 	return 0;
+ }
+```
+
+Resulting function:
+
+```c
+SEC("?raw_tp")
+int entry(void *ctx)
+{
+	struct bpf_dynptr ptr1, ptr2;
+	struct sample *sample;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);
+
+	sample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));
+	if (!sample) {
+		bpf_ringbuf_discard_dynptr(&ptr1, 0);
+		bpf_ringbuf_discard_dynptr(&ptr2, 0);
+		return 0;
+	}
+
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+
+	return 0;
+}
+```
+
+This should satisfy the verifier because both owned dynptr reservations are now released on every exit path.

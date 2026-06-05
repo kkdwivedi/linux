@@ -1,0 +1,20 @@
+The verifier error indicates that the program acquires a dynptr resource (`ptr2`) at the second `bpf_ringbuf_reserve_dynptr` call but fails to release it on the execution path where `sample` is non-null. In that path, only `ptr1` is submitted, leaving `ptr2` unreleased before program exit.
+
+The minimal fix is to release `ptr2` by discarding it after submitting `ptr1` in the non-null branch. This ensures both dynptrs are properly released on all paths.
+
+Here's the patch:
+
+```c
+--- original.c
++++ fixed.c
+@@ -107,6 +107,7 @@
+ 	}
+ 
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
++	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+ 
+ 	return 0;
+ }
+```
+
+This change adds a single line to discard `ptr2` after submitting `ptr1`, satisfying the verifier's requirement that all acquired resources must be released before program exit.

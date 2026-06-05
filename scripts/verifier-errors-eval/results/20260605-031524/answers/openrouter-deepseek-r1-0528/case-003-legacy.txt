@@ -1,0 +1,25 @@
+The verifier error occurs because storing a byte at `r10 - 7` corrupts the context pointer stored at `r10 - 8`. The context pointer (originally in `r1`) is saved as an 8-byte value at `[r10 - 8]` (covering bytes from `r10-8` to `r10-1`). The byte store at `r10 - 7` overwrites the first byte of this 8-byte slot, causing the verifier to lose track of the pointer type. When the context pointer is later loaded and dereferenced (`*(u64*)(r0 + 8)`), the verifier sees `r0` as a scalar (unknown value) rather than a valid pointer, leading to "invalid mem access".
+
+### Fix
+Move the byte store to a non-overlapping stack location (`r10 - 16`) to avoid corrupting the context pointer. This uses a separate stack slot, preserving the pointer type.
+
+```patch
+--- a/prog.c
++++ b/prog.c
+@@ -5,7 +5,7 @@ SEC("socket")
+ {
+ 	asm volatile ("					\
+ 	*(u64*)(r10 - 8) = r1;				\
+-	*(u8*)(r10 - 7) = r0;				\
++	*(u8*)(r10 - 16) = r0;				\
+ 	r0 = 0x23;					\
+ 	r0 = *(u64*)(r10 - 8);				\
+ 	r0 = *(u64*)(r0 + 8);				\
+```
+
+### Explanation
+- The context pointer stored at `r10 - 8` remains intact.
+- The byte store now uses a separate stack slot (`r10 - 16`), avoiding type corruption.
+- The context load at `r10 - 8` retains its pointer type, allowing safe dereference.
+
+This minimal change preserves program behavior while satisfying the verifier's type tracking.

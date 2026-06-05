@@ -1,0 +1,36 @@
+## Explanation of the Verifier Failure
+
+The BPF verifier is enforcing a **512-byte stack limit across the entire call chain**. The problem is:
+
+1. Each function allocates a 260-byte local buffer (`volatile char buf[MAX_STACK]`)
+2. The call chain `entry -> helper_c -> helper_b -> helper_a` has **3 nested function calls**
+3. Combined stack usage: 3 functions × 260 bytes = **780 bytes** (worst case along some paths)
+4. This exceeds the 512-byte kernel limit
+
+The verifier specifically identifies that the chain `entry -> helper_c -> helper_b` reaches **544 bytes**, which is already over the limit.
+
+## Root Cause
+
+The issue is the **large stack allocation (260 bytes) replicated across multiple nested calls**. The `MAX_STACK` value of 260 is too large for a program with this call depth.
+
+## Solution
+
+The smallest fix is to **reduce `MAX_STACK` to a value that allows the deepest call chain to stay under 512 bytes**. 
+
+The deepest chain appears to be: `entry -> helper_c -> helper_b -> helper_a` (3 nested calls with buffers)
+- 512 / 3 ≈ 170 bytes per function maximum
+- Using a safe margin: 160 bytes
+
+Alternatively, if 260 bytes is truly necessary, we could reduce call depth, but reducing the buffer size is simpler and more direct.
+
+## Patch
+
+```c
+#define MAX_STACK 160
+```
+
+**Why this works:** 
+- 3 calls × 160 bytes = 480 bytes, which is under the 512-byte limit
+- This allows all nested call chains to pass verification while maintaining reasonable buffer sizes
+
+If 260 bytes is critical, the alternative would be to inline some functions or restructure the call graph to reduce nesting depth, but reducing `MAX_STACK` to 160 is the minimal, most direct fix.

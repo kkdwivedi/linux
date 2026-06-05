@@ -1,0 +1,47 @@
+## Explanation
+
+`bpf_dynptr_slice(&ptr, off, buffer, len)` takes a memory/length pair: `buffer` (R3) and `len` (R4). The verifier requires that `len` is provably no larger than the object `buffer` points to.
+
+Here `len` comes from `slice_len`, which is a global `__u32` loaded from a map value:
+
+```
+11: (61) r4 = *(u32 *)(r1 +0)   ; R4=scalar(smin=0,smax=umax=0xffffffff,...)
+```
+
+So R4 is unbounded (0 … 0xffffffff), while `buffer` is only `sizeof(struct ethhdr)` (14) bytes on the stack. The verifier therefore rejects the call:
+
+```
+R4 unbounded memory access, use 'var &= const' or 'if (var < const)'
+R3 and R4 memory, len pair leads to invalid memory access
+```
+
+The pointer itself is fine; the problem is that the length is not bounded to the size of `buffer`.
+
+## Fix
+
+Bound `slice_len` to the buffer size before the call, so the verifier knows `len <= sizeof(buffer)`:
+
+```c
+SEC("?tc")
+int entry(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+	struct ethhdr *hdr;
+	char buffer[sizeof(*hdr)] = {};
+
+	bpf_dynptr_from_skb(skb, 0, &ptr);
+
+	if (slice_len > sizeof(buffer))
+		return SK_DROP;
+
+	hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
+	if (!hdr)
+		return SK_DROP;
+
+	return SK_PASS;
+}
+```
+
+The `if (slice_len > sizeof(buffer)) return SK_DROP;` guard gives R4 a proven upper bound (`umax = 14`) that fits within `buffer`, satisfying the memory/length-pair contract.
+
+(Equivalently you could write `slice_len &= (sizeof(buffer) - 1);` if the size were a power of two, or simply pass the constant `sizeof(buffer)` if a fixed length is acceptable.)

@@ -1,0 +1,80 @@
+## What the verifier is telling you
+
+The decisive line is:
+
+```
+4: (85) call bpf_cpumask_populate#61745
+R1 type=scalar expected=fp
+```
+
+`R1` holds the first argument of `bpf_cpumask_populate()` — the destination
+cpumask. In the program that register was loaded with a constant:
+
+```
+2: (b7) r1 = 1193046     ; 0x123456
+```
+
+i.e. it is a **scalar**, not a pointer. The verifier needs that argument to be a
+real pointer (the `expected=fp,...` list is the set of pointer types it will
+accept — stack frame pointer, packet, map value, etc.). A bare integer cast to a
+pointer (`(struct bpf_cpumask *)0x123456`) is rejected before the call is ever
+allowed.
+
+So this isn’t a subtle memory-size or bounds issue with `&bits`/`sizeof(bits)`
+(that argument, `R2=fp-8`, `R3=8`, passed fine). The failure is simply that the
+destination cpumask is a fabricated/invalid scalar pointer.
+
+## Why it fails
+
+`bpf_cpumask_populate(struct cpumask *cpumask, void *src, size_t src__sz)`
+requires `cpumask` to be a verifiably valid pointer. `0x123456` carries no type
+and no provenance, so the verifier marks it `scalar` and refuses the helper call.
+
+## Smallest fix to make it verify
+
+Give the first argument a genuine, verifier-tracked cpumask pointer instead of a
+hand-made address. Allocate one with `bpf_cpumask_create()` (and release it):
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *mask;
+	u64 bits;
+	int ret;
+
+	mask = bpf_cpumask_create();
+	if (!mask)
+		return 1;
+
+	ret = bpf_cpumask_populate((struct cpumask *)mask, &bits, sizeof(bits));
+
+	bpf_cpumask_release(mask);
+
+	if (!ret)
+		return 2;
+	return 0;
+}
+```
+
+Now `R1` is a `PTR_TO_BTF_ID` (a trusted, allocated `bpf_cpumask`) rather than a
+scalar, which satisfies the argument-type check and the program passes
+verification.
+
+## Note
+
+If this was actually intended as a *negative* selftest (the variable is literally
+named `invalid`, and `0x123456` is the classic "bogus pointer" sentinel), then
+nothing is wrong with the program at all — the log shown *is* the expected
+rejection. In that case the “repair” is not in the BPF C code but in the test
+harness: tag the program with the matching expectation, e.g.
+
+```c
+__failure __msg("R1 type=scalar expected=fp")
+```
+
+so the framework treats this exact verifier message as the success criterion.
+
+Which of the two you want depends on whether the test is meant to be a success
+case (use the `bpf_cpumask_create()` patch) or a failure case (add the
+`__failure`/`__msg` annotations matching the log).

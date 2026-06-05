@@ -1,0 +1,42 @@
+## Explanation
+
+The verifier rejected the program with:
+
+```
+program of this type cannot use helper bpf_ktime_get_coarse_ns#160
+```
+
+This is not a register/state-tracking error — it's a **helper-availability** check. The helper `bpf_ktime_get_coarse_ns()` is **not exposed to tracing program types** like `kprobe`.
+
+The reason is contextual safety: kprobe (and other tracing) programs can run in NMI context, where the "coarse" time source isn't safe to read. So `bpf_tracing_func_proto()` (the func-proto resolver for `BPF_PROG_TYPE_KPROBE`) does not return a proto for `bpf_ktime_get_coarse_ns`, and the verifier rejects the call immediately at the first instruction.
+
+By contrast, the generic `bpf_base_func_proto()` (used by socket/network program types) *does* allow `bpf_ktime_get_coarse_ns` (gated only by `bpf_capable()`).
+
+## Fix
+
+The smallest source-level change is to attach the program to a type that is permitted to call this helper — e.g. a socket filter or network type — instead of `kprobe`:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_coarse_ns];		\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_coarse_ns)
+	: __clobber_all);
+}
+```
+
+Only the `SEC("kprobe")` → `SEC("socket")` line changes. With a socket-type program the helper resolves via `bpf_base_func_proto()`, the call is accepted, and the rest of the program (`r0 = 0; exit;`) verifies trivially.
+
+(Other acceptable section choices that allow this helper include `SEC("tc")`/`SEC("cgroup_skb")`, etc. — any non-tracing type whose func-proto resolver falls back to `bpf_base_func_proto`.)
+
+If instead the intent of this test is to *demonstrate* that kprobe programs cannot use the helper, then the program isn't meant to pass and should be moved to the failure/`__failure __msg(...)` test harness; but as a pass-the-verifier repair, switching the program type is the minimal fix.

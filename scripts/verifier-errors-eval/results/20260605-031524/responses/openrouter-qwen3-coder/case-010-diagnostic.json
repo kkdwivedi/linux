@@ -1,0 +1,109 @@
+{
+  "answer_text": "Looking at the verifier log, the issue is in `helper_b` function where it tries to call `helper_c(val, skb + 1)`. The problem is that `skb + 1` modifies the context pointer by adding 192 bytes (the size of `struct __sk_buff`), and the verifier disallows dereferencing modified context pointers.\n\nThe error occurs because:\n1. `helper_b` receives `skb` as a context pointer\n2. It stores `skb` in register `r6` \n3. It adds 192 to `r6` (line 21: `r6 += 192`)\n4. It tries to pass this modified pointer to `helper_c` (line 23-24)\n5. The verifier rejects this because context pointers must be used in their original form\n\nThe fix is to pass the original `skb` pointer to `helper_c` instead of the modified one. Looking at the code, it seems like the intention was to pass the original `skb` parameter, not `skb + 1`.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\n__attribute__((noinline))\nint helper_a(struct __sk_buff *skb)\n{\n\treturn skb->len;\n}\n\nint helper_c(int val, struct __sk_buff *skb);\n\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n\n__attribute__((noinline))\nint helper_c(int val, struct __sk_buff *skb)\n{\n\treturn skb->ifindex * val;\n}\n\nSEC(\"tc\")\nint entry(struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_b(2, skb) + helper_c(3, skb);\n}\n```\n\nThe key change is in `helper_b` function, line 19: changing `helper_c(val, skb + 1)` to `helper_c(val, skb)`. This removes the invalid pointer arithmetic on the context pointer and passes the original context pointer as intended.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-010-diagnostic.txt",
+    "case_id": "case-010",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 3922,
+    "prompt_path": "public/case-010/prompt_diagnostic.md",
+    "prompt_sha256": "c9975b0bd7d86b4edddce6166024784483798109ab83deeb5185dbddd366cae7",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-010-diagnostic.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "ad288779-9ab5-4d59-8119-0b2a111b3585",
+    "started_at": "2026-06-05T03:21:00+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00027016000000000003,
+    "output_cost_usd": 0.000792,
+    "total_cost_usd": 0.00106216
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1228,
+    "output_tokens": 440,
+    "raw_usage": {
+      "completion_tokens": 440,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.00114864,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.000682,
+        "upstream_inference_cost": 0.00114864,
+        "upstream_inference_prompt_cost": 0.00046664
+      },
+      "is_byok": false,
+      "prompt_tokens": 1228,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1668
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1668
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Looking at the verifier log, the issue is in `helper_b` function where it tries to call `helper_c(val, skb + 1)`. The problem is that `skb + 1` modifies the context pointer by adding 192 bytes (the size of `struct __sk_buff`), and the verifier disallows dereferencing modified context pointers.\n\nThe error occurs because:\n1. `helper_b` receives `skb` as a context pointer\n2. It stores `skb` in register `r6` \n3. It adds 192 to `r6` (line 21: `r6 += 192`)\n4. It tries to pass this modified pointer to `helper_c` (line 23-24)\n5. The verifier rejects this because context pointers must be used in their original form\n\nThe fix is to pass the original `skb` pointer to `helper_c` instead of the modified one. Looking at the code, it seems like the intention was to pass the original `skb` parameter, not `skb + 1`.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\n__attribute__((noinline))\nint helper_a(struct __sk_buff *skb)\n{\n\treturn skb->len;\n}\n\nint helper_c(int val, struct __sk_buff *skb);\n\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n\n__attribute__((noinline))\nint helper_c(int val, struct __sk_buff *skb)\n{\n\treturn skb->ifindex * val;\n}\n\nSEC(\"tc\")\nint entry(struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_b(2, skb) + helper_c(3, skb);\n}\n```\n\nThe key change is in `helper_b` function, line 19: changing `helper_c(val, skb + 1)` to `helper_c(val, skb)`. This removes the invalid pointer arithmetic on the context pointer and passes the original context pointer as intended.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "stop"
+      }
+    ],
+    "created": 1780629660,
+    "id": "gen-1780629660-7wg4q5B6y44b6SGG2s8z",
+    "model": "qwen/qwen3-coder-480b-a35b-07-25",
+    "object": "chat.completion",
+    "provider": "Novita",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 440,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.00114864,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.000682,
+        "upstream_inference_cost": 0.00114864,
+        "upstream_inference_prompt_cost": 0.00046664
+      },
+      "is_byok": false,
+      "prompt_tokens": 1228,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1668
+    }
+  },
+  "reasoning_content": ""
+}

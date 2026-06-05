@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Guard helper_a with if (!s) return 0; before s->x.",
+    "Make the function pattern local/static only if that changes verifier validation so the argument is proven non-NULL, without hiding an unsafe dereference."
+  ],
+  "canonical_fix": "Add a NULL check in helper_a before reading s->x, returning a safe value on the NULL path.",
+  "case_id": "case-004",
+  "category": "Register Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The global subprogram dereferences its pointer argument directly. The verifier validates global subprograms for any argument state matching the prototype, including NULL-like memory arguments, so the callee must prove the pointer is non-NULL before dereferencing.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-v3.2/case-004-diagnostic.txt",
+    "case_id": "case-004",
+    "model": "deepseek/deepseek-v3.2",
+    "profile": "openrouter-deepseek-v3.2",
+    "prompt_bytes": 3165,
+    "prompt_path": "public/case-004/prompt_diagnostic.md",
+    "prompt_sha256": "33497e233ec114611aeef413d62f647129d0e9e5486ab3c21781e79670499395",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-v3.2/case-004-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "cb91afbf-1e24-4447-aeea-4c6dbdd11011",
+    "started_at": "2026-06-05T03:19:52+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier fails because `helper_a` dereferences its pointer argument `s` without a NULL check. Since `helper_a` is `__noinline`, the verifier conservatively assumes the pointer could be NULL when validating the function independently, even though the caller (`entry`) always passes a valid stack address. The dereference `s->x` is unsafe on the path where `s` is NULL.\n\nTo fix this, add a NULL check at the start of `helper_a`. This ensures the pointer is only dereferenced when non-NULL, satisfying the verifier's safety requirements.\n\nHere is the minimal patch:\n\n```diff\n--- a.c\n+++ b.c\n@@ -8,7 +8,9 @@\n \n __noinline int helper_a(const struct Item *s)\n {\n-\treturn bpf_get_prandom_u32() < s->x;\n+\tif (!s)\n+\t\treturn 0;\n+\treturn bpf_get_prandom_u32() < s->x;\n }\n \n SEC(\"cgroup_skb/ingress\")\n```",
+  "must_mention": [
+    "The callee argument may be NULL",
+    "The dereference is inside helper_a",
+    "The fix belongs before s->x is read"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check after dereferencing s",
+    "Checks the address of the local object in entry but leaves helper_a unsafe for verifier validation",
+    "Changes the comparison but not the dereference"
+  ]
+}

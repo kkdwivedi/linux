@@ -1,0 +1,30 @@
+## Verifier Failure Explanation
+
+The problem is that `bpf_skb_pull_data()` (called indirectly via `helper_a` → `helper_b`) can reallocate the skb's data buffer, which **invalidates all previously derived packet pointers**. 
+
+In the verifier log, we can see:
+- Before the call: `R7=pkt(r=0)` — a valid packet pointer with range 0
+- After the call: `R7` becomes `scalar` — the verifier no longer treats it as a packet pointer
+
+So when the code tries `*p = 42` (which uses R7), the verifier rejects it with `R7 invalid mem access 'scalar'` because the pointer is no longer recognized as a valid packet memory address.
+
+## Fix
+
+Move the `helper_a(sk, 0)` call **before** reading `sk->data` and `sk->data_end`, so that the pointer derivation and bounds check happen after the potentially-reallocating call:
+
+```c
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	helper_a(sk, 0);
+
+	int *p = (void *)(long)sk->data;
+
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+**Why this works:** After `bpf_skb_pull_data()` completes, the verifier knows the data pointers are stable. By reading `sk->data` and `sk->data_end` *after* the call, the derived pointer `p` retains its `pkt` type with a valid range, and the bounds check against `data_end` establishes a safe access range. The write `*p = 42` then passes verification.

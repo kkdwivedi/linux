@@ -1,0 +1,63 @@
+{
+  "acceptable_fixes": [
+    "Replace bpf_ktime_get_coarse_ns with bpf_ktime_get_ns if that satisfies the program's requirements and is allowed.",
+    "Change the program type/section to one where the helper is allowed."
+  ],
+  "canonical_fix": "Use a helper allowed for this program type, such as an allowed time helper with suitable semantics, or move the logic to a program type/attach point where bpf_ktime_get_coarse_ns is permitted.",
+  "case_id": "case-006",
+  "category": "Policy",
+  "difficulty": "easy",
+  "expected_explanation": "The program type used by this case is not allowed to call bpf_ktime_get_coarse_ns. This is a helper policy/program-type compatibility failure, not a register or memory proof failure.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-006-legacy.txt",
+    "case_id": "case-006",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 1056,
+    "prompt_path": "public/case-006/prompt_legacy.md",
+    "prompt_sha256": "120f6abe2c1570fcf1f340a5df8b99d8138acdc6e56cef9bda9d3f882cdbea64",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-006-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "3f5cc3d7-9b87-4665-9428-373e026d66e4",
+    "started_at": "2026-06-05T03:16:46+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "The verifier error is straightforward:\n\n- Program type is **kprobe** (`SEC(\"kprobe\")`).\n- First instruction calls helper **`bpf_ktime_get_coarse_ns`** (helper id 160).\n- For this prog type, that helper is not in the allowed helper set, so verifier rejects immediately.\n\nSince your program ignores the helper return value anyway (`r0 = 0; exit;`), the smallest safe fix is to call a helper that is allowed for kprobe (or remove the call entirely).\n\n### Minimal patch (keep structure, use allowed helper)\n```diff\n@@\n SEC(\"kprobe\")\n __naked void entry(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n-\tcall %[bpf_ktime_get_coarse_ns];\t\t\\\n+\tcall %[bpf_ktime_get_ns];\t\t\t\\\n \tr0 = 0;\t\t\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t:\n-\t: __imm(bpf_ktime_get_coarse_ns)\n+\t: __imm(bpf_ktime_get_ns)\n \t: __clobber_all);\n }\n```\n\nThis should satisfy the verifier because `bpf_ktime_get_ns` is commonly allowed for kprobe programs.",
+  "must_mention": [
+    "Helper is forbidden for this program type",
+    "The fix is to use an allowed helper or compatible program type"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds register initialization around the helper call",
+    "Treats it as a GPL license issue",
+    "Suggests a bounds or NULL check"
+  ]
+}

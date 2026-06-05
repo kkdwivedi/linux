@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Call bpf_preempt_enable() before bpf_copy_from_user and avoid re-entering the critical section unnecessarily.",
+    "Use a non-sleepable helper if one is semantically appropriate."
+  ],
+  "canonical_fix": "Move bpf_copy_from_user outside the bpf_preempt_disable/bpf_preempt_enable region, or re-enable preemption before calling it.",
+  "case_id": "case-005",
+  "category": "Execution Context Safety",
+  "difficulty": "easy",
+  "expected_explanation": "bpf_copy_from_user is sleepable, but the program calls it while preemption is disabled. The verifier rejects sleepable operations inside a non-preemptible region.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-thinking/case-005-diagnostic.txt",
+    "case_id": "case-005",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-thinking",
+    "prompt_bytes": 3103,
+    "prompt_path": "public/case-005/prompt_diagnostic.md",
+    "prompt_sha256": "799957463f3832353b191717439b9959634b01ce147029e024cd92ae8b255a93",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-thinking/case-005-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "enabled"
+    },
+    "run_id": "af8b0962-c694-4c6f-9a48-01e180491766",
+    "started_at": "2026-06-05T03:43:25+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "**Verifier failure explanation**\n\nThe program attaches to a sleepable fentry tracepoint (`?fentry.s/...`) and therefore runs in a sleepable context.  \nInside `entry()` it calls `bpf_preempt_disable()`, which enters a *non-preemptible* region.  \nImmediately after, it calls `bpf_copy_from_user()`.  The verifier knows that `bpf_copy_from_user` is a **sleepable** helper (it may sleep while faulting in user pages), and sleepable helpers are forbidden while preemption is disabled.  Consequently the verifier rejects the program with:\n\n> *sleepable helper bpf_copy_from_user#148 in non-preemptible region*\n\n**Smallest fix**\n\nThe critical section is unnecessary here: the program is already sleepable, so it can call `bpf_copy_from_user()` directly without any manual preemption control.  Remove the `bpf_preempt_disable()` / `bpf_preempt_enable()` pair and leave the helper call in the normal sleepable context.\n\n```diff\n@@ -10,9 +10,7 @@ SEC(\"?fentry.s/sys_getpgid\")\n int entry(void *ctx)\n {\n \tu32 data;\n \n-\tbpf_preempt_disable();\n \tbpf_copy_from_user(&data, sizeof(data), NULL);\n-\tbpf_preempt_enable();\n \treturn 0;\n }\n```\n\nThis is the minimal source change that satisfies the verifier, because the sleepable helper is no longer invoked inside an active non-preemptible region.",
+  "must_mention": [
+    "The helper may sleep",
+    "Preemption is disabled at the call site",
+    "The critical section must not contain sleepable operations"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks the NULL source pointer",
+    "Removes bpf_preempt_enable and leaves preemption disabled",
+    "Moves the helper deeper into the disabled region"
+  ]
+}

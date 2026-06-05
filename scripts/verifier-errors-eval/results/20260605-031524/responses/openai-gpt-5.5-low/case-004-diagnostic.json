@@ -1,0 +1,130 @@
+{
+  "answer_text": "The failure is not because `entry()` actually passes a NULL pointer. It passes `&s`, a stack object, so at runtime that argument is non-NULL.\n\nThe issue is verifier-side function validation. Because `helper_a()` has global/non-static linkage:\n\n```c\n__noinline int helper_a(const struct Item *s)\n```\n\nthe verifier validates it as a separately callable BPF subprogram. For such functions, pointer arguments are treated conservatively as possibly NULL. Thus at the start of `helper_a()` the verifier has:\n\n```text\nR1=mem_or_null(id=1,sz=4)\n```\n\nThen the program does:\n\n```c\ns->x\n```\n\nwhich becomes:\n\n```text\nr2 = *(u32 *)(r6 +0)\n```\n\nbut `r6` still has type `mem_or_null`, so the verifier rejects the dereference.\n\nSmallest likely fix: make `helper_a()` a static BPF subprogram so the verifier can analyze it in the context of its actual call site, where `&s` is known to be non-NULL.\n\nPatch:\n\n```diff\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n\n struct Item {\n \tint x;\n };\n\n-__noinline int helper_a(const struct Item *s)\n+static __noinline int helper_a(const struct Item *s)\n {\n \treturn bpf_get_prandom_u32() < s->x;\n }\n\n SEC(\"cgroup_skb/ingress\")\n int entry(struct __sk_buff *skb)\n {\n \tconst struct Item s = {.x = skb->len};\n\n \thelper_a(&s);\n\n \treturn 1;\n }\n```\n\nWhy this should satisfy the verifier:\n\n- With `static`, `helper_a()` is no longer treated as an independently callable global BPF function.\n- The verifier can propagate the caller\u2019s argument state into the callee.\n- The argument is `&s`, a stack address, so it is known non-NULL.\n- Therefore the load from `s->x` is safe.\n\nIf preserving global linkage is required, the alternative fix is to add an explicit NULL check:\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nBut for this specific program, adding `static` is the smallest source-level fix.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-low/case-004-diagnostic.txt",
+    "case_id": "case-004",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-low",
+    "prompt_bytes": 3165,
+    "prompt_path": "public/case-004/prompt_diagnostic.md",
+    "prompt_sha256": "33497e233ec114611aeef413d62f647129d0e9e5486ab3c21781e79670499395",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-low/case-004-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "low"
+    },
+    "run_id": "a4a8f5bc-11d3-4dee-b0c2-9c72b1c8c3da",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.004655,
+    "output_cost_usd": 0.03,
+    "total_cost_usd": 0.034655
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 931,
+    "output_tokens": 1000,
+    "raw_usage": {
+      "input_tokens": 931,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1000,
+      "output_tokens_details": {
+        "reasoning_tokens": 489
+      },
+      "total_tokens": 1931
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 489,
+    "total_tokens": 1931
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629346,
+    "created_at": 1780629324,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0447dfb68533df72006a223f4cdcc8819c9d9bca31fad0264c",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0447dfb68533df72006a223f4daf64819cbcea47d04fb5f347",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is not because `entry()` actually passes a NULL pointer. It passes `&s`, a stack object, so at runtime that argument is non-NULL.\n\nThe issue is verifier-side function validation. Because `helper_a()` has global/non-static linkage:\n\n```c\n__noinline int helper_a(const struct Item *s)\n```\n\nthe verifier validates it as a separately callable BPF subprogram. For such functions, pointer arguments are treated conservatively as possibly NULL. Thus at the start of `helper_a()` the verifier has:\n\n```text\nR1=mem_or_null(id=1,sz=4)\n```\n\nThen the program does:\n\n```c\ns->x\n```\n\nwhich becomes:\n\n```text\nr2 = *(u32 *)(r6 +0)\n```\n\nbut `r6` still has type `mem_or_null`, so the verifier rejects the dereference.\n\nSmallest likely fix: make `helper_a()` a static BPF subprogram so the verifier can analyze it in the context of its actual call site, where `&s` is known to be non-NULL.\n\nPatch:\n\n```diff\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n\n struct Item {\n \tint x;\n };\n\n-__noinline int helper_a(const struct Item *s)\n+static __noinline int helper_a(const struct Item *s)\n {\n \treturn bpf_get_prandom_u32() < s->x;\n }\n\n SEC(\"cgroup_skb/ingress\")\n int entry(struct __sk_buff *skb)\n {\n \tconst struct Item s = {.x = skb->len};\n\n \thelper_a(&s);\n\n \treturn 1;\n }\n```\n\nWhy this should satisfy the verifier:\n\n- With `static`, `helper_a()` is no longer treated as an independently callable global BPF function.\n- The verifier can propagate the caller\u2019s argument state into the callee.\n- The argument is `&s`, a stack address, so it is known non-NULL.\n- Therefore the load from `s->x` is safe.\n\nIf preserving global linkage is required, the alternative fix is to add an explicit NULL check:\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nBut for this specific program, adding `static` is the smallest source-level fix.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0447dfb68533df72006a223f5ac150819cba2bcbcfd8e7ef20",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "low",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 931,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1000,
+      "output_tokens_details": {
+        "reasoning_tokens": 489
+      },
+      "total_tokens": 1931
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

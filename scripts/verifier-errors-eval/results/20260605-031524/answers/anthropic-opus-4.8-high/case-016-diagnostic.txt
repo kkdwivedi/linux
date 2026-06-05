@@ -1,0 +1,61 @@
+## What the verifier is complaining about
+
+`bpf_sk_lookup_tcp()` returns an **acquired (owned) reference** in `r0` (a `sock_or_null`). The verifier's reference tracker requires that this reference be released (`bpf_sk_release`) or transferred on **every** path before the program exits.
+
+Look at the control flow after the call:
+
+```
+call bpf_sk_lookup_tcp        ; r0 = sock_or_null, ref id=2 acquired
+if r6 == 0 goto l1_%=         ; if r6 != 0 we fall through...
+exit                          ; <-- LEAK: exits while ref id=2 is still held
+l1_%=:
+    if r0 == 0 goto l2_%=
+    r1 = r0
+    call bpf_sk_release       ; release happens only on the r6==0 path
+l2_%=:
+    exit
+```
+
+`r6` is read from packet data (`*(u32*)(r2 + mark)`) and is an unknown scalar, so the verifier explores the `r6 != 0` branch. On that branch it reaches the bare `exit` at insn 21 **without** releasing the socket → `Unreleased reference id=2`.
+
+The release logic only sits behind the `r6 == 0` branch, so any path where `r6 != 0` leaks the reference.
+
+## Smallest fix
+
+Make every post-lookup path go through the null-check + release. The simplest source edit is to delete the early `if r6 == 0 goto l1_%=` / `exit` pair so control always falls into the `l1_%=` block that does the null check and `bpf_sk_release`:
+
+```c
+l0_%=:	r6 = *(u32*)(r2 + %[mark]);			\
+	r2 = 0;						\
+	*(u32*)(r10 -8) = r2;				\
+	*(u64*)(r10 -16) = r2;				\
+	*(u64*)(r10 -24) = r2;				\
+	*(u64*)(r10 -32) = r2;				\
+	*(u64*)(r10 -40) = r2;				\
+	*(u64*)(r10 -48) = r2;				\
+	r2 = r10;					\
+	r2 += -48;					\
+	r3 = 36;					\
+	r4 = 0;						\
+	r5 = 0;						\
+	call %[bpf_sk_lookup_tcp];			\
+l1_%=:	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+```
+
+(i.e. remove the two lines `if r6 == 0 goto l1_%=;` and the following `exit;`).
+
+### Why this satisfies the verifier
+After the change, both branches of the program reach `l1_%=`, where `r0` is null-checked and, when non-null, passed to `bpf_sk_release`. There is no longer any exit path that leaves the acquired socket reference unreleased, so the reference-leak error disappears.
+
+If you must keep the `r6` test for the test's intent, the equivalent minimal alternative is to release on that path too, e.g. replace the leaking `exit` with a jump into the cleanup block:
+
+```c
+	if r6 == 0 goto l1_%=;				\
+	goto l1_%=;            /* still go through release */ \
+l1_%=:	if r0 == 0 goto l2_%=;				\
+```
+
+but simply dropping the redundant early-exit (above) is the cleanest fix.

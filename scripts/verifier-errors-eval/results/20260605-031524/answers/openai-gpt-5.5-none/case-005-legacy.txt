@@ -1,0 +1,58 @@
+The verifier rejects the program because it calls a **sleepable helper** while preemption is disabled:
+
+```c
+bpf_preempt_disable();
+bpf_copy_from_user(&data, sizeof(data), NULL);
+bpf_preempt_enable();
+```
+
+The log shows the key error:
+
+```text
+sleepable helper bpf_copy_from_user#148 in non-preemptible region
+```
+
+`bpf_copy_from_user()` may fault and sleep while accessing user memory, so the verifier does not allow it inside a `bpf_preempt_disable()` / `bpf_preempt_enable()` region.
+
+There is also an earlier diagnostic:
+
+```text
+arg#0 reference type('UNKNOWN ') size cannot be determined: -22
+```
+
+but the concrete verifier rejection shown is the sleepable-helper-in-non-preemptible-region error.
+
+The smallest source-level fix is to not call `bpf_copy_from_user()` while preemption is disabled. Move it outside the preempt-disabled section, or remove the preempt-disable/enable pair entirely if it is not needed.
+
+A minimal patch would be:
+
+```diff
+ #include <vmlinux.h>
+ #include <bpf/bpf_helpers.h>
+
+ char _license[] SEC("license") = "GPL";
+
+ SEC("?fentry.s/sys_getpgid")
+ int entry(void *ctx)
+ {
+ 	u32 data;
+
+-	bpf_preempt_disable();
+ 	bpf_copy_from_user(&data, sizeof(data), NULL);
+-	bpf_preempt_enable();
+ 	return 0;
+ }
+```
+
+This should satisfy the verifier because `bpf_copy_from_user()` is no longer executed in a non-preemptible region.
+
+If the test specifically needs to exercise `bpf_preempt_disable()`, keep the region empty or only call non-sleepable helpers inside it:
+
+```c
+bpf_preempt_disable();
+bpf_preempt_enable();
+
+bpf_copy_from_user(&data, sizeof(data), NULL);
+```
+
+But the smallest likely fix is simply to remove the preemption-disabled region around the sleepable helper.

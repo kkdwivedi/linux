@@ -1,0 +1,47 @@
+**Explanation**
+
+The BPF verifier requires the subprogram call graph to be a *directed acyclic graph* (DAG).  
+`helper_a` contains a direct `call helper_a`, which creates a cycle. Because the
+verifier cannot bound stack depth or guarantee termination in the presence of
+recursion, it rejects any recursive bpf2bpf call immediately.
+
+The original code uses tail recursion to execute the same body at most four
+times (`r1` goes from `0` to `4`).  The smallest fix is to turn that tail
+recursion into a **bounded backward jump** (a loop).  This keeps the call graph
+acyclic (`entry → helper_a`) while preserving the original semantics: `r1` is
+incremented up to four times and `r0` is updated on each iteration.  Because the
+caller initializes `r1 = 0`, the verifier can easily prove the loop bound.
+
+---
+
+**Patch**
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -17,13 +17,10 @@ SEC("tracepoint")
+ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+ 	asm volatile ("					\
+-	r1 += 1;					\
++l0_%=:	r1 += 1;					\
+ 	r0 = r1;					\
+ 	if r1 < 4 goto l0_%=;				\
+ 	exit;						\
+-l0_%=:	call helper_a;					\
+-	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+**What changed**
+
+- Moved the local label `l0_%=:` to the top of the asm block, right before
+  `r1 += 1;`.
+- Removed the recursive `call helper_a;` and the following `exit;`.
+- The existing conditional `if r1 < 4 goto l0_%=;` now jumps *backward*,
+  forming a bounded loop instead of a recursive call.
+
+The program now has a finite, non-recursive call graph and should pass
+verification.

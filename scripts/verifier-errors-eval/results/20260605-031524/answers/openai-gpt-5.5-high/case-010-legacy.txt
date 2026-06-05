@@ -1,0 +1,48 @@
+The failure is caused by this expression in `helper_b()`:
+
+```c
+helper_c(val, skb + 1)
+```
+
+`skb` is a verifier `ctx` pointer, i.e. a pointer to the `struct __sk_buff` context. Pointer arithmetic on context pointers is not allowed for passing/dereferencing as a context pointer.
+
+In the verifier log:
+
+```text
+21: (07) r6 += 192                    ; R6=ctx(imm=192)
+...
+23: (bf) r2 = r6                      ; R2=ctx(imm=192)
+24: (85) call pc+2
+dereference of modified ctx ptr R2 off=192 disallowed
+Caller passes invalid args into func#3 ('helper_c')
+```
+
+`skb + 1` became `r6 += 192`, because `sizeof(struct __sk_buff)` is 192. The verifier now sees the second argument to `helper_c()` as a modified context pointer, `ctx + 192`, not the original `ctx`. Since `helper_c()` dereferences that pointer:
+
+```c
+return skb->ifindex * val;
+```
+
+the verifier rejects it.
+
+The smallest source-level fix is to pass the original `skb` pointer to `helper_c()` instead of `skb + 1`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -16,7 +16,7 @@ int helper_c(int val, struct __sk_buff *skb);
+ __attribute__((noinline))
+ int helper_b(int val, struct __sk_buff *skb)
+ {
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+ }
+ 
+ __attribute__((noinline))
+```
+
+With this change, `helper_c()` receives an unmodified `struct __sk_buff *` context pointer, matching its prototype and allowing the verifier to validate the dereference of `skb->ifindex`.

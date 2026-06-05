@@ -1,0 +1,19 @@
+The verifier fails because it cannot guarantee that the pointer `s` passed to `helper_a` is non-null. In BPF, function arguments are not automatically assumed to be valid pointers, so the verifier marks them as `mem_or_null` (possibly null). Dereferencing such a pointer without a null check leads to an "invalid mem access" error.
+
+The fix adds a null check at the start of `helper_a`. If `s` is null, the function returns 0; otherwise, it proceeds with the dereference. This allows the verifier to refine the pointer's state, ensuring it is non-null in the branch where the access occurs.
+
+```diff
+--- a.c
++++ b.c
+@@ -8,7 +8,9 @@ struct Item {
+ 
+ __noinline int helper_a(const struct Item *s)
+ {
+-	return bpf_get_prandom_u32() < s->x;
++	if (!s)
++		return 0;
++	return bpf_get_prandom_u32() < s->x;
+ }
+ 
+ SEC("cgroup_skb/ingress")
+```

@@ -1,0 +1,60 @@
+The failure is caused by corrupting the spilled context pointer on the stack.
+
+`r1` is the socket context pointer. The program spills it here:
+
+```asm
+*(u64*)(r10 - 8) = r1;
+```
+
+That stack slot is bytes `fp-8 .. fp-1`. Then this instruction writes one byte inside that same slot:
+
+```asm
+*(u8*)(r10 - 7) = r0;
+```
+
+After a partial overwrite of a spilled pointer, the verifier can no longer treat the 8-byte stack slot as a valid pointer spill. The log shows that as:
+
+```text
+fp-8=mmmmmmmm
+```
+
+So when the program reloads it:
+
+```asm
+r0 = *(u64*)(r10 - 8);
+```
+
+`r0` becomes an unknown scalar, not a `ctx` pointer. The next instruction then tries to dereference that scalar:
+
+```asm
+r0 = *(u64*)(r0 + 8);
+```
+
+and the verifier rejects it:
+
+```text
+R0 invalid mem access 'scalar'
+```
+
+A minimal fix is to avoid writing into the 8-byte slot containing the spilled pointer. Store the byte somewhere else on the stack. Also, for a `SEC("socket")` program, offset `8` in `struct __sk_buff` is a 32-bit field, so the final context load should be `u32`, not `u64`, to avoid a likely follow-up verifier error.
+
+Patch:
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -8,9 +8,9 @@ __naked void entry(void)
+ 	asm volatile ("					\
+ 	*(u64*)(r10 - 8) = r1;				\
+ 	r0 = 0x23;					\
+-	*(u8*)(r10 - 7) = r0;				\
++	*(u8*)(r10 - 16) = r0;				\
+ 	r0 = *(u64*)(r10 - 8);				\
+-	r0 = *(u64*)(r0 + 8);				\
++	r0 = *(u32*)(r0 + 8);				\
+ 	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+The essential verifier fix is the stack offset change: the byte store no longer overlaps the spilled pointer, so reloading from `r10 - 8` preserves the `ctx` pointer type. The `u32` load makes the context field access match the socket context layout.

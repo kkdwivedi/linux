@@ -1,0 +1,54 @@
+## Explanation of the Verifier Failure
+
+The program loads a 32-bit `offset` field from the map value (at offset 0) into `r3`, then adds `r3` to the map value pointer `r1`. The verifier sees that `r3` could be any value from 0 to 0xFFFFFFFF (since it's a 32-bit load with no bounds check). When `bpf_probe_read_kernel` is called with `r1` as the source address, the verifier cannot prove that `r1` (map_value + variable offset) stays within the 48-byte map value object.
+
+The verifier needs proof that `offset + access_size ≤ 48`, i.e., `r3 < 48` (since access size is 1 byte).
+
+## Fix
+
+Add a bounds check on `r3` before adding it to `r1`:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+struct value {
+	__u32 offset;
+	__u8 data[44];
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1);
+	__type(key, __u64);
+	__type(value, struct value);
+} map_a SEC(".maps");
+
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = 0;						\
+	*(u64*)(r2 + 0) = r1;				\
+	r1 = %[map_a] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l0_%=;				\
+	r1 = r0;					\
+	r3 = *(u32*)(r0 + 0);				\
+	if r3 > 47 goto l0_%=;				\
+	r1 += r3;					\
+	r2 = 1;						\
+	r3 = 0;						\
+	call %[bpf_probe_read_kernel];			\
+l0_%=:	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm(bpf_probe_read_kernel),
+	  __imm_addr(map_a)
+	: __clobber_all);
+}
+```
+
+**The only change** is inserting `if r3 > 47 goto l0_%=;` after the load of `r3` and before `r1 += r3`. This tells the verifier that `r3` is in the range `[0, 47]`, so `r1 + r3` stays within the 48-byte map value, and the subsequent `bpf_probe_read_kernel` with size 1 is safe (offset + 1 ≤ 48).

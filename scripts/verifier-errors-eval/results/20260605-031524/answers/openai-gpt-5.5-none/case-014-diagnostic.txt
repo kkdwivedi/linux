@@ -1,0 +1,61 @@
+The verifier rejects the program because `r1`, the source pointer passed to `bpf_probe_read_kernel(dst, size, unsafe_ptr)`, is derived from a map value pointer plus an unchecked variable offset:
+
+```asm
+r1 = r0;                    // r1 = map value pointer, size 48
+r3 = *(u32 *)(r0 + 0);       // r3 = value->offset, range 0..0xffffffff
+r1 += r3;                   // r1 = map_value + unchecked offset
+...
+call bpf_probe_read_kernel;
+```
+
+The map value has size 48 bytes:
+
+```c
+struct value {
+	__u32 offset;   // bytes 0..3
+	__u8 data[44]; // bytes 4..47
+};
+```
+
+The helper reads 1 byte from `r1`:
+
+```asm
+r2 = 1;
+...
+call bpf_probe_read_kernel;
+```
+
+So the verifier needs to prove:
+
+```text
+offset + 1 <= 48
+```
+
+But `offset` is loaded from the map and has no bounds check, so it may be as large as `0xffffffff`. Therefore `map_value + offset` may point outside the map value, and the helper call is rejected.
+
+The smallest source-level fix is to add a bounds check after loading `offset` and before adding it to the map value pointer. Since the access size is 1 and the object size is 48, the maximum valid offset is 47.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -23,6 +23,7 @@ __naked void entry(void)
+ 	if r0 == 0 goto l0_%=;				\
+ 	r1 = r0;					\
+ 	r3 = *(u32*)(r0 + 0);				\
++	if r3 > 47 goto l0_%=;				\
+ 	r1 += r3;					\
+ 	r2 = 1;						\
+ 	r3 = 0;						\
+```
+
+With this check, the verifier can constrain `r3` to `0..47` on the fall-through path. Then `r1 = map_value + r3` is known to remain within the 48-byte map value, and the 1-byte read passed to `bpf_probe_read_kernel` satisfies:
+
+```text
+r3 + 1 <= 48
+```
+
+So the helper argument should pass bounds verification.

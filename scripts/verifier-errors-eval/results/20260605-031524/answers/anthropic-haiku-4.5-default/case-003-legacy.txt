@@ -1,0 +1,38 @@
+## Analysis of the Verifier Failure
+
+The verifier failure occurs at instruction 4: `r0 = *(u64 *)(r0 +8)`. Let me trace through the issue:
+
+1. **Instruction 0**: `*(u64*)(r10 - 8) = r1` - stores `r1` (ctx) at fp-8, verifier tracks this as `fp-8=ctx()`
+2. **Instruction 2**: `*(u8*)(r10 - 7) = r0` - writes to fp-7 with value 35. This **overlaps** with the u64 at fp-8, causing the verifier to lose track of what's stored there. It downgrades `fp-8` from `ctx()` to `mmmmmmmm` (unknown/corrupted memory)
+3. **Instruction 3**: `r0 = *(u64*)(r10 -8)` - loads from fp-8, but since the verifier now sees this as unknown memory, `r0` becomes `scalar()` (an unknown scalar value)
+4. **Instruction 4**: `r0 = *(u64*)(r0 +8)` - attempts to dereference `r0 + 8`, but `r0` is now just a scalar with no pointer information, so the verifier rejects this as "invalid mem access 'scalar'"
+
+## Root Cause
+
+The u8 write at offset fp-7 partially overwrites the u64 stored at offset fp-8, destroying the verifier's tracking of the pointer value. When the code later tries to load from fp-8 and use it as a pointer, the verifier has lost all information about what was stored there.
+
+## Proposed Fix
+
+The simplest fix is to **allocate non-overlapping stack space** for the two values. Change the u8 store offset from fp-7 to fp-6 (or earlier):
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	*(u64*)(r10 - 8) = r1;				\
+	r0 = 0x23;					\
+	*(u8*)(r10 - 9) = r0;				\
+	r0 = *(u64*)(r10 - 8);				\
+	r0 = *(u64*)(r0 + 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+**Change**: Replace `*(u8*)(r10 - 7)` with `*(u8*)(r10 - 9)` to store the u8 value at a non-overlapping location.
+
+This preserves the u64 at fp-8 without corruption, so the verifier can track it as `ctx()` through instruction 3, allowing instruction 4 to proceed with a valid pointer dereference.

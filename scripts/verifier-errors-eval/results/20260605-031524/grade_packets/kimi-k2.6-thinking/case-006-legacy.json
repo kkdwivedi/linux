@@ -1,0 +1,63 @@
+{
+  "acceptable_fixes": [
+    "Replace bpf_ktime_get_coarse_ns with bpf_ktime_get_ns if that satisfies the program's requirements and is allowed.",
+    "Change the program type/section to one where the helper is allowed."
+  ],
+  "canonical_fix": "Use a helper allowed for this program type, such as an allowed time helper with suitable semantics, or move the logic to a program type/attach point where bpf_ktime_get_coarse_ns is permitted.",
+  "case_id": "case-006",
+  "category": "Policy",
+  "difficulty": "easy",
+  "expected_explanation": "The program type used by this case is not allowed to call bpf_ktime_get_coarse_ns. This is a helper policy/program-type compatibility failure, not a register or memory proof failure.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-thinking/case-006-legacy.txt",
+    "case_id": "case-006",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-thinking",
+    "prompt_bytes": 1056,
+    "prompt_path": "public/case-006/prompt_legacy.md",
+    "prompt_sha256": "120f6abe2c1570fcf1f340a5df8b99d8138acdc6e56cef9bda9d3f882cdbea64",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-thinking/case-006-legacy.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "enabled"
+    },
+    "run_id": "3bedc0a1-0280-4385-94cf-ca19f72e409f",
+    "started_at": "2026-06-05T03:43:29+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "**Explanation**\n\nThe verifier rejects the program at the very first instruction because the helper `bpf_ktime_get_coarse_ns` is not in the allow-list for `BPF_PROG_TYPE_KPROBE`.  \nKprobe programs have a restricted set of helpers they may call, and on the kernel running this test the coarse-grained time helper is excluded. The message\n\n```\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\nis unambiguous: the program type / helper combination is disallowed.\n\n**Fix**\n\nReplace the unavailable helper with `bpf_ktime_get_ns`, which is broadly supported (including for kprobes). This requires changing the helper name in both the assembly template and the `__imm` input operand.\n\n**Patch**\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -10,11 +10,11 @@ SEC(\"kprobe\")\n __naked void entry(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n-\tcall %[bpf_ktime_get_coarse_ns];\t\t\\\n+\tcall %[bpf_ktime_get_ns];\t\t\t\\\n \tr0 = 0;\t\t\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t:\n-\t: __imm(bpf_ktime_get_coarse_ns)\n+\t: __imm(bpf_ktime_get_ns)\n \t: __clobber_all);\n }\n```\n\nThe program structure, return value, and clobbers remain identical; only the called helper is changed to one the kprobe verifier accepts.",
+  "must_mention": [
+    "Helper is forbidden for this program type",
+    "The fix is to use an allowed helper or compatible program type"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds register initialization around the helper call",
+    "Treats it as a GPL license issue",
+    "Suggests a bounds or NULL check"
+  ]
+}

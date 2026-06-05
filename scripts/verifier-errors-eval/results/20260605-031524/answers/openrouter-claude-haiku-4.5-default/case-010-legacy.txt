@@ -1,0 +1,35 @@
+## Explanation of the Verifier Failure
+
+The verifier rejects this program because of an invalid pointer arithmetic operation on a context (`ctx`) pointer.
+
+**Root cause:** In `helper_b()`, the code performs `skb + 1` when calling `helper_c()`:
+
+```c
+return helper_a(skb) + helper_c(val, skb + 1);
+```
+
+This translates to pointer arithmetic: `R6 += 192` (since `sizeof(struct __sk_buff)` is 192 bytes). The verifier log shows:
+
+```
+21: (07) r6 += 192                    ; R6=ctx(imm=192)
+22: (bc) w1 = w7
+23: (bf) r2 = r6                      ; R2=ctx(imm=192)
+24: (85) call pc+2
+dereference of modified ctx ptr R2 off=192 disallowed
+```
+
+The verifier explicitly forbids dereferencing a context pointer that has been modified via arithmetic. Context pointers must be passed unmodified to functions. The offset `imm=192` indicates the pointer has been adjusted, which is not allowed.
+
+## Fix
+
+The simplest fix is to pass `skb` directly instead of `skb + 1`:
+
+```c
+__attribute__((noinline))
+int helper_b(int val, struct __sk_buff *skb)
+{
+	return helper_a(skb) + helper_c(val, skb);
+}
+```
+
+**Why this works:** By removing the pointer arithmetic (`skb + 1`), the context pointer remains unmodified and can be safely passed to `helper_c()`. The verifier will then accept the call since the pointer is in its original form.

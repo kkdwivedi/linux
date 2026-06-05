@@ -1,0 +1,40 @@
+The program is loaded as a `BPF_PROG_TYPE_KPROBE` program because of:
+
+```c
+SEC("kprobe")
+```
+
+At instruction 0 it calls helper id `160`, `bpf_ktime_get_coarse_ns`:
+
+```text
+0: (85) call bpf_ktime_get_coarse_ns#160
+program of this type cannot use helper bpf_ktime_get_coarse_ns#160
+```
+
+The verifier rejects it before reaching the later `r0 = 0; exit;` because helper availability is checked per program type, and this kernel’s kprobe helper whitelist does not allow `bpf_ktime_get_coarse_ns`.
+
+The smallest source-level fix is to use a time helper that kprobe programs are allowed to call, such as `bpf_ktime_get_ns`. It has the same calling convention here: no arguments, returns a timestamp in `r0`, and the return value is ignored anyway.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -8,12 +8,12 @@ SEC("kprobe")
+ __naked void entry(void)
+ {
+ 	asm volatile ("					\
+-	call %[bpf_ktime_get_coarse_ns];		\
++	call %[bpf_ktime_get_ns];			\
+ 	r0 = 0;						\
+ 	exit;						\
+ "	:
+-	: __imm(bpf_ktime_get_coarse_ns)
++	: __imm(bpf_ktime_get_ns)
+ 	: __clobber_all);
+ }
+```
+
+This keeps the program as a kprobe program and preserves the structure of the test while replacing the disallowed helper with one that is normally valid for kprobe/tracing programs.

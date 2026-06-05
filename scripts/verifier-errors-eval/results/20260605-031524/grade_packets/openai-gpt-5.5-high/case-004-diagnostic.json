@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Guard helper_a with if (!s) return 0; before s->x.",
+    "Make the function pattern local/static only if that changes verifier validation so the argument is proven non-NULL, without hiding an unsafe dereference."
+  ],
+  "canonical_fix": "Add a NULL check in helper_a before reading s->x, returning a safe value on the NULL path.",
+  "case_id": "case-004",
+  "category": "Register Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The global subprogram dereferences its pointer argument directly. The verifier validates global subprograms for any argument state matching the prototype, including NULL-like memory arguments, so the callee must prove the pointer is non-NULL before dereferencing.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-high/case-004-diagnostic.txt",
+    "case_id": "case-004",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-high",
+    "prompt_bytes": 3165,
+    "prompt_path": "public/case-004/prompt_diagnostic.md",
+    "prompt_sha256": "33497e233ec114611aeef413d62f647129d0e9e5486ab3c21781e79670499395",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-high/case-004-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "ad86a3c1-6fe2-474e-b0e7-b61e6f4f89f6",
+    "started_at": "2026-06-05T03:15:48+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The failure is in `helper_a()`, not at the call site.\n\nBecause `helper_a` has global linkage:\n\n```c\n__noinline int helper_a(const struct Item *s)\n```\n\nthe BPF verifier validates it as a callable global BPF subprogram. For such a function, the verifier cannot rely only on the one visible call from `entry()`. It treats the pointer argument as possibly NULL:\n\n```text\nR1=mem_or_null(id=1,sz=4)\n```\n\nThen the function does:\n\n```c\nreturn bpf_get_prandom_u32() < s->x;\n```\n\nwhich dereferences `s` without proving it is non-NULL. The verifier therefore rejects:\n\n```text\nR6 invalid mem access 'mem_or_null'\n```\n\nThe smallest semantics-preserving fix is to add a NULL check inside `helper_a()` before dereferencing `s`.\n\nPatch:\n\n```diff\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n \n struct Item {\n \tint x;\n };\n \n __noinline int helper_a(const struct Item *s)\n {\n+\tif (!s)\n+\t\treturn 0;\n+\n \treturn bpf_get_prandom_u32() < s->x;\n }\n \n SEC(\"cgroup_skb/ingress\")\n int entry(struct __sk_buff *skb)\n {\n \tconst struct Item s = {.x = skb->len};\n \n \thelper_a(&s);\n \n \treturn 1;\n }\n```\n\nAfter this, the verifier can split the paths: on the NULL path the function returns, and on the remaining path `s` is known to be non-NULL, so `s->x` is safe to load.\n\nAn alternative would be to make `helper_a` `static __noinline`, which may allow the verifier to analyze it only from the known call site where `&s` is non-NULL. But that changes linkage/visibility. The NULL check is the safer and more direct verifier fix.",
+  "must_mention": [
+    "The callee argument may be NULL",
+    "The dereference is inside helper_a",
+    "The fix belongs before s->x is read"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check after dereferencing s",
+    "Checks the address of the local object in entry but leaves helper_a unsafe for verifier validation",
+    "Changes the comparison but not the dereference"
+  ]
+}

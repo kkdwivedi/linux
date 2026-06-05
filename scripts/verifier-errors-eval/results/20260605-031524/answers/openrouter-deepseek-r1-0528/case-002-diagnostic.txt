@@ -1,0 +1,27 @@
+The verifier failure occurs because the BPF program acquires a reference to a `bpf_cpumask` object via `bpf_cpumask_create()` in `make_object()`, but fails to release it when the object is successfully created and empty. The main program (`BPF_PROG`) does not release the reference when `make_object()` returns a non-NULL pointer, leading to a resource leak.
+
+**Fix Explanation:**
+The smallest fix is to release the `bpf_cpumask` reference in the main program after use. We add a conditional check in `BPF_PROG` to release the object if `make_object()` returns non-NULL.
+
+**Patch:**
+```patch
+--- original.c
++++ fixed.c
+@@ -38,7 +38,9 @@
+ {
+ 	struct bpf_cpumask *cpumask;
+ 
+-	cpumask = make_object();
++	cpumask = make_object(); 
+ 	__sink(cpumask);
+-
++	if (cpumask)
++		bpf_cpumask_release(cpumask);
+ 	return 0;
+ }
+```
+
+**Reason:**
+- The `make_object()` function returns a reference-counted object. The main program must release this reference before exiting.
+- The fix checks if `cpumask` is non-NULL (indicating a valid reference) and releases it with `bpf_cpumask_release()`.
+- This ensures the reference is released on all paths, satisfying the verifier's resource lifetime checks.

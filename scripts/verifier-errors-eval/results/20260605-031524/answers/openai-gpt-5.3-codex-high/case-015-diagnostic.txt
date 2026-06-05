@@ -1,0 +1,44 @@
+The verifier failure is due to **pointer invalidation across `bpf_skb_pull_data()`**.
+
+### Why it fails
+
+You do:
+
+1. Load `sk->data` into `p` (`R7`), bounds-check it against `data_end`.
+2. Call `helper_a(sk, 0)` → `helper_b` → `bpf_skb_pull_data(sk, 0)`.
+3. Then write `*p = 42`.
+
+`bpf_skb_pull_data()` can reallocate/linearize skb data, so previously-checked packet pointers are no longer trusted.  
+So after the call, `R7` is treated as non-ptr/scalar, and `*p` is rejected.
+
+---
+
+### Smallest likely fix
+
+Re-acquire and re-check packet pointers **after** the helper call (or move the helper call before pointer acquisition/check).
+
+A minimal robust patch:
+
+```diff
+ SEC("tc")
+ int entry(struct __sk_buff *sk)
+ {
+-	int *p = (void *)(long)sk->data;
+-
+-	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+-		return TCX_DROP;
+-	helper_a(sk, 0);
++	int *p;
++
++	if (helper_a(sk, 0))
++		return TCX_DROP;
++
++	p = (void *)(long)sk->data;
++	if ((void *)(p + 1) > (void *)(long)sk->data_end)
++		return TCX_DROP;
+ 	*p = 42;
+ 	return TCX_PASS;
+ }
+```
+
+This satisfies verifier rules: no packet pointer survives across `bpf_skb_pull_data()`, and bounds are checked on freshly loaded pointers.

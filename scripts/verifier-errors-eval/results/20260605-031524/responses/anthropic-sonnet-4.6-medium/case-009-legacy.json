@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nThe verifier failure occurs at instruction 4:\n\n```\n3: (79) r1 = *(u64 *)(r0 +0)   ; R1=rcu_ptr_or_null_task_struct(id=10)\n4: (85) call bpf_task_acquire#63762\nPossibly NULL pointer passed to trusted R1\n```\n\n`value->task` is loaded from a map value. Because `task` is stored as an RCU kptr, the verifier tracks it as `rcu_ptr_or_null_task_struct` \u2014 it may be NULL. `bpf_task_acquire()` requires a **trusted** (non-null) pointer, so passing a possibly-NULL value is rejected.\n\n## Fix\n\nAdd a NULL check on `value->task` before calling `bpf_task_acquire`. The verifier needs to see the NULL check in the same scope so it can narrow the type to non-null before the call.\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired, *t;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n\tt = value->task;\n\tif (!t)\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(t);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\nBy loading `value->task` into a local variable `t` and explicitly checking `if (!t)`, the verifier can prove that `t` is non-NULL at the point of the `bpf_task_acquire(t)` call, satisfying the \"trusted pointer\" requirement.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-medium/case-009-legacy.txt",
+    "case_id": "case-009",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-medium",
+    "prompt_bytes": 7630,
+    "prompt_path": "public/case-009/prompt_legacy.md",
+    "prompt_sha256": "cf955480f8f9d7c397454ba70a58615a32d27994e0f99c26d423ded383546618",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-medium/case-009-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "d23e9fe7-b768-4d85-a77d-98d4203f690f",
+    "started_at": "2026-06-05T04:04:00+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.010557,
+    "output_cost_usd": 0.012705,
+    "total_cost_usd": 0.023261999999999998
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 3519,
+    "output_tokens": 847,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 3519,
+      "output_tokens": 847,
+      "output_tokens_details": {
+        "thinking_tokens": 397
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 588,
+    "reasoning_tokens": 0,
+    "total_tokens": 4366
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EuIJCmUIDhgCKkCUZ0vxb5MzuKW2Kj74lHRb6QcJAFizzKn/Tvzd6DJm80RPRNw9DU0XJUKO9KJ//7Dfnuq6XzLSXRwmrA/lvpkgMhFjbGF1ZGUtc29ubmV0LTQtNjgAQgh0aGlua2luZxIM4fXnCQtIfVAUpEXLGgzYEZXBPTdseeZg3BEiMGkOh3Xi4+xN3jjqzCJPXYdzmXc1PMngFTe0r9fbgJ6jtLU3WT37L4G3JxBFWASatyqqCI76jMXfxKpqOcmKONurPf/b+DktLsIXZlUaX2QR24xePzTTAX80DCXwFYDrXwKM26Qd1sFJ59AFoJp/hekfZqGwsaep02+RrY/FnJKsOhvaZ4AQL+UVWiMRwu5sJshztwCrU5jeIfFaQZBQalEwyewEAtrYxuGeImGHu2X5rbiKWD5xk5sCMYqETqYEargiPOKnrEMhZwGTj/HY+RO43aL8cdcLbYCA7aiC0jT1yw1y1ehMJxoOBUNzY11KFal0YoYgY/nsvD4YJr7I3py6SWyniN65pH+q6Ew8idsVKyDFJYPoMPpYbHp3PH/wOUxhbyp89aFaJvNVSMuVlQ6uHF34EKhx7kuvx+1jrC8h1FHRZ55h2XfadvkaSeUOqN4Tlt7H1grhq1E+m25O9iF86hBMwY0aGwiNRViz6vE1Qa+A+DpGNjrFfY2BESkuBmsPqMZ2pBaS1qD0kDa3PJZzjLuroLF2Qj7BlcNUF92XJBiD9NVpXSAw4ghexxKEjplbMzxPfBr2b/uM2EjrpfJ8rcmGLbUz83V9u2Kz5s0/seMdrw3j4kad6C4iK72ciBwIffTdA2am+QAJ8NdA0qhnjKxaiTqbUNtJvJKixrBiJIFOrZlzm5QejIWKMqW/oKluTIPJlrSeMy5jT9ElSqtJU4wBuQb95smR5Nieg9Fm3IXRjg3q6jKS/3G/roOwezUULBxBs9A4wOBJneiSmU3zfLc/YmXWKYvrXcaW6aOaYNXsxKzcuot9e69f/MYe/IdpMNf/ohGQSgu14HLT932cUTxW9hk3z5WF8zTvDBpfW8DW8dZBbKlLsP/VNLhToQ2/SvzNaI5Stnw21o5cFS66zKE3cxR74tqeW6ZPGScK6GIVphv7xgxlsVDFXTbUIdSqtZ+zJivMm88ruopBNnhK3qZX2/b4qK/LO9v3FuDJCvzW52kZ2Sweqp8biThlV02Is8jTyhdlGcYx61yHT+B97fk9NwL7nEUXpEVB9VsZAAb+ZvKclEGcsURaPq+0yp0q3h1cpBjPtNQzDJRgrp3TJB8q8DJXG11WQJYLYzF8ggNtKwGpmsuaUu5cMSTwWy7z6Ux9PMHyIU7L0hLUljO5SqXCkhpeCXrb9JLKNu4f1UqFCuSGoT/frXosHTwwggn/IZjtpmEGYIqBlU+Gh3TrG4nXgd+sbmmMPISg2j8cnTi5sCafUf8fWKivGwvlyGamWQio1ZGVWVFLl0v8gkvNYrjXZHEPsGsb6MrtO5l1UjhprRU8HzROZPR158e+uxxC04oqFonFvJMu35+6rXuY0r5qwK0HjZRUW2GBGGJUSoLyr82x9Pv7yGArlfzkTjOO0dXuVzpUhq2mNh/yw3vjTn/eGskFHOdxLRYfSh0h5GDlTxDm6Xr0+297cvkl4+EheuS4NGG5LLiwdx0YAQ==",
+        "thinking": "The verifier fails at instruction 4 with \"Possibly NULL pointer passed to trusted R1\". \n\nAt instruction 3, `r1 = *(u64 *)(r0 +0)` loads `value->task` which is of type `rcu_ptr_or_null_task_struct(id=10)` - it could be NULL.\n\nThen at instruction 4, `bpf_task_acquire(value->task)` is called with this potentially NULL pointer, which the verifier rejects.\n\n\nI need to add a NULL check before calling `bpf_task_acquire` - storing the pointer in a temporary variable and returning early if it's NULL will satisfy the verifier that we're not passing a potentially NULL pointer to the function.",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nThe verifier failure occurs at instruction 4:\n\n```\n3: (79) r1 = *(u64 *)(r0 +0)   ; R1=rcu_ptr_or_null_task_struct(id=10)\n4: (85) call bpf_task_acquire#63762\nPossibly NULL pointer passed to trusted R1\n```\n\n`value->task` is loaded from a map value. Because `task` is stored as an RCU kptr, the verifier tracks it as `rcu_ptr_or_null_task_struct` \u2014 it may be NULL. `bpf_task_acquire()` requires a **trusted** (non-null) pointer, so passing a possibly-NULL value is rejected.\n\n## Fix\n\nAdd a NULL check on `value->task` before calling `bpf_task_acquire`. The verifier needs to see the NULL check in the same scope so it can narrow the type to non-null before the call.\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired, *t;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n\tt = value->task;\n\tif (!t)\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(t);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\nBy loading `value->task` into a local variable `t` and explicitly checking `if (!t)`, the verifier can prove that `t` is non-NULL at the point of the `bpf_task_acquire(t)` call, satisfying the \"trusted pointer\" requirement.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_012fz5zFAt8FL2qWdoSSkqMK",
+    "model": "claude-sonnet-4-6",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 3519,
+      "output_tokens": 847,
+      "output_tokens_details": {
+        "thinking_tokens": 397
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": "The verifier fails at instruction 4 with \"Possibly NULL pointer passed to trusted R1\". \n\nAt instruction 3, `r1 = *(u64 *)(r0 +0)` loads `value->task` which is of type `rcu_ptr_or_null_task_struct(id=10)` - it could be NULL.\n\nThen at instruction 4, `bpf_task_acquire(value->task)` is called with this potentially NULL pointer, which the verifier rejects.\n\n\nI need to add a NULL check before calling `bpf_task_acquire` - storing the pointer in a temporary variable and returning early if it's NULL will satisfy the verifier that we're not passing a potentially NULL pointer to the function."
+}

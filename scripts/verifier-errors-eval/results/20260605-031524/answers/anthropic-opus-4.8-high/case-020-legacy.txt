@@ -1,0 +1,68 @@
+## What the verifier is telling you
+
+The last meaningful log line is:
+
+```
+liveness analysis exceeded complexity limit (10001 calls)
+processed 0 insns ...
+```
+
+This is not a "your program is wrong" error — it's a *resource/complexity* rejection. The program builds a call graph that is both **maximally deep and very wide**:
+
+- `entry → helper_a → helper_b → … → helper_g` is 8 frames deep
+  (that is exactly `MAX_CALL_FRAMES`, the deepest legal BPF call chain), and
+- every level issues **50** calls to the next level (`CALLS_50`).
+
+The verifier's static liveness pass walks this call graph recursively. Because nothing is shared across the different call sites, the number of `(caller-frame, call-site)` analysis steps grows roughly like the number of root-to-leaf paths:
+
+```
+entry: 1
+a:     50
+b:     50^2
+...
+g:     50^7  ≈ 7.8e11
+```
+
+The pass gives up as soon as it has performed more than 10000 of these descents — which is why you see `subprog#7 helper_g ... analyzing (depth 7)` printed over and over and then the abort. The program is simply too large/branchy for the liveness analyzer; it can never be accepted at this size.
+
+So there are only two ways to "fix" this:
+
+## Option A (most likely the intended one): expect the rejection
+
+This kind of selftest — `__naked`, `SEC("?raw_tp")`, macro-generated to deliberately push the verifier to a hard limit — is a *negative* test. It exists to prove the verifier bails out gracefully instead of looping/OOMing. The repair is to tell the test loader to expect that failure:
+
+```c
+SEC("?raw_tp")
+__failure __msg("liveness analysis exceeded complexity limit")
+__naked int entry(void)
+{
+	asm volatile (
+		CALLS_50(helper_a)
+		"r0 = 0;"
+		"exit;"
+		::: __clobber_all);
+}
+```
+
+With the `__failure`/`__msg` annotation, the selftest "passes" precisely because the verifier rejects the program with that message. This is the smallest source change and matches the program's evident purpose (it is engineered to overflow the limit and cannot be made loadable at this scale).
+
+## Option B: make the program actually load
+
+If the goal really is for the verifier to accept it, you must shrink the call graph so the liveness traversal stays under ~10000 descents. With an 8-deep chain the per-level fan-out must drop to ≤ 3 (e.g. `3^7 ≈ 2187`, total ≈ 3280 < 10000). For example, redefine the fan-out macro:
+
+```c
+/* fan-out of 3 instead of 50 keeps the 8-deep chain under the limit */
+#define CALLS_50(fn) CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)
+```
+
+(or, equivalently, reduce the nesting depth). Note that simply switching `CALLS_50` to `CALLS_10` is *not* enough: `10^7` still blows the limit — you need fan-out around 3 at this depth.
+
+## Recommendation
+
+Given the design (deep+wide macro expansion whose only possible outcome is hitting the liveness limit), Option A is the correct, minimal fix: add
+
+```c
+__failure __msg("liveness analysis exceeded complexity limit")
+```
+
+to the `entry` program so the test expects the rejection. Use Option B only if the test was meant to demonstrate a *loadable* deep-call-chain.

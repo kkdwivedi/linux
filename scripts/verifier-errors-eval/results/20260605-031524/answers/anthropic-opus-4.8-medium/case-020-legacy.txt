@@ -1,0 +1,43 @@
+## What the log is telling you
+
+The verifier dies here:
+
+```
+liveness analysis exceeded complexity limit (10001 calls)
+processed 0 insns ...
+```
+
+This is **not** a "bad instruction / invalid access" failure. The program is logically fine. The problem is pure *complexity*: the test builds a fan-out call tree that is both very wide and fairly deep.
+
+Each `CALLS_50()` emits 50 `call` instructions to the next helper, and the helpers are chained:
+
+```
+entry → helper_a → helper_b → helper_c → helper_d → helper_e → helper_f → helper_g
+```
+
+with **50 call sites at every level**. Because BPF subprogs are verified per call-state, the number of distinct call paths grows like `50^7`, and the register/stack **liveness propagation** that walks back up the parent-frame chain blows past the hard `10000`-call liveness limit (`propagate_liveness()` recursion). The loop you see in the log — `subprog#7 helper_g … analyzing (depth 7)` repeated thousands of times — is exactly this liveness walk hitting the ceiling.
+
+So the verifier never even gets to "process" insns (`processed 0 insns`); it aborts during liveness bookkeeping.
+
+## Smallest source-level fix
+
+You have to bring the total work below the liveness limit. Two equivalent levers exist: **breadth** (how many calls per level) and **depth** (how many nested helper levels). The cheapest single edit is to cut the breadth, since it appears at every level and dominates the `width^depth` product.
+
+Reduce the fan-out macro, e.g. from 50 to 10 calls per level:
+
+```c
+/* before */
+#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
+
+/* after: keep the same name/uses, just shrink the body */
+#define CALLS_50(fn) CALLS_10(fn)
+```
+
+(or define a new `CALLS_10`-based macro and use it everywhere). This keeps the structure identical but collapses the path explosion from `50^7` to `10^7`, and more importantly slashes the liveness-propagation call count below `10001`.
+
+If 10 still trips the limit on your kernel, drop the **depth** as well — remove one or two of the intermediate helpers (e.g. let `entry` call `helper_c` directly, deleting `helper_a`/`helper_b`), since each removed level divides the work by the fan-out factor.
+
+### Why this satisfies the verifier
+The failure is solely the liveness-analysis complexity guard, not a correctness rule. Lowering the multiplicative number of distinct call paths (fewer calls per level and/or fewer nesting levels) keeps the cumulative `propagate_liveness` call count under the 10000 hard limit, so verification proceeds and the trivially-correct `r0 = 0; exit;` bodies pass.
+
+If the *intent* of the test is actually to demonstrate hitting this limit, then the "fix" is instead to mark it as an expected-failure case (e.g. add the `__failure __msg("liveness analysis exceeded complexity limit")` annotation) rather than expecting it to load — but given the task says "make it pass verification," shrinking the fan-out as above is the minimal change.

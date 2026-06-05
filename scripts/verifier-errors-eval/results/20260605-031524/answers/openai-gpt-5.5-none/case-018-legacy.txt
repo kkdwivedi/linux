@@ -1,0 +1,71 @@
+The verifier rejects the program because the two resource spin locks are unlocked in the wrong order.
+
+Execution path:
+
+```c
+bpf_res_spin_lock(&lock_a);
+bpf_res_spin_lock(&lock_b);
+bpf_res_spin_unlock(&lock_a);
+bpf_res_spin_unlock(&lock_b);
+```
+
+The verifier tracks acquired `bpf_res_spin_lock`s as a stack. Nested resource locks must be released in LIFO order:
+
+```text
+lock A acquired
+lock B acquired
+must unlock B first
+then unlock A
+```
+
+But the program unlocks `lock_a` while `lock_b` is still held. That is why the verifier reports:
+
+```text
+bpf_res_spin_unlock cannot be out of order
+```
+
+The smallest fix is to swap the two unlock calls in the success path. The error path is already correct because if locking `lock_b` fails, only `lock_a` is held, so unlocking `lock_a` is valid.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -12,7 +12,7 @@ int entry(struct __sk_buff *ctx)
+ 		bpf_res_spin_unlock(&lock_a);
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+ 	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+Resulting source:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+struct bpf_res_spin_lock lock_a __hidden SEC(".data.A");
+struct bpf_res_spin_lock lock_b __hidden SEC(".data.B");
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```
+
+This should satisfy the verifier because every successful acquisition is released, and nested locks are released in reverse acquisition order.

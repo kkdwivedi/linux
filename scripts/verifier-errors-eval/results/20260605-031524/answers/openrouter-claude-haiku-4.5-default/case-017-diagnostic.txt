@@ -1,0 +1,33 @@
+## Explanation of the Verifier Failure
+
+The BPF verifier enforces **LIFO (Last-In-First-Out) ordering** for IRQ flag save/restore operations. This is a resource lifetime safety check to prevent IRQ state corruption.
+
+In the code:
+1. `bpf_local_irq_save(&flags1)` is called first (acquires IRQ state id=1)
+2. `bpf_local_irq_save(&flags2)` is called second (acquires IRQ state id=2)
+3. `bpf_local_irq_restore(&flags1)` attempts to restore id=1, but id=2 is still active
+
+The verifier expects restores in reverse order: id=2 must be restored before id=1. This is analogous to nested function calls or stack unwinding—you must exit the innermost scope first.
+
+## The Fix
+
+Swap the order of the restore calls to match LIFO semantics:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	unsigned long flags1, flags2;
+
+	bpf_local_irq_save(&flags1);
+	bpf_local_irq_save(&flags2);
+	bpf_local_irq_restore(&flags2);  // Restore flags2 first (last saved)
+	bpf_local_irq_restore(&flags1);  // Restore flags1 second (first saved)
+	return 0;
+}
+```
+
+**Why this works:** The restores now occur in reverse order of the saves, satisfying the LIFO constraint. The verifier will see id=2 restored first (matching the most recent save), then id=1 restored, which is the correct nesting order.

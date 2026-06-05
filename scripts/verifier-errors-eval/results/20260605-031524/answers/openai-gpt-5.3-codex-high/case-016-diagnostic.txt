@@ -1,0 +1,34 @@
+`bpf_sk_lookup_tcp()` returns a **referenced socket** in `r0` (type `sock_or_null`).  
+If `r0 != 0`, that reference must be released with `bpf_sk_release()` on **all exit paths**.
+
+### Why verifier rejects this
+After the lookup:
+
+```asm
+call bpf_sk_lookup_tcp
+if r6 == 0 goto l1
+exit            ; <-- problematic
+l1: if r0 == 0 goto l2
+    r1 = r0
+    call bpf_sk_release
+l2: exit
+```
+
+`r6` is packet mark (independent of `r0`).  
+So verifier explores path `r6 != 0` where program exits immediately, while `r0` may still hold a referenced socket. That is the unreleased ref id=2 leak.
+
+---
+
+### Smallest likely fix
+Route that early-exit path through the existing release block instead of exiting directly.
+
+```diff
+@@
+-   if r6 == 0 goto l1_%=;             \
+-   exit;                              \
++   if r6 == 0 goto l1_%=;             \
++   goto l1_%=;                        \
+ l1_%=: if r0 == 0 goto l2_%=;         \
+```
+
+This keeps behavior (still exits) but ensures any non-NULL `r0` gets released first.

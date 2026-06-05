@@ -1,0 +1,29 @@
+The failure is **not** a type/safety bug; it’s a verifier **complexity blow-up** in inter-procedural liveness:
+
+- `entry -> helper_a -> ... -> helper_g` is 7 call levels deep.
+- Each level does `CALLS_50(...)` (50 callsites).
+- Liveness is re-entering subprogs per call-chain/callsite context (log shows `helper_g` analyzed over and over).
+- It hits the hard cap:  
+  `liveness analysis exceeded complexity limit (10001 calls)`.
+
+So the program is rejected before normal instruction-state exploration (`processed 0 insns`).
+
+### Smallest likely fix
+
+Reduce call fan-out per subprog so liveness call count stays below 10k.  
+The smallest source edit is to redefine `CALLS_50` to generate far fewer calls.
+
+A safe choice is 2 calls per function:
+
+```diff
+--- a/prog.c
++++ b/prog.c
+@@ -5,7 +5,7 @@
+ #define CALLS_10(fn) \
+ 	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \
+ 	CALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)
+-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
++#define CALLS_50(fn) CALL_AT(fn, 8) CALL_AT(fn, 16)
+```
+
+This keeps structure unchanged and only lowers verifier workload enough to avoid the liveness complexity limit.

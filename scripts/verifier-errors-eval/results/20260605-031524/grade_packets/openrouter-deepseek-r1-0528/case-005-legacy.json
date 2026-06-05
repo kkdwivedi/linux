@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Call bpf_preempt_enable() before bpf_copy_from_user and avoid re-entering the critical section unnecessarily.",
+    "Use a non-sleepable helper if one is semantically appropriate."
+  ],
+  "canonical_fix": "Move bpf_copy_from_user outside the bpf_preempt_disable/bpf_preempt_enable region, or re-enable preemption before calling it.",
+  "case_id": "case-005",
+  "category": "Execution Context Safety",
+  "difficulty": "easy",
+  "expected_explanation": "bpf_copy_from_user is sleepable, but the program calls it while preemption is disabled. The verifier rejects sleepable operations inside a non-preemptible region.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-r1-0528/case-005-legacy.txt",
+    "case_id": "case-005",
+    "model": "deepseek/deepseek-r1-0528",
+    "profile": "openrouter-deepseek-r1-0528",
+    "prompt_bytes": 1399,
+    "prompt_path": "public/case-005/prompt_legacy.md",
+    "prompt_sha256": "09ecaba7e5e77a1dc6657b7ce0f5a2f8e64d1673f8b7b61af5daff8054d00e3f",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-r1-0528/case-005-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "98335655-9795-4e2a-b459-e2ccdad5c3d7",
+    "started_at": "2026-06-05T03:19:09+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "The verifier log indicates two main issues:\n\n1. **Sleepable helper in non-preemptible region**: `bpf_copy_from_user` is a sleepable helper, but it's called between `bpf_preempt_disable()` and `bpf_preempt_enable()`, creating a non-preemptible section where sleepable helpers are not allowed.\n\n2. **Invalid user pointer**: `bpf_copy_from_user` is called with `NULL` as the user pointer (third argument), which is invalid (error -22/EINVAL).\n\n### Proposed Fix\nThe smallest fix is to remove both the problematic helper call and the preemption control functions since:\n- `bpf_copy_from_user` is invalid with NULL pointer\n- Sleepable helpers can't be used in non-preemptible regions\n- The `data` variable is unused\n\nHere's the complete patch:\n\n```diff\n--- original.c\n+++ fixed.c\n@@ -6,10 +6,6 @@\n SEC(\"?fentry.s/sys_getpgid\")\n int entry(void *ctx)\n {\n-\tu32 data;\n-\n-\tbpf_preempt_disable();\n-\tbpf_copy_from_user(&data, sizeof(data), NULL);\n-\tbpf_preempt_enable();\n \treturn 0;\n }\n```\n\n### Explanation\n1. Removed `bpf_preempt_disable/enable` calls since:\n   - They were creating a non-preemptible region\n   - No longer needed after removing the helper call\n2. Removed `bpf_copy_from_user` because:\n   - NULL user pointer is invalid\n   - Sleepable helpers can't be used in non-preemptible regions\n3. Removed unused `data` variable since it served no purpose\n\nThis reduces the program to a simple `return 0` with no verifier violations. The program will now pass verification while maintaining its attachment point and license.",
+  "must_mention": [
+    "The helper may sleep",
+    "Preemption is disabled at the call site",
+    "The critical section must not contain sleepable operations"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks the NULL source pointer",
+    "Removes bpf_preempt_enable and leaves preemption disabled",
+    "Moves the helper deeper into the disabled region"
+  ]
+}

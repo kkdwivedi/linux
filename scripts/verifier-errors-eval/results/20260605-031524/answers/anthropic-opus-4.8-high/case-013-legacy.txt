@@ -1,0 +1,43 @@
+## Explanation
+
+The verifier enforces a hard cap of **512 bytes (`MAX_BPF_STACK`)** on the *combined* stack of any single call chain through global (non-inlined) functions.
+
+In this program the deepest chain is:
+
+```
+entry  ->  helper_c  ->  helper_b  ->  helper_a
+```
+
+- `entry` uses ~24 bytes of stack
+- `helper_c` declares `volatile char buf[260]` → 260 bytes
+- `helper_b` declares `volatile char buf[260]` → 260 bytes
+- `helper_a` uses no stack
+
+So the chain’s combined stack is `24 + 260 + 260 = 544`, which exceeds 512. That is exactly what the log reports:
+
+```
+combined stack size of 3 calls is 544. Too large
+```
+
+(The same applies to `entry -> helper_c -> helper_d`, also two 260-byte frames.)
+
+This is not a logic bug — the functions verify fine individually (`helper_d` is reported safe). The only problem is the total stack budget across nested calls.
+
+## Fix
+
+Shrink the per-function stack array so that two nested frames plus the entry frame stay under 512 bytes. We need:
+
+```
+2 * MAX_STACK + (entry stack ≈ 24) ≤ 512   =>   MAX_STACK ≤ 244
+```
+
+The smallest source change is to reduce `MAX_STACK`:
+
+```c
+-#define MAX_STACK 260
++#define MAX_STACK 240
+```
+
+With `MAX_STACK = 240` the deepest chain uses `24 + 240 + 240 = 504 ≤ 512`, so verification passes while keeping the structure (multiple nested global functions each using a sizeable stack buffer) intact.
+
+If the test’s intent is specifically to probe the *boundary*, pick the largest value that still fits (e.g. `244`), but `240` gives a safe margin.

@@ -1,0 +1,118 @@
+{
+  "answer_text": "## Explanation\n\n`bpf_local_irq_save`/`bpf_local_irq_restore` are treated by the verifier like a stack-based (LIFO) locking discipline. Each `save` acquires an \"irq flag\" reference with an id, and the verifier requires that you `restore` them in **reverse order** of acquisition.\n\nIn the program:\n\n- `bpf_local_irq_save(&flags1)` \u2192 acquires id=1\n- `bpf_local_irq_save(&flags2)` \u2192 acquires id=2\n\nThe code then restores `flags1` (id=1) first, but the verifier expects the most recently acquired one (id=2) to be released first:\n\n```\ncannot restore irq state out of order, expected id=2 acquired at insn_idx=7\n```\n\n## Fix\n\nRestore the IRQ flags in LIFO order \u2014 release `flags2` before `flags1`:\n\n```c\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);   /* release last-acquired first */\n\tbpf_local_irq_restore(&flags1);\n\treturn 0;\n}\n```\n\nThis satisfies the verifier's required nested/LIFO ordering for IRQ save/restore reference tracking.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-opus-4.8-high/case-017-legacy.txt",
+    "case_id": "case-017",
+    "model": "anthropic/claude-opus-4.8",
+    "profile": "openrouter-claude-opus-4.8-high",
+    "prompt_bytes": 1745,
+    "prompt_path": "public/case-017/prompt_legacy.md",
+    "prompt_sha256": "7fc465b0f01c16b7f076395e6776f54156c97eb932b04d9dd1f878444e3ec702",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-opus-4.8-high/case-017-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "82bf7002-2e2d-44fe-a80c-0bdbe7b01445",
+    "started_at": "2026-06-05T03:18:31+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00489,
+    "output_cost_usd": 0.0125,
+    "total_cost_usd": 0.017390000000000003
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 978,
+    "output_tokens": 500,
+    "raw_usage": {
+      "completion_tokens": 500,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 39
+      },
+      "cost": 0.01739,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0125,
+        "upstream_inference_cost": 0.01739,
+        "upstream_inference_prompt_cost": 0.00489
+      },
+      "is_byok": false,
+      "prompt_tokens": 978,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1478
+    },
+    "reasoning_content_chars": 155,
+    "reasoning_tokens": 39,
+    "total_tokens": 1478
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation\n\n`bpf_local_irq_save`/`bpf_local_irq_restore` are treated by the verifier like a stack-based (LIFO) locking discipline. Each `save` acquires an \"irq flag\" reference with an id, and the verifier requires that you `restore` them in **reverse order** of acquisition.\n\nIn the program:\n\n- `bpf_local_irq_save(&flags1)` \u2192 acquires id=1\n- `bpf_local_irq_save(&flags2)` \u2192 acquires id=2\n\nThe code then restores `flags1` (id=1) first, but the verifier expects the most recently acquired one (id=2) to be released first:\n\n```\ncannot restore irq state out of order, expected id=2 acquired at insn_idx=7\n```\n\n## Fix\n\nRestore the IRQ flags in LIFO order \u2014 release `flags2` before `flags1`:\n\n```c\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);   /* release last-acquired first */\n\tbpf_local_irq_restore(&flags1);\n\treturn 0;\n}\n```\n\nThis satisfies the verifier's required nested/LIFO ordering for IRQ save/restore reference tracking.",
+          "reasoning": " The verifier expects flags to be restored in LIFO order, so I need to swap the restore sequence since flags2 was acquired last and must be released first.",
+          "reasoning_details": [
+            {
+              "format": "anthropic-claude-v1",
+              "index": 0,
+              "signature": "Er4CCmMIDhgCKkCXEjdJpKemJDd1Mz8WKIPysqiDXrrVvUtfe4IOb2GKy05+aJWL1CcebvvrbaqPDPUrMDNUcdjWHmgnkht0pv/2Mg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDHWmL6NGvwsbJ+jZNRoMc6QVPvndR9hV2NrwIjDF0SkclvcPIM9hlw2UDtk9m42uzy50LNRYWPgTJpw+u4DRbBXuy4JppnuH+iJ0VEcqiAGAGB+cuY5V/XO0PFgUQ4ha/dcIX/eOdfmjuGp8oEVuEJeYQboZ+sxIlp/bRuU9rQyxMbNKLIZl0NsBy/6Q+gCi/D4/ho+Nauwpe9c8tnGXH+4uujsyyfMZlPAYvnQDUEYJDiJtjAQOoCBxjW6WdE3JtjeEtTvo7BoQY185NDRbAaQpbsRoDfV+GAE=",
+              "text": " The verifier expects flags to be restored in LIFO order, so I need to swap the restore sequence since flags2 was acquired last and must be released first.",
+              "type": "reasoning.text"
+            }
+          ],
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629511,
+    "id": "gen-1780629511-LHKqc46ij38H4ZJfF7a1",
+    "model": "anthropic/claude-4.8-opus-20260528",
+    "object": "chat.completion",
+    "provider": "Anthropic",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 500,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 39
+      },
+      "cost": 0.01739,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0125,
+        "upstream_inference_cost": 0.01739,
+        "upstream_inference_prompt_cost": 0.00489
+      },
+      "is_byok": false,
+      "prompt_tokens": 978,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1478
+    }
+  },
+  "reasoning_content": " The verifier expects flags to be restored in LIFO order, so I need to swap the restore sequence since flags2 was acquired last and must be released first."
+}

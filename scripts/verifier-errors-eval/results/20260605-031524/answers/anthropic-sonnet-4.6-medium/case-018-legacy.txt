@@ -1,0 +1,53 @@
+## Explanation
+
+The verifier enforces that `bpf_res_spin_lock`/`bpf_res_spin_unlock` pairs follow **strict LIFO (reverse acquisition) order**. Locks must be released in the opposite order they were acquired.
+
+In the code:
+- `lock_a` is acquired **first**
+- `lock_b` is acquired **second**
+
+So they must be released as:
+- `lock_b` **first**
+- `lock_a` **second**
+
+The current code does it backwards (`lock_a` then `lock_b`), which triggers the verifier error: `bpf_res_spin_unlock cannot be out of order`.
+
+## Fix
+
+Swap the two unlock calls at the end of the happy path:
+
+```c
+--- a/case.c
++++ b/case.c
+@@ -14,6 +14,6 @@ int entry(struct __sk_buff *ctx)
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+ 	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+The corrected program:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+struct bpf_res_spin_lock lock_a __hidden SEC(".data.A");
+struct bpf_res_spin_lock lock_b __hidden SEC(".data.B");
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);  /* release in reverse order */
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```

@@ -1,0 +1,35 @@
+## Verifier Failure Analysis
+
+The verifier is detecting a **reference leak**. Here's what's happening:
+
+1. `bpf_cpumask_create()` at instruction 0 returns a trusted pointer with `refs=2` (reference count of 2)
+2. The pointer is stored in `r6` and later in stack at `fp-8`
+3. The function returns at instruction 21 without releasing the reference
+4. The verifier reports: "Unreleased reference id=2" - the cpumask object is never released
+
+The issue is in the `entry` function: it calls `make_object()` which returns a `bpf_cpumask` pointer, but this pointer is never released before the program exits. Even though `make_object()` has a release path for the error case (line 21), the success path returns the pointer without releasing it, and the caller (`entry`) doesn't release it either.
+
+## Root Cause
+
+The `entry` function acquires a reference to a cpumask via `make_object()` but never calls `bpf_cpumask_release()` on it before exiting.
+
+## Fix
+
+The smallest fix is to release the cpumask in the `entry` function before returning:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *cpumask;
+
+	cpumask = make_object();
+	__sink(cpumask);
+	if (cpumask)
+		bpf_cpumask_release(cpumask);
+
+	return 0;
+}
+```
+
+**Why this works:** The `bpf_cpumask_release()` call explicitly releases the reference acquired by `bpf_cpumask_create()`, satisfying the verifier's requirement that all acquired references must be released before program exit.

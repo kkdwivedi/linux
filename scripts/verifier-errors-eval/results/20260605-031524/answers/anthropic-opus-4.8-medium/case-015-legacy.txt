@@ -1,0 +1,45 @@
+## Explanation
+
+The failure is on this instruction:
+
+```
+10: (63) *(u32 *)(r7 +0) = r1
+R7 invalid mem access 'scalar'
+```
+
+`R7` holds the packet pointer `p` derived from `sk->data` and bounds-checked against `sk->data_end` at insns 3–5. At that point it's a valid `pkt` pointer with `r=4`.
+
+But at insn 8 you call the **global** function `helper_a()`:
+
+```
+8: (85) call pc+4
+Func#1 ('helper_a') is global and assumed valid.
+```
+
+When the verifier encounters a call to a *global* subprogram, it cannot see what that function does to the packet (and indeed `helper_a → helper_b → bpf_skb_pull_data` can reallocate/move the packet buffer). To stay sound, the verifier **invalidates all packet pointers** held in registers across such a call. So after the call `R7` is no longer a `pkt` pointer — it has been demoted to a `scalar`, and writing through it at insn 10 is rejected.
+
+The earlier bounds check is now stale: it validated the *old* packet pointer, but `bpf_skb_pull_data()` may have changed `data`/`data_end`, so the verifier requires you to re-derive and re-validate the pointer after the call.
+
+## Fix
+
+Derive and bounds-check the packet pointer **after** the function call, so the verifier has a fresh, valid `pkt` pointer when you dereference it:
+
+```c
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	int *p;
+
+	helper_a(sk, 0);
+
+	p = (void *)(long)sk->data;
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+Here `p` is loaded from `sk->data` and checked against `sk->data_end` only after `helper_a()` returns, so no packet pointer crosses the global-call boundary. The pointer used for `*p = 42` is a valid `pkt` register again, and the write passes verification.
+
+(Equivalently, you could keep the original order but re-load `p` and repeat the `data_end` bounds check after the call before dereferencing; the reorder above is the smallest change.)

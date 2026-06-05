@@ -1,0 +1,39 @@
+## Explanation of the Verifier Failure
+
+The verifier rejects the call at line 42:
+```c
+acquired = bpf_task_acquire(value->task);
+```
+
+When `value->task` is read from the map, the verifier types it as `rcu_ptr_or_null_task_struct` (it can be NULL because it is a kptr stored in a map). `bpf_task_acquire` requires a non-NULL, trusted pointer. Since no NULL check is performed before the call, the verifier rejects it with *"Possibly NULL pointer passed to trusted R1"*.
+
+The verifier itself suggests: *"Add a NULL check and call the kfunc only on the non-NULL path."*
+
+## Fix
+
+Load `value->task` into a local variable, NULL-check it, and only then call `bpf_task_acquire`. Using a local variable is important so the verifier tracks the single checked register across the two uses.
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -79,12 +79,16 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+ 	struct task_struct *acquired;
+ 	struct map_value *value;
++	struct task_struct *task_ptr;
+ 
+ 	value = helper_a(task);
+ 	if (!value)
+ 		return 0;
+ 
+-	acquired = bpf_task_acquire(value->task);
++	task_ptr = value->task;
++	if (!task_ptr)
++		return 0;
++
++	acquired = bpf_task_acquire(task_ptr);
+ 	if (!acquired)
+ 		return 0;
+```
+
+By storing `value->task` into `task_ptr` and checking it for NULL, the verifier knows that `task_ptr` (the register `R1` passed to `bpf_task_acquire`) is non-NULL, satisfying the kfunc's requirement.

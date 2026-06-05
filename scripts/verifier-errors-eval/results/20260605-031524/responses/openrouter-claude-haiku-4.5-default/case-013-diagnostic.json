@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Explanation of the Verifier Failure\n\nThe BPF verifier is rejecting this program because the combined stack usage across nested function calls exceeds the 512-byte limit.\n\n**Call chain analysis:**\n- `entry()` calls `helper_c()`\n- `helper_c()` calls `helper_b()`\n- `helper_b()` calls `helper_a()`\n\n**Stack usage per function:**\n- Each of `helper_a`, `helper_b`, `helper_c`, and `helper_d` allocates a `volatile char buf[MAX_STACK]` where `MAX_STACK = 260` bytes\n- The deepest call chain is: `entry` \u2192 `helper_c` (260 bytes) \u2192 `helper_b` (260 bytes) \u2192 `helper_a` (0 bytes, no local array)\n- Total: 260 + 260 + 24 (frame overhead) = 544 bytes, exceeding the 512-byte limit\n\n## Proposed Fix\n\nThe simplest fix is to **reduce `MAX_STACK` from 260 to a smaller value** that keeps the combined stack within limits. Since we have 3 nested calls with ~24 bytes overhead each, we need:\n\n```\n3 * MAX_STACK + ~72 \u2264 512\nMAX_STACK \u2264 146\n```\n\n**Patch:**\n\n```c\n#define MAX_STACK 140\n```\n\nThis reduces the per-function stack allocation from 260 to 140 bytes, bringing the combined stack to approximately 3\u00d7140 + 72 = 492 bytes, which is under the 512-byte limit.\n\n**Why this works:** The verifier tracks the maximum combined stack depth across all possible call chains. By reducing the buffer size in each function, we reduce the cumulative stack pressure without changing the program logic or call structure.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-013-diagnostic.txt",
+    "case_id": "case-013",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 2658,
+    "prompt_path": "public/case-013/prompt_diagnostic.md",
+    "prompt_sha256": "044070894a5a67f43ab32448001b1bd67c0db88fee4087d1bb67f71a9273513d",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-013-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "0319d6cc-2169-4b2c-a622-929ca0190ded",
+    "started_at": "2026-06-05T03:19:03+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000987,
+    "output_cost_usd": 0.002175,
+    "total_cost_usd": 0.003162
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 987,
+    "output_tokens": 435,
+    "raw_usage": {
+      "completion_tokens": 435,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.003162,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002175,
+        "upstream_inference_cost": 0.003162,
+        "upstream_inference_prompt_cost": 0.000987
+      },
+      "is_byok": false,
+      "prompt_tokens": 987,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1422
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1422
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation of the Verifier Failure\n\nThe BPF verifier is rejecting this program because the combined stack usage across nested function calls exceeds the 512-byte limit.\n\n**Call chain analysis:**\n- `entry()` calls `helper_c()`\n- `helper_c()` calls `helper_b()`\n- `helper_b()` calls `helper_a()`\n\n**Stack usage per function:**\n- Each of `helper_a`, `helper_b`, `helper_c`, and `helper_d` allocates a `volatile char buf[MAX_STACK]` where `MAX_STACK = 260` bytes\n- The deepest call chain is: `entry` \u2192 `helper_c` (260 bytes) \u2192 `helper_b` (260 bytes) \u2192 `helper_a` (0 bytes, no local array)\n- Total: 260 + 260 + 24 (frame overhead) = 544 bytes, exceeding the 512-byte limit\n\n## Proposed Fix\n\nThe simplest fix is to **reduce `MAX_STACK` from 260 to a smaller value** that keeps the combined stack within limits. Since we have 3 nested calls with ~24 bytes overhead each, we need:\n\n```\n3 * MAX_STACK + ~72 \u2264 512\nMAX_STACK \u2264 146\n```\n\n**Patch:**\n\n```c\n#define MAX_STACK 140\n```\n\nThis reduces the per-function stack allocation from 260 to 140 bytes, bringing the combined stack to approximately 3\u00d7140 + 72 = 492 bytes, which is under the 512-byte limit.\n\n**Why this works:** The verifier tracks the maximum combined stack depth across all possible call chains. By reducing the buffer size in each function, we reduce the cumulative stack pressure without changing the program logic or call structure.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629543,
+    "id": "gen-1780629543-9IA57AfmjFakF93e2pfL",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 435,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.003162,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002175,
+        "upstream_inference_cost": 0.003162,
+        "upstream_inference_prompt_cost": 0.000987
+      },
+      "is_byok": false,
+      "prompt_tokens": 987,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1422
+    }
+  },
+  "reasoning_content": ""
+}

@@ -1,0 +1,63 @@
+Looking at the verifier log, the issue is clear:
+
+The error message "Possibly NULL pointer passed to trusted R1" occurs at instruction 4, where `bpf_task_acquire(value->task)` is called. The verifier is complaining that `value->task` might be NULL when passed to `bpf_task_acquire()`.
+
+Let me trace through the code:
+
+1. In `helper_a()`, `map_insert(task)` is called first
+2. `map_insert()` creates a map entry with `local.task = NULL` initially
+3. Later it tries to update this with `bpf_kptr_xchg(&value->task, acquired)`
+4. However, there's a race condition or verification issue where the verifier cannot guarantee that `value->task` is non-NULL when `helper_a()` returns and the caller calls `bpf_task_acquire(value->task)`
+
+The problem is in the `helper_a()` function. After calling `map_insert()`, it calls `map_value_lookup()` which returns the map value, but the verifier cannot prove that `value->task` is non-NULL at this point.
+
+Looking at the code flow:
+- `map_insert()` sets `local.task = NULL` initially
+- Then it tries to acquire the task and exchange it with the NULL value
+- But there's a code path where `map_value_lookup()` is called after `map_insert()` succeeds, but before the kptr exchange happens, or the exchange might have failed
+
+The fix is to add a NULL check in the caller function `entry()` before calling `bpf_task_acquire()`.
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct task_struct *acquired;
+	struct map_value *value;
+
+	value = helper_a(task);
+	if (!value)
+		return 0;
+
+	acquired = bpf_task_acquire(value->task);
+	if (!acquired)
+		return 0;
+
+	bpf_task_release(acquired);
+	return 0;
+}
+```
+
+The issue is that `value->task` could be NULL. The verifier log shows that `R1=rcu_ptr_or_null_task_struct(id=10)` - note the "or_null" part.
+
+The fix is to check if `value->task` is NULL before calling `bpf_task_acquire()`:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct task_struct *acquired;
+	struct map_value *value;
+
+	value = helper_a(task);
+	if (!value || !value->task)
+		return 0;
+
+	acquired = bpf_task_acquire(value->task);
+	if (!acquired)
+		return 0;
+
+	bpf_task_release(acquired);
+	return 0;
+}
+```

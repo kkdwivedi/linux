@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Reduce CALLS_50 fan-out or the number of helper layers.",
+    "Pass a stable non-FP-derived argument pattern when possible.",
+    "Replace the generated call tree with a simpler bounded loop or less duplicated call structure."
+  ],
+  "canonical_fix": "Reduce the number of distinct call paths or argument patterns reaching the subprograms, for example by reducing fan-out/depth, consolidating calls, or avoiding many distinct FP-offset arguments.",
+  "case_id": "case-020",
+  "category": "Verifier Limit",
+  "difficulty": "hard",
+  "expected_explanation": "The program creates an enormous number of distinct bpf2bpf call paths and frame-pointer-derived argument patterns. Liveness analysis exceeds its complexity limit while recomputing subprogram liveness across those paths.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-020-legacy.txt",
+    "case_id": "case-020",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 6158,
+    "prompt_path": "public/case-020/prompt_legacy.md",
+    "prompt_sha256": "cecfa6936349490d4b7bd2b0131df3ba133333894cfcdcc4438f6f6f0196b689",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-020-legacy.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "9f84856d-68a0-4918-8dd9-35989b11fa20",
+    "started_at": "2026-06-05T04:23:14+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Analysis\n\nThe verifier is hitting a **liveness analysis complexity limit** due to excessive recursion depth. The issue is:\n\n1. The call chain is: `entry` \u2192 50x `helper_a` \u2192 50x `helper_b` \u2192 ... \u2192 50x `helper_g`\n2. This creates a deeply nested call graph (7 levels deep with 50 calls each)\n3. When analyzing liveness, the verifier re-analyzes `helper_g` many times from different call contexts, creating exponential state explosion\n4. The liveness analysis hits the 10,001 calls complexity limit\n\nThe log shows `helper_g` being re-analyzed repeatedly at depth 7, indicating the verifier is exhausting its complexity budget while tracking which values are live across the deeply nested call chain.\n\n## Solution\n\nThe smallest fix is to **reduce the number of calls per level** from 50 to something much smaller (e.g., 2-5). This exponentially reduces the state explosion.\n\n**Proposed patch:**\n\n```c\n#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n```\n\nChange to:\n\n```c\n#define CALLS_50(fn) CALLS_10(fn)\n```\n\nOr alternatively, reduce `CALLS_10` itself:\n\n```c\n#define CALLS_2(fn) CALL_AT(fn, 8) CALL_AT(fn, 16)\n#define CALLS_50(fn) CALLS_2(fn)\n```\n\n**Why this works:** With fewer calls at each level, the number of unique call paths decreases dramatically (from 50^7 to 1^7 or 2^7), keeping the liveness analysis within the verifier's complexity budget while maintaining the nested call structure that the test likely intends to check.",
+  "must_mention": [
+    "The failure is verifier liveness complexity, not runtime recursion",
+    "Many call paths or distinct FP offsets drive the limit",
+    "The fix is to simplify the call/argument pattern"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only increases a runtime loop bound",
+    "Adds packet or memory bounds checks",
+    "Suggests releasing a resource"
+  ]
+}

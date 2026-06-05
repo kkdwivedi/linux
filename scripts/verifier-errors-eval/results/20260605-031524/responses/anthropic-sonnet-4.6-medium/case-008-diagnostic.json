@@ -1,0 +1,87 @@
+{
+  "answer_text": "The buffer is 8 bytes but the slice requests 9 bytes. Fix by increasing the buffer size to 9.\n\n```c\nchar buffer[9] = {};\n```",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-medium/case-008-diagnostic.txt",
+    "case_id": "case-008",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-medium",
+    "prompt_bytes": 3876,
+    "prompt_path": "public/case-008/prompt_diagnostic.md",
+    "prompt_sha256": "6473479527e9eaa1732d9224d382c7fc572786756d22aa3518774f108c567394",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-medium/case-008-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "2f2a82d9-6f4b-47ae-9c26-64286eb12b64",
+    "started_at": "2026-06-05T04:03:58+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.004395,
+    "output_cost_usd": 0.00063,
+    "total_cost_usd": 0.005025
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1465,
+    "output_tokens": 42,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1465,
+      "output_tokens": 42,
+      "output_tokens_details": {
+        "thinking_tokens": 0
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1507
+  },
+  "raw_response": {
+    "content": [
+      {
+        "text": "The buffer is 8 bytes but the slice requests 9 bytes. Fix by increasing the buffer size to 9.\n\n```c\nchar buffer[9] = {};\n```",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01MqLxMBCnmxC1nDamdCssiF",
+    "model": "claude-sonnet-4-6",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1465,
+      "output_tokens": 42,
+      "output_tokens_details": {
+        "thinking_tokens": 0
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

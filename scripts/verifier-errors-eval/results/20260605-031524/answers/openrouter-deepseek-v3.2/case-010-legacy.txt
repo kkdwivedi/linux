@@ -1,0 +1,18 @@
+The verifier rejects the program because `helper_b` passes a modified context pointer (`skb + 1`) to `helper_c`. In eBPF, context pointers (like `struct __sk_buff *`) cannot be arithmetically altered before being passed to functions expecting a context, as this could lead to accessing memory outside the valid context region.
+
+The fix is to pass the original unmodified `skb` pointer instead. This aligns with how `helper_c` is called elsewhere in the program.
+
+**Patch:**
+```diff
+--- a/case.c
++++ b/case.c
+@@ -16,7 +16,7 @@ int helper_c(int val, struct __sk_buff *skb);
+ __attribute__((noinline))
+ int helper_b(int val, struct __sk_buff *skb)
+ {
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+ }
+ 
+ __attribute__((noinline))
+```

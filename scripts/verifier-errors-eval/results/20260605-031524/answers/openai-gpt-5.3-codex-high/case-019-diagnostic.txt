@@ -1,0 +1,31 @@
+The verifier is rejecting this **before full instruction analysis** because of program structure:
+
+- `entry()` calls `helper_a()`
+- `helper_a()` conditionally does `call helper_a` (self-call)
+
+That creates a recursive bpf2bpf call graph cycle (`helper_a -> helper_a`), and recursion is always forbidden, even if it looks runtime-bounded.
+
+### Smallest likely fix
+
+Rewrite the self-call as an in-function bounded loop (tail-recursion elimination).  
+That removes call-graph recursion while keeping behavior.
+
+```diff
+ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+ 	asm volatile ("					\
+-	r1 += 1;					\
+-	r0 = r1;					\
+-	if r1 < 4 goto l0_%=;				\
+-	exit;						\
+-l0_%=:	call helper_a;					\
++l0_%=:	r1 += 1;					\
++	r0 = r1;					\
++	if r1 < 4 goto l0_%=;				\
+ 	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+Why this should pass: no subprogram calls inside `helper_a`, so call graph is acyclic; loop is explicitly bounded by `r1 < 4`.

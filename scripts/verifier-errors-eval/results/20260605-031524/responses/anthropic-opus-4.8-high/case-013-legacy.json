@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nThe verifier enforces a hard cap of **512 bytes (`MAX_BPF_STACK`)** on the *combined* stack of any single call chain through global (non-inlined) functions.\n\nIn this program the deepest chain is:\n\n```\nentry  ->  helper_c  ->  helper_b  ->  helper_a\n```\n\n- `entry` uses ~24 bytes of stack\n- `helper_c` declares `volatile char buf[260]` \u2192 260 bytes\n- `helper_b` declares `volatile char buf[260]` \u2192 260 bytes\n- `helper_a` uses no stack\n\nSo the chain\u2019s combined stack is `24 + 260 + 260 = 544`, which exceeds 512. That is exactly what the log reports:\n\n```\ncombined stack size of 3 calls is 544. Too large\n```\n\n(The same applies to `entry -> helper_c -> helper_d`, also two 260-byte frames.)\n\nThis is not a logic bug \u2014 the functions verify fine individually (`helper_d` is reported safe). The only problem is the total stack budget across nested calls.\n\n## Fix\n\nShrink the per-function stack array so that two nested frames plus the entry frame stay under 512 bytes. We need:\n\n```\n2 * MAX_STACK + (entry stack \u2248 24) \u2264 512   =>   MAX_STACK \u2264 244\n```\n\nThe smallest source change is to reduce `MAX_STACK`:\n\n```c\n-#define MAX_STACK 260\n+#define MAX_STACK 240\n```\n\nWith `MAX_STACK = 240` the deepest chain uses `24 + 240 + 240 = 504 \u2264 512`, so verification passes while keeping the structure (multiple nested global functions each using a sizeable stack buffer) intact.\n\nIf the test\u2019s intent is specifically to probe the *boundary*, pick the largest value that still fits (e.g. `244`), but `240` gives a safe margin.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-013-legacy.txt",
+    "case_id": "case-013",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 1649,
+    "prompt_path": "public/case-013/prompt_legacy.md",
+    "prompt_sha256": "4d1d466cfe05bcf610e895dd892a6a1aa50e76dc1045f63dfca8de2da264bd35",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-013-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "d0007997-b361-4fac-bb57-bdd46b50fecb",
+    "started_at": "2026-06-05T03:17:39+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.004465,
+    "output_cost_usd": 0.0533,
+    "total_cost_usd": 0.057765
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 893,
+    "output_tokens": 2132,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 893,
+      "output_tokens": 2132,
+      "output_tokens_details": {
+        "thinking_tokens": 1496
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 3025
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "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",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nThe verifier enforces a hard cap of **512 bytes (`MAX_BPF_STACK`)** on the *combined* stack of any single call chain through global (non-inlined) functions.\n\nIn this program the deepest chain is:\n\n```\nentry  ->  helper_c  ->  helper_b  ->  helper_a\n```\n\n- `entry` uses ~24 bytes of stack\n- `helper_c` declares `volatile char buf[260]` \u2192 260 bytes\n- `helper_b` declares `volatile char buf[260]` \u2192 260 bytes\n- `helper_a` uses no stack\n\nSo the chain\u2019s combined stack is `24 + 260 + 260 = 544`, which exceeds 512. That is exactly what the log reports:\n\n```\ncombined stack size of 3 calls is 544. Too large\n```\n\n(The same applies to `entry -> helper_c -> helper_d`, also two 260-byte frames.)\n\nThis is not a logic bug \u2014 the functions verify fine individually (`helper_d` is reported safe). The only problem is the total stack budget across nested calls.\n\n## Fix\n\nShrink the per-function stack array so that two nested frames plus the entry frame stay under 512 bytes. We need:\n\n```\n2 * MAX_STACK + (entry stack \u2248 24) \u2264 512   =>   MAX_STACK \u2264 244\n```\n\nThe smallest source change is to reduce `MAX_STACK`:\n\n```c\n-#define MAX_STACK 260\n+#define MAX_STACK 240\n```\n\nWith `MAX_STACK = 240` the deepest chain uses `24 + 240 + 240 = 504 \u2264 512`, so verification passes while keeping the structure (multiple nested global functions each using a sizeable stack buffer) intact.\n\nIf the test\u2019s intent is specifically to probe the *boundary*, pick the largest value that still fits (e.g. `244`), but `240` gives a safe margin.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01Gvywfpfkshsw1YMYmFM66o",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 893,
+      "output_tokens": 2132,
+      "output_tokens_details": {
+        "thinking_tokens": 1496
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

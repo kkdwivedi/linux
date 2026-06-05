@@ -1,0 +1,49 @@
+## Explanation of the Verifier Failure
+
+The BPF verifier is rejecting this program because **`helper_a()` is recursively calling itself**. The verifier explicitly detects and forbids recursive function calls in eBPF programs, as shown by the error message:
+
+```
+recursive call from helper_a() to helper_a()
+```
+
+This is a fundamental limitation of the BPF verifier—it does not allow direct or indirect recursion because:
+1. Recursion can lead to unbounded stack usage
+2. It complicates static analysis and verification
+3. The verifier cannot guarantee termination
+
+## Proposed Fix
+
+The smallest fix is to **remove the recursive call** and replace it with a loop. Since the function is using `__naked` inline assembly, we can restructure the logic to use a loop instead of recursion:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r1 = 0;						\
+	call helper_a;					\
+	exit;						\
+"	::: __clobber_all);
+}
+
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l0_%=:	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l0_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+## Why This Works
+
+- **Changed from recursion to iteration**: The `call helper_a` instruction is replaced with a backward jump `goto l0_%=`, creating a loop instead of a recursive call.
+- **Same logic**: The loop increments `r1`, checks if it's less than 4, and repeats if true—identical behavior to the recursive version.
+- **Verifier-compliant**: Loops are allowed; only recursion is forbidden.
+- **Minimal change**: Only the assembly code is modified; the C structure remains the same.

@@ -1,0 +1,56 @@
+## What the verifier is complaining about
+
+`bpf_res_spin_lock`/`bpf_res_spin_unlock` are tracked by the verifier as a **stack of held locks**, and they must be released in strict **LIFO (reverse acquisition) order**. The error
+
+```
+bpf_res_spin_unlock cannot be out of order
+```
+
+means that on some explored path the verifier sees an unlock of a lock that is *not* the most-recently-acquired one.
+
+## Why it triggers here
+
+Acquisition order in the function is:
+
+1. `lock_a`
+2. `lock_b`
+
+So the only legal release order is `lock_b` then `lock_a`.
+
+At the bottom of the function you wrote:
+
+```c
+bpf_res_spin_unlock(&lock_a);   /* releases the OLDER lock first  -> wrong */
+bpf_res_spin_unlock(&lock_b);
+```
+
+Because the unlock of `lock_a` is common to both the error path and the success path, the compiler hoisted it (insn 8–10 in the log) ahead of the `w6` branch check. On the path where `bpf_res_spin_lock(&lock_b)` succeeded, both locks are held, and the first unlock encountered is `lock_a` — i.e. releasing the older lock while the newer `lock_b` is still held. That is the out‑of‑order release the verifier rejects.
+
+## The fix
+
+Release the locks in reverse order of acquisition (`lock_b` first, then `lock_a`):
+
+```c
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+```
+
+Full corrected function:
+
+```c
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```
+
+The error path is already correct: if `bpf_res_spin_lock(&lock_b)` fails, only `lock_a` is held, so unlocking just `lock_a` is the proper top-of-stack release. With the swap, every path releases locks in strict LIFO order and the verifier is satisfied.

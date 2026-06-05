@@ -1,0 +1,16 @@
+The verifier fails due to exceeding the liveness analysis complexity limit (10001 calls). This occurs because the program generates an enormous number of call instructions via nested macros: each helper function calls the next one 50 times, leading to a multiplicative explosion (50^7 ≈ 78 billion calls to `helper_g`). The verifier analyzes each call individually, surpassing the limit.
+
+The smallest fix is to reduce the number of calls per level from 50 to 2, drastically lowering the total calls to `helper_g` to 2^7 = 128, well under the limit. This is achieved by redefining the `CALLS_50` macro to expand to only two call instructions instead of 50.
+
+Patch:
+```diff
+--- original.c
++++ fixed.c
+@@ -7,7 +7,7 @@
+ #define CALLS_10(fn) \
+ 	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \
+ 	CALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)
+-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
++#define CALLS_50(fn) CALL_AT(fn, 8) CALL_AT(fn, 16)
+```
+This change affects all helper functions uniformly, reducing the call count while preserving the program structure and stack offset validity.

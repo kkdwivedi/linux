@@ -1,0 +1,89 @@
+The verifier failure is at:
+
+```c
+acquired = bpf_task_acquire(value->task);
+```
+
+`value` is a map value returned from `bpf_map_lookup_elem()`. Its `task` field is a kptr:
+
+```c
+struct map_value {
+	struct task_struct *task;
+};
+```
+
+When the verifier loads `value->task`, it types the result as:
+
+```text
+rcu_ptr_or_null_task_struct
+```
+
+i.e. the pointer may be `NULL`. But `bpf_task_acquire()` requires a non-`NULL` `struct task_struct *`. Even though this program previously inserted/acquired/exchanged a task into the map, the verifier does not prove that the later map lookup returns a value whose kptr field is definitely non-`NULL`. Kptr loads from maps are treated as nullable unless explicitly checked.
+
+The smallest fix is to load `value->task` into a local variable, check it for `NULL`, and only call `bpf_task_acquire()` on the non-`NULL` path.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -68,6 +68,7 @@ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+ 	struct task_struct *acquired;
++	struct task_struct *value_task;
+ 	struct map_value *value;
+ 
+ 	value = helper_a(task);
+@@ -75,7 +76,11 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ 		return 0;
+ 
+-	acquired = bpf_task_acquire(value->task);
++	value_task = value->task;
++	if (!value_task)
++		return 0;
++
++	acquired = bpf_task_acquire(value_task);
+ 	if (!acquired)
+ 		return 0;
+ 
+```
+
+Or equivalently, the fixed `entry()` becomes:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct task_struct *acquired;
+	struct task_struct *value_task;
+	struct map_value *value;
+
+	value = helper_a(task);
+	if (!value)
+		return 0;
+
+	value_task = value->task;
+	if (!value_task)
+		return 0;
+
+	acquired = bpf_task_acquire(value_task);
+	if (!acquired)
+		return 0;
+
+	bpf_task_release(acquired);
+	return 0;
+}
+```
+
+Using a temporary is important: writing only
+
+```c
+if (!value->task)
+	return 0;
+acquired = bpf_task_acquire(value->task);
+```
+
+may compile into two separate loads from the map kptr field, and the verifier may still consider the second load nullable. Loading once, checking that same register, and passing that checked pointer to `bpf_task_acquire()` is the verifier-friendly form.

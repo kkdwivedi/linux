@@ -1,0 +1,24 @@
+## Explanation
+
+The program reserves two ring-buffer dynptrs (`ptr1` and `ptr2`). In the **null-sample branch** both are correctly released via `bpf_ringbuf_discard_dynptr`. However, in the **non-null branch** (when `sample != NULL`) only `ptr1` is submitted — `ptr2` is never released. The verifier tracks the reference acquired at instruction 14 (`ptr2`, id=3) and reports it as still live at the exit point.
+
+```
+Unreleased reference id=3 alloc_insn=14
+```
+
+## Fix
+
+Add a release call for `ptr2` before the final `return 0` in the success path:
+
+```c
+--- a/case.c
++++ b/case.c
+@@ -108,6 +108,7 @@ int entry(void *ctx)
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+ 
++	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+ 	return 0;
+ }
+```
+
+With this change, every code path releases both dynptrs before the program exits, satisfying the verifier's resource lifetime safety requirement.

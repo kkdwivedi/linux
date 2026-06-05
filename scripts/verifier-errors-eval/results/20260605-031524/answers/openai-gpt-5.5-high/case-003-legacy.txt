@@ -1,0 +1,67 @@
+The failure is caused by the byte store corrupting the verifier’s spilled-pointer state.
+
+`r1` is the socket context pointer. Instruction 0 spills it to stack bytes `fp[-8, -1]`:
+
+```asm
+*(u64*)(r10 - 8) = r1;
+```
+
+Then this instruction writes one byte into that same 8-byte stack slot:
+
+```asm
+*(u8*)(r10 - 7) = r0;
+```
+
+So the verifier can no longer treat `fp-8` as a clean spilled `ctx` pointer. The log shows that transition:
+
+```text
+fp-8=ctx()
+...
+fp-8=mmmmmmmm
+```
+
+After that, reloading from `r10 - 8` gives an unknown scalar, not a pointer:
+
+```text
+3: r0 = *(u64 *)(r10 -8) ; R0=scalar()
+```
+
+Then the program tries to dereference that scalar:
+
+```asm
+r0 = *(u64*)(r0 + 8);
+```
+
+and the verifier rejects it:
+
+```text
+R0 invalid mem access 'scalar'
+```
+
+Smallest source-level fix: do not write into the stack slot containing the spilled pointer. Move the `u8` store to a non-overlapping stack location, e.g. `r10 - 16`.
+
+Patch:
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -8,7 +8,7 @@ __naked void entry(void)
+ 	asm volatile ("					\
+ 	*(u64*)(r10 - 8) = r1;				\
+ 	r0 = 0x23;					\
+-	*(u8*)(r10 - 7) = r0;				\
++	*(u8*)(r10 - 16) = r0;				\
+ 	r0 = *(u64*)(r10 - 8);				\
+ 	r0 = *(u64*)(r0 + 8);				\
+ 	exit;						\
+```
+
+With that change, the verifier should preserve `fp-8` as a spilled `ctx` pointer, so the reload becomes `R0=ctx()` instead of `R0=scalar()`, satisfying the verifier for the shown failure.
+
+One additional note: for `SEC("socket")`, if the verifier then reports an invalid context access at `ctx + 8` with size 8, change the final load to a 32-bit load:
+
+```asm
+r0 = *(u32*)(r0 + 8);
+```
+
+But the logged failure itself is the partial overwrite of the spilled pointer.

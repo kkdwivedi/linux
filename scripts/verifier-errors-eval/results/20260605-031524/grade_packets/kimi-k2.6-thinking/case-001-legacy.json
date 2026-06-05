@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Use bpf_cpumask_create(), check for NULL, call bpf_cpumask_populate on the returned cpumask pointer, and release it before returning.",
+    "Replace the integer-cast pointer with another verifier-known memory object accepted by the kfunc contract."
+  ],
+  "canonical_fix": "Allocate or otherwise use verifier-known cpumask memory and pass that pointer to bpf_cpumask_populate, then release it if ownership was acquired.",
+  "case_id": "case-001",
+  "category": "Call Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The first argument to bpf_cpumask_populate is produced by casting the integer constant 0x123456 to a cpumask pointer. The verifier tracks it as a scalar, not as verifier-known writable memory of the required cpumask size.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-thinking/case-001-legacy.txt",
+    "case_id": "case-001",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-thinking",
+    "prompt_bytes": 1470,
+    "prompt_path": "public/case-001/prompt_legacy.md",
+    "prompt_sha256": "a0e1ddcc93f0bbda0f2825039ffd053bcc68794492e83d423c6bece1a756de61",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-thinking/case-001-legacy.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "enabled"
+    },
+    "run_id": "744dc935-dfb8-40de-918c-9eb9e06754c2",
+    "started_at": "2026-06-05T03:36:46+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "**Explanation**\n\nThe verifier rejects the program at the call to `bpf_cpumask_populate`:\n\n```\nR1 type=scalar expected=fp\n```\n\n`bpf_cpumask_populate` requires its first argument to point to a `struct cpumask`\nthat lives in the BPF program\u2019s stack (a frame-pointer-based memory region).  \nInstead, the code passes the constant integer `0x123456`, which the verifier\ntracks as an untrusted **scalar**. Because the argument is not a stack pointer,\nthe verifier refuses to load the program.\n\nAdditionally, even if the first argument were fixed, `bits` is passed by\nreference as an input buffer but is never initialized. The verifier checks that\nmemory read by helpers is initialized, so `bits` must be given a value.\n\n**Fix**\n\nReplace the dummy scalar \u201cpointer\u201d with a real `struct cpumask` allocated on the\nstack, and initialize `bits` so the helper can safely read from it.\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -228,11 +228,11 @@ char _license[] SEC(\"license\") = \"GPL\";\n SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n-\tstruct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;\n-\tu64 bits;\n+\tstruct cpumask mask;\n+\tu64 bits = 0;\n \tint ret;\n \n-\tret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));\n+\tret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));\n \tif (!ret)\n \t\treturn 2;\n \n```\n\nThis satisfies the verifier because `&mask` is a valid stack pointer\n(`R1=fp-N`) and `bits` is known-initialized stack memory, matching the\nexpected types for both helper arguments.",
+  "must_mention": [
+    "R1 is a scalar/integer, not memory",
+    "The destination pointer must be verifier-known memory",
+    "Do not cast a constant integer to a pointer"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes the integer value",
+    "Adds a NULL check around the integer-cast pointer",
+    "Suppresses or ignores the return value without fixing the destination pointer"
+  ]
+}

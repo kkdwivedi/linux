@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Lower MAX_STACK enough that the nested helper frames fit within 512 bytes.",
+    "Move large buffers out of nested helpers or reuse a smaller/shared buffer in a verifier-accepted way.",
+    "Restructure calls so helper_b and helper_c are not simultaneously on the stack with large local buffers."
+  ],
+  "canonical_fix": "Reduce stack use along the nested call chain or shorten the call chain so the combined stack depth is at or below the verifier limit.",
+  "case_id": "case-013",
+  "category": "Verifier Limit",
+  "difficulty": "medium",
+  "expected_explanation": "The call chain entry -> helper_c -> helper_b uses more than the verifier's combined call-stack depth limit. The large per-function stack buffers accumulate across nested bpf2bpf calls.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-high/case-013-diagnostic.txt",
+    "case_id": "case-013",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-high",
+    "prompt_bytes": 2658,
+    "prompt_path": "public/case-013/prompt_diagnostic.md",
+    "prompt_sha256": "044070894a5a67f43ab32448001b1bd67c0db88fee4087d1bb67f71a9273513d",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-high/case-013-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "5780cff5-ccb2-4157-aa24-049d5be91f58",
+    "started_at": "2026-06-05T03:16:00+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The failure is not caused by an invalid skb access or bad argument type. It is the verifier\u2019s combined BPF-to-BPF call stack limit.\n\n`helper_b()`, `helper_c()`, and `helper_d()` each allocate:\n\n```c\nvolatile char buf[MAX_STACK] = {};\n```\n\nWith `MAX_STACK == 260`, the generated BPF stack frame is rounded/aligned to about `272` bytes. When `entry()` calls `helper_c()`, and `helper_c()` calls `helper_b()`, both `helper_c`\u2019s and `helper_b`\u2019s stack frames are live at the same time:\n\n```text\nentry -> helper_c -> helper_b\n```\n\nSo the verifier sees roughly:\n\n```text\n272 + 272 = 544 bytes\n```\n\nwhich exceeds the 512-byte combined call-chain stack limit.\n\nThe smallest likely source fix is to reduce the local buffer size so each frame rounds to 256 bytes instead of 272. Since 512 bytes is allowed and only values greater than 512 fail, changing `MAX_STACK` from `260` to `256` should make the deepest chains:\n\n```text\nentry -> helper_c -> helper_b\nentry -> helper_c -> helper_d\n```\n\nuse at most:\n\n```text\n256 + 256 = 512 bytes\n```\n\nand pass verification.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -1,7 +1,7 @@\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n \n-#define MAX_STACK 260\n+#define MAX_STACK 256\n \n static __attribute__((noinline))\n int helper_a(int val, struct __sk_buff *skb)\n```\n\nIf a particular compiler/kernel combination still emits extra stack in `entry()`, then reducing further to `248` would provide margin, but based on the verifier log, `260 -> 256` is the minimal likely fix.",
+  "must_mention": [
+    "Combined call-chain stack depth exceeds the verifier limit",
+    "Large local buffers in nested helpers are the cause",
+    "Fix must reduce stack usage or call depth"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds bounds checks around skb fields",
+    "Changes helper return arithmetic only",
+    "Reduces stack in a helper not on the reported call chain while leaving the chain over limit"
+  ]
+}

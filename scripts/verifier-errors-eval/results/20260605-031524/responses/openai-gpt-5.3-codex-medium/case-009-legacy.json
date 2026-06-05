@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier is failing at this line in `entry`:\n\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\n### Why it fails\n\nEven though `value` is checked non-NULL, `value->task` is a **separate pointer** loaded from map memory, and verifier sees it as:\n\n- `rcu_ptr_or_null_task_struct`\n\nSo at the call site, arg1 may still be NULL.  \nVerifier error confirms exactly that:\n\n> `Possibly NULL pointer passed to trusted R1`\n\nIt cannot prove from `helper_a()/map_insert()` that `value->task` is always initialized at this later lookup.\n\n---\n\n### Smallest likely fix\n\nAdd an explicit NULL check for the loaded `task` pointer before calling `bpf_task_acquire`, and use the same checked variable in the call.\n\n#### Patch\n\n```diff\n@@\n SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n+\tstruct task_struct *map_task;\n \tstruct task_struct *acquired;\n \tstruct map_value *value;\n@@\n \tvalue = helper_a(task);\n \tif (!value)\n \t\treturn 0;\n \n-\tacquired = bpf_task_acquire(value->task);\n+\tmap_task = value->task;\n+\tif (!map_task)\n+\t\treturn 0;\n+\n+\tacquired = bpf_task_acquire(map_task);\n \tif (!acquired)\n \t\treturn 0;\n \n \tbpf_task_release(acquired);\n \treturn 0;\n }\n```\n\nThis is the minimal source-level change that directly addresses the verifier complaint.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-medium/case-009-legacy.txt",
+    "case_id": "case-009",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-medium",
+    "prompt_bytes": 7630,
+    "prompt_path": "public/case-009/prompt_legacy.md",
+    "prompt_sha256": "cf955480f8f9d7c397454ba70a58615a32d27994e0f99c26d423ded383546618",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-medium/case-009-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "cc9a9d90-64a5-4041-a5cd-d4ff605e4318",
+    "started_at": "2026-06-05T03:16:27+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00500675,
+    "output_cost_usd": 0.024066,
+    "total_cost_usd": 0.02907275
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 2861,
+    "output_tokens": 1719,
+    "raw_usage": {
+      "input_tokens": 2861,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1719,
+      "output_tokens_details": {
+        "reasoning_tokens": 1374
+      },
+      "total_tokens": 4580
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 1374,
+    "total_tokens": 4580
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629416,
+    "created_at": 1780629387,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0f6c7fc4c81062d4006a223f8b57a081a28bcd3b66082782e8",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0f6c7fc4c81062d4006a223f8bca6081a2889dec9a9c745f8f",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier is failing at this line in `entry`:\n\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\n### Why it fails\n\nEven though `value` is checked non-NULL, `value->task` is a **separate pointer** loaded from map memory, and verifier sees it as:\n\n- `rcu_ptr_or_null_task_struct`\n\nSo at the call site, arg1 may still be NULL.  \nVerifier error confirms exactly that:\n\n> `Possibly NULL pointer passed to trusted R1`\n\nIt cannot prove from `helper_a()/map_insert()` that `value->task` is always initialized at this later lookup.\n\n---\n\n### Smallest likely fix\n\nAdd an explicit NULL check for the loaded `task` pointer before calling `bpf_task_acquire`, and use the same checked variable in the call.\n\n#### Patch\n\n```diff\n@@\n SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n+\tstruct task_struct *map_task;\n \tstruct task_struct *acquired;\n \tstruct map_value *value;\n@@\n \tvalue = helper_a(task);\n \tif (!value)\n \t\treturn 0;\n \n-\tacquired = bpf_task_acquire(value->task);\n+\tmap_task = value->task;\n+\tif (!map_task)\n+\t\treturn 0;\n+\n+\tacquired = bpf_task_acquire(map_task);\n \tif (!acquired)\n \t\treturn 0;\n \n \tbpf_task_release(acquired);\n \treturn 0;\n }\n```\n\nThis is the minimal source-level change that directly addresses the verifier complaint.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0f6c7fc4c81062d4006a223f9fd4c881a2980b2a0027b97f0f",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 2861,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1719,
+      "output_tokens_details": {
+        "reasoning_tokens": 1374
+      },
+      "total_tokens": 4580
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

@@ -1,0 +1,130 @@
+{
+  "answer_text": "The failure is **not** a type/safety bug; it\u2019s a verifier **complexity blow-up** in inter-procedural liveness:\n\n- `entry -> helper_a -> ... -> helper_g` is 7 call levels deep.\n- Each level does `CALLS_50(...)` (50 callsites).\n- Liveness is re-entering subprogs per call-chain/callsite context (log shows `helper_g` analyzed over and over).\n- It hits the hard cap:  \n  `liveness analysis exceeded complexity limit (10001 calls)`.\n\nSo the program is rejected before normal instruction-state exploration (`processed 0 insns`).\n\n### Smallest likely fix\n\nReduce call fan-out per subprog so liveness call count stays below 10k.  \nThe smallest source edit is to redefine `CALLS_50` to generate far fewer calls.\n\nA safe choice is 2 calls per function:\n\n```diff\n--- a/prog.c\n+++ b/prog.c\n@@ -5,7 +5,7 @@\n #define CALLS_10(fn) \\\n \tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n \tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n+#define CALLS_50(fn) CALL_AT(fn, 8) CALL_AT(fn, 16)\n```\n\nThis keeps structure unchanged and only lowers verifier workload enough to avoid the liveness complexity limit.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-medium/case-020-legacy.txt",
+    "case_id": "case-020",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-medium",
+    "prompt_bytes": 6158,
+    "prompt_path": "public/case-020/prompt_legacy.md",
+    "prompt_sha256": "cecfa6936349490d4b7bd2b0131df3ba133333894cfcdcc4438f6f6f0196b689",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-medium/case-020-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "1c854c71-86b0-43db-9e50-dc329a63cfd4",
+    "started_at": "2026-06-05T03:16:39+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.0045955,
+    "output_cost_usd": 0.031584,
+    "total_cost_usd": 0.0361795
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 2626,
+    "output_tokens": 2256,
+    "raw_usage": {
+      "input_tokens": 2626,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 2256,
+      "output_tokens_details": {
+        "reasoning_tokens": 1871
+      },
+      "total_tokens": 4882
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 1871,
+    "total_tokens": 4882
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629439,
+    "created_at": 1780629400,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_018a0eeff8172941006a223f97f9ac819f971bb14e677ff4a9",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_018a0eeff8172941006a223f98c970819fbee728e0ee042eb4",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is **not** a type/safety bug; it\u2019s a verifier **complexity blow-up** in inter-procedural liveness:\n\n- `entry -> helper_a -> ... -> helper_g` is 7 call levels deep.\n- Each level does `CALLS_50(...)` (50 callsites).\n- Liveness is re-entering subprogs per call-chain/callsite context (log shows `helper_g` analyzed over and over).\n- It hits the hard cap:  \n  `liveness analysis exceeded complexity limit (10001 calls)`.\n\nSo the program is rejected before normal instruction-state exploration (`processed 0 insns`).\n\n### Smallest likely fix\n\nReduce call fan-out per subprog so liveness call count stays below 10k.  \nThe smallest source edit is to redefine `CALLS_50` to generate far fewer calls.\n\nA safe choice is 2 calls per function:\n\n```diff\n--- a/prog.c\n+++ b/prog.c\n@@ -5,7 +5,7 @@\n #define CALLS_10(fn) \\\n \tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n \tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n+#define CALLS_50(fn) CALL_AT(fn, 8) CALL_AT(fn, 16)\n```\n\nThis keeps structure unchanged and only lowers verifier workload enough to avoid the liveness complexity limit.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_018a0eeff8172941006a223fb9cd18819f90043964a3f7809b",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 2626,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 2256,
+      "output_tokens_details": {
+        "reasoning_tokens": 1871
+      },
+      "total_tokens": 4882
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

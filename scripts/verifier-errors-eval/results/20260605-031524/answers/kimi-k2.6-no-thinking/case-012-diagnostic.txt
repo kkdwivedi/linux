@@ -1,0 +1,34 @@
+Looking at this verifier failure, I need to understand what's happening and find the smallest fix.
+
+## Verifier Failure Explanation
+
+The error is clear: `helper_a()` is being called inside an IRQ-disabled region (between `bpf_local_irq_save()` and `bpf_local_irq_restore()`), but `helper_a()` contains a call to `bpf_copy_from_user()` which is a **sleepable** operation. The verifier correctly rejects this because sleeping while IRQs are disabled can cause deadlocks.
+
+The key insight is that `bpf_copy_from_user()` is a sleepable helper, and the verifier analyzes the function body of `helper_a()` to determine that it's sleepable, even though in this specific call path (`helper_a(0)`), the `bpf_copy_from_user()` call is guarded by `if (!i)` and would not actually execute when `i=0`.
+
+The verifier performs **must-analysis** for sleepability - if a function *can* sleep (contains a sleepable helper call), it's marked as sleepable globally, regardless of runtime conditions.
+
+## The Smallest Fix
+
+The fix is to move the `helper_a(0)` call **outside** the IRQ-disabled critical section. Since `helper_a(0)` doesn't actually sleep (the `i=0` means the sleepable path isn't taken), but the verifier can't prove this, we simply need to restructure the code.
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -495,9 +495,9 @@ int __noinline helper_a(int i)
+ SEC("?syscall")
+ int entry(void *ctx)
+ {
+ 	unsigned long flags;
+ 
++	helper_a(0);
+ 	bpf_local_irq_save(&flags);
+-	helper_a(0);
+ 	bpf_local_irq_restore(&flags);
+ 	return 0;
+ }
+```
+
+This is the minimal fix: move `helper_a(0)` to before `bpf_local_irq_save()`. The function call doesn't need IRQ protection anyway (it's just reading a parameter and conditionally calling a helper), and since `helper_a(0)` with `i=0` doesn't actually execute the sleepable path at runtime, there's no correctness issue with moving it outside.
+
+If the intent was that `helper_a()` *must* be called with IRQs disabled for some reason (though the code doesn't suggest this), an alternative would be to remove the sleepable `bpf_copy_from_user()` from `helper_a()` or split into two functions. But given the structure, simply moving the call outside the critical section is the cleanest and smallest fix.

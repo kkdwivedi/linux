@@ -1,0 +1,42 @@
+I'll analyze this verifier failure and propose a fix.
+
+## Verifier Failure Explanation
+
+The verifier is rejecting this program for a clear reason: **calling `bpf_copy_from_user()` inside a non-preemptible region is not allowed**.
+
+Looking at the verifier log:
+1. `bpf_preempt_disable()` is called at instruction 0, entering a non-preemptible region
+2. `bpf_copy_from_user()` is called at instruction 5
+3. The verifier rejects with: `sleepable helper bpf_copy_from_user#148 in non-preemptible region`
+
+The key insight is that `bpf_copy_from_user()` is a **sleepable helper** - it may sleep/block while waiting to copy data from user space. Sleeping is not allowed while preemption is disabled because it could lead to deadlocks or scheduler issues.
+
+The `bpf_preempt_disable()`/`bpf_preempt_enable()` pair creates a critical section where sleeping is prohibited, but `bpf_copy_from_user()` fundamentally needs to be able to sleep (it accesses user memory which may be paged out, requiring fault handling that can sleep).
+
+## The Fix
+
+The smallest fix is to simply **remove the `bpf_preempt_disable()`/`bpf_preempt_enable()` pair** entirely. These calls serve no valid purpose here since:
+
+1. `bpf_copy_from_user()` cannot be called in a non-preemptible region anyway
+2. The program doesn't need preemption protection for any other operations
+
+Here's the patch:
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -109,9 +109,7 @@ SEC("?fentry.s/sys_getpgid")
+ int entry(void *ctx)
+ {
+ 	u32 data;
+ 
+-	bpf_preempt_disable();
+ 	bpf_copy_from_user(&data, sizeof(data), NULL);
+-	bpf_preempt_enable();
+ 	return 0;
+ }
+```
+
+Alternatively, if the intent was to use `bpf_copy_from_user()` with preemption disabled as some kind of test, this pattern is fundamentally incompatible with the eBPF verifier's safety model. The sleepable nature of `bpf_copy_from_user()` is an intrinsic property that cannot be worked around.
+
+The fix removes 3 lines (2 function calls and one blank line adjustment), leaving just the `bpf_copy_from_user()` call which is valid on its own in this sleepable fentry program context.

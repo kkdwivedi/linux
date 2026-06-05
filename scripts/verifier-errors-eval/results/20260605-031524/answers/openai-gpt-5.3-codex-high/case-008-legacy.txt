@@ -1,0 +1,32 @@
+The verifier is rejecting the `bpf_dynptr_slice()` call because the size argument doesn’t match the actual stack buffer size.
+
+### Why it fails
+
+- `buffer` is declared as `char buffer[8]`.
+- You call:
+
+```c
+data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
+```
+
+So helper args are effectively `(ptr = fp-24, len = 9)`.
+
+From the log:
+
+- `R3 = fp-24` (pointer to `buffer`)
+- `R4 = 9` (requested size)
+
+That means the helper could access bytes `fp-24 .. fp-16` (9 bytes), but `buffer` only covers `fp-24 .. fp-17` (8 bytes). This is a 1-byte overrun into adjacent stack area (where `ptr` lives), so verifier rejects it.
+
+---
+
+### Smallest likely fix
+
+Use the actual buffer size for the 4th argument.
+
+```diff
+-	data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
++	data = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+```
+
+This should satisfy the verifier since the memory range is now provably within stack bounds.

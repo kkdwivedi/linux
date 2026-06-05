@@ -1,0 +1,40 @@
+The verifier is enforcing **resource lifetime / nesting rules** for `bpf_local_irq_save()` / `bpf_local_irq_restore()`.
+
+### Why it fails
+
+Your program does:
+
+1. `save(&flags1)`  ← acquire IRQ state id=1  
+2. `save(&flags2)`  ← acquire IRQ state id=2 (nested)
+3. `restore(&flags1)` ❌ tries to restore id=1 first
+4. `restore(&flags2)`
+
+These saves/restores must be **LIFO** (stack discipline), so the most recent save (`flags2`) must be restored first.
+
+The log confirms that:
+- At insn 7 it acquired id=2
+- At insn 9 it expected restore of id=2, but got `&flags1` instead.
+
+---
+
+### Smallest fix
+
+Swap the two restore calls:
+
+```diff
+ SEC("?tc")
+ int entry(struct __sk_buff *ctx)
+ {
+ 	unsigned long flags1, flags2;
+
+ 	bpf_local_irq_save(&flags1);
+ 	bpf_local_irq_save(&flags2);
+-	bpf_local_irq_restore(&flags1);
+-	bpf_local_irq_restore(&flags2);
++	bpf_local_irq_restore(&flags2);
++	bpf_local_irq_restore(&flags1);
+ 	return 0;
+ }
+```
+
+This matches verifier-required nesting and should pass this check.

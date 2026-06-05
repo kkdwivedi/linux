@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Move helper_a(0) after bpf_local_irq_restore(&flags).",
+    "Split helper_a so the IRQ-disabled path calls only a non-sleepable helper.",
+    "Avoid disabling IRQs around the call if the critical section is not needed."
+  ],
+  "canonical_fix": "Restore IRQ state before calling the sleepable subprogram, or remove/replace the sleepable helper from the subprogram used in the IRQ-disabled region.",
+  "case_id": "case-012",
+  "category": "Execution Context Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The entry program disables IRQs and then calls a global subprogram that can call a sleepable helper. The verifier treats the sleepable call through the subprogram as occurring inside the IRQ-disabled region.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-thinking/case-012-diagnostic.txt",
+    "case_id": "case-012",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-thinking",
+    "prompt_bytes": 3392,
+    "prompt_path": "public/case-012/prompt_diagnostic.md",
+    "prompt_sha256": "cb0bb7bae71f637618353d539dc3320ce61e3ed2b36b833f42dc45015a35e430",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-thinking/case-012-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "enabled"
+    },
+    "run_id": "2a5abca3-ca9d-4b21-9980-169532a87a04",
+    "started_at": "2026-06-05T03:52:35+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "**Explanation**\n\nThe verifier rejects the program because `helper_a()` is a *sleepable* BPF subprogram: it contains a call to `bpf_copy_from_user()`, which may sleep. The verifier tracks regions where IRQs are disabled (entered here by `bpf_local_irq_save()`). Calling any function that might sleep inside such a region is forbidden, because sleeping while IRQs are disabled is unsafe.\n\nThe causal path in the log is unambiguous:\n\n1. `bpf_local_irq_save(&flags)` enters an IRQ-disabled region (depth becomes\u202f1).\n2. `helper_a(0)` is called while still inside that region.\n3. The verifier sees that `helper_a()` may call a sleepable helper and aborts with an execution-context safety error.\n\nThe smallest fix is to simply move the call to `helper_a()` outside the critical section, which satisfies the rule without changing any other semantics.\n\n*(Note: the line `arg#0 reference type('UNKNOWN ') size cannot be determined: -22` printed at the top of the log is a non-fatal BTF-resolution message; the actual hard failure is the \u201csleepable global function \u2026 called in IRQ-disabled region\u201d error.)*\n\n**Patch**\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -494,9 +494,9 @@ SEC(\"?syscall\")\n int entry(void *ctx)\n {\n \tunsigned long flags;\n \n+\thelper_a(0);\n \tbpf_local_irq_save(&flags);\n-\thelper_a(0);\n \tbpf_local_irq_restore(&flags);\n \treturn 0;\n }\n```",
+  "must_mention": [
+    "A sleepable operation is reached through a global subprogram",
+    "IRQs are disabled at that point",
+    "The call must be outside the IRQ-disabled region"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes helper_a's argument value",
+    "Moves bpf_local_irq_restore after the return",
+    "Adds a NULL check for the local buffer"
+  ]
+}

@@ -1,0 +1,130 @@
+{
+  "answer_text": "`helper_a()` is being verified as a separate subprogram, and its argument `s` is treated conservatively as `mem_or_null` (nullable pointer), not guaranteed non-NULL.\n\nFrom the log:\n\n- `R1=mem_or_null(...)` on entry to `helper_a`\n- then `r6 = r1`\n- then dereference `*(u32 *)(r6 + 0)` without proving non-NULL\n- verifier rejects: **`R6 invalid mem access 'mem_or_null'`**\n\nSo the issue is not `entry()`; it\u2019s that `helper_a()` dereferences a potentially NULL pointer argument without a guard.\n\n### Smallest likely fix\n\nAdd a NULL check in `helper_a()` before `s->x` access.\n\n```diff\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n\n struct Item {\n \tint x;\n };\n\n __noinline int helper_a(const struct Item *s)\n {\n+\tif (!s)\n+\t\treturn 0;\n \treturn bpf_get_prandom_u32() < s->x;\n }\n\n SEC(\"cgroup_skb/ingress\")\n int entry(struct __sk_buff *skb)\n {\n \tconst struct Item s = {.x = skb->len};\n\n \thelper_a(&s);\n\n \treturn 1;\n }\n```\n\nThis allows the verifier to refine `s` to non-NULL on the dereference path.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-medium/case-004-legacy.txt",
+    "case_id": "case-004",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-medium",
+    "prompt_bytes": 1415,
+    "prompt_path": "public/case-004/prompt_legacy.md",
+    "prompt_sha256": "5122475504cbe77965669ffc9de4273ee4a86feb8b73ecbb090ea008b68a08ae",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-medium/case-004-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "2b6193e2-adf4-499d-9bf2-163d0f91da86",
+    "started_at": "2026-06-05T03:16:21+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000945,
+    "output_cost_usd": 0.01113,
+    "total_cost_usd": 0.012074999999999999
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 540,
+    "output_tokens": 795,
+    "raw_usage": {
+      "input_tokens": 540,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 795,
+      "output_tokens_details": {
+        "reasoning_tokens": 495
+      },
+      "total_tokens": 1335
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 495,
+    "total_tokens": 1335
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629393,
+    "created_at": 1780629382,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_06b4773552f95aeb006a223f85fa4481a2a0d4c27d9f71d682",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_06b4773552f95aeb006a223f865d0881a2ae16bd0167a4df7a",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "`helper_a()` is being verified as a separate subprogram, and its argument `s` is treated conservatively as `mem_or_null` (nullable pointer), not guaranteed non-NULL.\n\nFrom the log:\n\n- `R1=mem_or_null(...)` on entry to `helper_a`\n- then `r6 = r1`\n- then dereference `*(u32 *)(r6 + 0)` without proving non-NULL\n- verifier rejects: **`R6 invalid mem access 'mem_or_null'`**\n\nSo the issue is not `entry()`; it\u2019s that `helper_a()` dereferences a potentially NULL pointer argument without a guard.\n\n### Smallest likely fix\n\nAdd a NULL check in `helper_a()` before `s->x` access.\n\n```diff\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n\n struct Item {\n \tint x;\n };\n\n __noinline int helper_a(const struct Item *s)\n {\n+\tif (!s)\n+\t\treturn 0;\n \treturn bpf_get_prandom_u32() < s->x;\n }\n\n SEC(\"cgroup_skb/ingress\")\n int entry(struct __sk_buff *skb)\n {\n \tconst struct Item s = {.x = skb->len};\n\n \thelper_a(&s);\n\n \treturn 1;\n }\n```\n\nThis allows the verifier to refine `s` to non-NULL on the dereference path.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_06b4773552f95aeb006a223f8e63d881a28ee60b08d3f8e690",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 540,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 795,
+      "output_tokens_details": {
+        "reasoning_tokens": 495
+      },
+      "total_tokens": 1335
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

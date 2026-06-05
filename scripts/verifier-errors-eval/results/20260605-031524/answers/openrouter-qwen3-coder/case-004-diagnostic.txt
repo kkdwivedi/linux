@@ -1,0 +1,33 @@
+### Problem Explanation
+
+The verifier is rejecting the eBPF program because it cannot prove that the pointer `s` passed to the function `helper_a` is non-NULL. The function `helper_a` takes a pointer to a `struct Item`, and the verifier tracks this pointer as `mem_or_null`, meaning it might be NULL. When the program attempts to dereference `s->x`, the verifier flags this as unsafe because it could lead to a NULL pointer dereference.
+
+The root cause is that the pointer `&s` in the `entry` function is passed to `helper_a` without any explicit guarantee that it is non-NULL. Although the pointer is derived from a stack variable, the verifier conservatively assumes it might be NULL due to the `__noinline` attribute and the way the pointer is handled.
+
+### Solution
+
+To fix this, we need to ensure that the pointer passed to `helper_a` is provably non-NULL. The simplest way to achieve this is to **remove the `__noinline` attribute** from `helper_a`. This allows the verifier to inline the function and analyze the pointer directly in the context of the caller, where it is clear that `&s` is a valid stack address and not NULL.
+
+### Patch
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -9,7 +9,7 @@ struct Item {
+ 	int x;
+ };
+ 
+-__noinline int helper_a(const struct Item *s)
++int helper_a(const struct Item *s)
+ {
+ 	return bpf_get_prandom_u32() < s->x;
+ }
+```
+
+### Why This Works
+
+1. By removing `__noinline`, the function `helper_a` will be inlined during verification.
+2. When inlined, the verifier can directly see that `&s` is derived from a valid stack variable (`s`) in the `entry` function.
+3. This eliminates the `mem_or_null` type annotation and allows safe dereferencing of `s->x`.
+
+This is the smallest and most targeted fix to satisfy the verifier's safety requirements.

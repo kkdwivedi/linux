@@ -1,0 +1,34 @@
+The verifier is rejecting this at the BPF-to-BPF call to `helper_a()`:
+
+```text
+5: (85) call pc+4
+sleepable global function helper_a() called in IRQ-disabled region
+```
+
+`bpf_local_irq_save(&flags)` puts the verifier into an IRQ-disabled/atomic state. While in that state, the program cannot call anything that may sleep.
+
+`helper_a()` is considered a sleepable global subprogram because it can call:
+
+```c
+bpf_copy_from_user(data, sizeof(data), NULL);
+```
+
+`bpf_copy_from_user()` is a sleepable helper. Therefore the verifier marks `helper_a()` as sleepable, and the call to it while IRQs are disabled is rejected.
+
+The smallest source-level fix is to call `helper_a(0)` only after IRQs have been restored, or before IRQs are disabled. For example:
+
+```diff
+ SEC("?syscall")
+ int entry(void *ctx)
+ {
+ 	unsigned long flags;
+ 
+ 	bpf_local_irq_save(&flags);
+-	helper_a(0);
+ 	bpf_local_irq_restore(&flags);
++	helper_a(0);
+ 	return 0;
+ }
+```
+
+This preserves the `bpf_local_irq_save()` / `bpf_local_irq_restore()` pairing and moves the potentially sleepable operation out of the IRQ-disabled region. That should satisfy the verifier because `helper_a()` is no longer called while `refs=1` / IRQ-disabled state is active.

@@ -1,0 +1,24 @@
+The verifier failure occurs because `helper_b` passes a modified context pointer (`skb + 1`) to `helper_c`. Adding 1 to a `struct __sk_buff` pointer advances it by 192 bytes (the structure size), creating an invalid context pointer. The verifier requires context pointers to remain unmodified or within safe bounds for dereferencing.
+
+The fix is to pass the original context pointer (`skb`) to `helper_c` in `helper_b`, matching how it's called directly from `entry`. This preserves the valid context pointer required for `skb->ifindex` access in `helper_c`.
+
+Patch:
+```diff
+--- a.c
++++ b.c
+@@ -14,7 +14,7 @@
+ __attribute__((noinline))
+ int helper_b(int val, struct __sk_buff *skb)
+ {
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+ }
+ 
+ __attribute__((noinline))
+```
+
+Explanation:
+- Removed `+ 1` from `helper_c(val, skb + 1)` call
+- Now passes original `skb` pointer to `helper_c`
+- Preserves valid context pointer required by verifier
+- Maintains program logic since `helper_c` expects original context

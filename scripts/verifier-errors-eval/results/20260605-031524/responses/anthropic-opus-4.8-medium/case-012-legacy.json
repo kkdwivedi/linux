@@ -1,0 +1,92 @@
+{
+  "answer_text": "## What the verifier is complaining about\n\nThere are two related things in the log, but the fatal one is the last line:\n\n```\nsleepable global function helper_a() called in IRQ-disabled region\n```\n\n`helper_a()` is a **global** (`__noinline`, non-`static`, externally visible) function. Global subprograms are verified independently, and the verifier propagates a \"sleepable\" property to them: because `helper_a()` (transitively) calls `bpf_copy_from_user()`, which may sleep, `helper_a()` is marked as a *sleepable* global function.\n\n`bpf_local_irq_save()` / `bpf_local_irq_restore()` open a non-preemptible, IRQ-disabled critical section. Inside such a region you are **not allowed to call anything that may sleep** \u2014 neither sleepable helpers/kfuncs nor a sleepable global function. So the call\n\n```c\nbpf_local_irq_save(&flags);\nhelper_a(0);          /* <-- sleepable global func in IRQ-disabled region */\nbpf_local_irq_restore(&flags);\n```\n\nis rejected.\n\n(The first line, `arg#0 reference type('UNKNOWN ') size cannot be determined`, comes from independently checking `helper_a` with the `NULL`/typeless argument to `bpf_copy_from_user`; it\u2019s noise relative to the hard error, which is the IRQ-region rule.)\n\n## Smallest fix\n\nDo not invoke anything that can sleep inside the IRQ-disabled section. The minimal source change is to move the `helper_a()` call out of the `bpf_local_irq_save()`/`bpf_local_irq_restore()` window:\n\n```c\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\thelper_a(0);\n\tbpf_local_irq_save(&flags);\n\tbpf_local_irq_restore(&flags);\n\treturn 0;\n}\n```\n\nNow the sleepable global function is called outside the critical section, and nothing sleepable remains between save and restore, so the IRQ-region check passes.\n\n### Why other \"obvious\" tweaks don't help\n- Making `helper_a` `static` doesn\u2019t fix it: it would be inlined/traced with `i == 0`, so the `if (!i)` branch is taken and `bpf_copy_from_user()` (a sleepable helper) still ends up being reachable inside the IRQ-disabled region.\n- Keeping the call inside the region but trying to dodge the branch is fragile; the only robust fix that satisfies the verifier\u2019s rule is to keep the sleepable call outside the `irq_save`/`irq_restore` pair.\n\nIf the test\u2019s intent is specifically to exercise something *inside* the IRQ-disabled region, replace `helper_a(0)` with a non-sleepable operation; but to make this exact program pass with the smallest edit, relocating the `helper_a(0)` call before `bpf_local_irq_save()` is sufficient.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-012-legacy.txt",
+    "case_id": "case-012",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 1526,
+    "prompt_path": "public/case-012/prompt_legacy.md",
+    "prompt_sha256": "3c7396a0a94e22b4ffa05f47bf695c68faeca27ec07a26da548d621cb3473cdb",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-012-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "b04ae649-8f19-405c-b27e-9e0ce2ac6efc",
+    "started_at": "2026-06-05T03:17:20+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.004175,
+    "output_cost_usd": 0.078075,
+    "total_cost_usd": 0.08225
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 835,
+    "output_tokens": 3123,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 835,
+      "output_tokens": 3123,
+      "output_tokens_details": {
+        "thinking_tokens": 2146
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 3958
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "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",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## What the verifier is complaining about\n\nThere are two related things in the log, but the fatal one is the last line:\n\n```\nsleepable global function helper_a() called in IRQ-disabled region\n```\n\n`helper_a()` is a **global** (`__noinline`, non-`static`, externally visible) function. Global subprograms are verified independently, and the verifier propagates a \"sleepable\" property to them: because `helper_a()` (transitively) calls `bpf_copy_from_user()`, which may sleep, `helper_a()` is marked as a *sleepable* global function.\n\n`bpf_local_irq_save()` / `bpf_local_irq_restore()` open a non-preemptible, IRQ-disabled critical section. Inside such a region you are **not allowed to call anything that may sleep** \u2014 neither sleepable helpers/kfuncs nor a sleepable global function. So the call\n\n```c\nbpf_local_irq_save(&flags);\nhelper_a(0);          /* <-- sleepable global func in IRQ-disabled region */\nbpf_local_irq_restore(&flags);\n```\n\nis rejected.\n\n(The first line, `arg#0 reference type('UNKNOWN ') size cannot be determined`, comes from independently checking `helper_a` with the `NULL`/typeless argument to `bpf_copy_from_user`; it\u2019s noise relative to the hard error, which is the IRQ-region rule.)\n\n## Smallest fix\n\nDo not invoke anything that can sleep inside the IRQ-disabled section. The minimal source change is to move the `helper_a()` call out of the `bpf_local_irq_save()`/`bpf_local_irq_restore()` window:\n\n```c\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\thelper_a(0);\n\tbpf_local_irq_save(&flags);\n\tbpf_local_irq_restore(&flags);\n\treturn 0;\n}\n```\n\nNow the sleepable global function is called outside the critical section, and nothing sleepable remains between save and restore, so the IRQ-region check passes.\n\n### Why other \"obvious\" tweaks don't help\n- Making `helper_a` `static` doesn\u2019t fix it: it would be inlined/traced with `i == 0`, so the `if (!i)` branch is taken and `bpf_copy_from_user()` (a sleepable helper) still ends up being reachable inside the IRQ-disabled region.\n- Keeping the call inside the region but trying to dodge the branch is fragile; the only robust fix that satisfies the verifier\u2019s rule is to keep the sleepable call outside the `irq_save`/`irq_restore` pair.\n\nIf the test\u2019s intent is specifically to exercise something *inside* the IRQ-disabled region, replace `helper_a(0)` with a non-sleepable operation; but to make this exact program pass with the smallest edit, relocating the `helper_a(0)` call before `bpf_local_irq_save()` is sufficient.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_0156uh76yShXhRHQCBu7F9fS",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 835,
+      "output_tokens": 3123,
+      "output_tokens_details": {
+        "thinking_tokens": 2146
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

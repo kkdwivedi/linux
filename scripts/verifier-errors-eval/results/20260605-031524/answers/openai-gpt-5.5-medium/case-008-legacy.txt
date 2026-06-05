@@ -1,0 +1,53 @@
+The verifier failure is caused by a mismatch between the scratch buffer size and the length passed to `bpf_dynptr_slice()`.
+
+`buffer` is only 8 bytes:
+
+```c
+char buffer[8] = {};
+```
+
+but the helper is called with length `9`:
+
+```c
+data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
+```
+
+From the log:
+
+```text
+R3=fp-24
+R4=9
+call bpf_dynptr_slice
+invalid read from stack R3 off -24+8 size 9
+R3 and R4 memory, len pair leads to invalid memory access
+```
+
+The verifier sees that `R3` points to the stack buffer at `fp-24`, but only 8 bytes were initialized/available there. The requested length is 9, so the helper would need access to byte `fp-16`, which is beyond the 8-byte buffer and overlaps the dynptr stack area. Therefore the verifier rejects the program.
+
+The smallest fix, preserving the requested 9-byte slice size, is to make the scratch buffer 9 bytes.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -7,7 +7,7 @@ SEC("?cgroup_skb/egress")
+ int entry(struct __sk_buff *skb)
+ {
+ 	struct bpf_dynptr ptr;
+-	char buffer[8] = {};
++	char buffer[9] = {};
+ 	__u64 *data;
+ 
+ 	if (bpf_dynptr_from_skb(skb, 0, &ptr))
+```
+
+Alternatively, if only an 8-byte slice is intended, change the helper call to use `sizeof(buffer)` or `8`:
+
+```c
+data = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+```
+
+But if the intended slice length is 9, increasing the buffer to 9 bytes is the direct verifier fix.

@@ -1,0 +1,44 @@
+## Analysis
+
+The verifier failure is clear: **stack size overflow**.
+
+The error message states: `combined stack size of 3 calls is 544. Too large`
+
+Let me trace the stack usage:
+- `helper_a`: minimal (only `asm volatile("")`)
+- `helper_b`: allocates `MAX_STACK` (260 bytes) + calls `helper_a` (minimal)
+- `helper_c`: allocates `MAX_STACK` (260 bytes) + calls `helper_b` (260 bytes) + calls `helper_d` (260 bytes)
+- `helper_d`: allocates `MAX_STACK` (260 bytes)
+
+The problematic call chain is in `helper_c`:
+- `helper_c` stack: 260 bytes
+- calls `helper_b` which has stack: 260 bytes  
+- calls `helper_d` which has stack: 260 bytes
+- Total: 260 + 260 + 260 = 780 bytes in the worst case, but the verifier is reporting 544
+
+The combined stack size limit in the BPF verifier is typically 512 bytes. The issue is that multiple functions with large stack frames are called in sequence within nested function calls.
+
+## Solution
+
+The smallest fix is to **reduce `MAX_STACK`** from 260 to a smaller value that allows the nested calls to fit within the 512-byte limit.
+
+With 3 sequential stack allocations of 260 bytes each (in the call chain), we need:
+- 260 × 3 = 780 bytes (current, fails)
+- We need < 512 bytes total
+- Each function should be ≤ ~170 bytes to be safe with the nesting
+
+Change `MAX_STACK` from 260 to **128**:
+
+```c
+#define MAX_STACK 128
+```
+
+This gives us: 128 × 3 = 384 bytes, which is under the 512-byte limit.
+
+**Patch:**
+```diff
+-#define MAX_STACK 260
++#define MAX_STACK 128
+```
+
+This minimal change reduces each function's stack allocation while maintaining the test's intent (using stack space and calling `__sink()` to prevent optimization).

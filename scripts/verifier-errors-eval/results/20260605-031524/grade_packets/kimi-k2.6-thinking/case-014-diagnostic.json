@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Check if (offset > 47) exit before using it for a 1-byte access to a 48-byte object.",
+    "Check if (offset + 1 > sizeof(struct value)) exit in a verifier-friendly way that avoids overflow.",
+    "Mask or clamp the offset so the verifier can prove the adjusted pointer remains within the map value."
+  ],
+  "canonical_fix": "Add an upper-bound check on the loaded offset before adding it to the map-value pointer, proving offset + access size <= object size.",
+  "case_id": "case-014",
+  "category": "Memory Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program loads a variable offset from the map value and adds it to the map-value pointer before a helper reads one byte. The verifier knows the offset is non-negative but has no safe upper bound, so it cannot prove offset + size stays within the 48-byte map value.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-thinking/case-014-diagnostic.txt",
+    "case_id": "case-014",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-thinking",
+    "prompt_bytes": 4492,
+    "prompt_path": "public/case-014/prompt_diagnostic.md",
+    "prompt_sha256": "ac5a2ab54da5cf45e897928788b3ed66a0aaeb6499aac9a13e24b90fac12b24c",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-thinking/case-014-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "enabled"
+    },
+    "run_id": "05b47e26-a35d-49e2-89be-2436df8f3fd6",
+    "started_at": "2026-06-05T03:57:31+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "**Explanation**\n\nThe verifier rejects the program because it cannot prove that the destination pointer passed to `bpf_probe_read_kernel` stays inside the 48-byte map value.\n\nThe sequence\n\n```asm\nr3 = *(u32*)(r0 + 0)\nr1 += r3\n```\n\nloads an arbitrary `u32` from the map value into `r3` and adds it to the map value pointer `r1`. The verifier therefore sees `r1` as a `map_value` pointer with a variable offset in the full unsigned 32-bit range `[0, 4294967295]`. When `bpf_probe_read_kernel` tries to write 1 byte at `r1`, the verifier requires `offset + 1 <= 48`, which is impossible to prove.\n\nThe fix is to bound `r3` before adding it to `r1`. Since the object is 48 bytes and the write size is 1 byte, the offset must be at most `47`. Adding an unsigned range check `if r3 > 47 goto l0_%=;` tells the verifier that on the fall-through path `r3` is in `[0, 47]`, so `r1 + r3` always points at least 1 byte inside the object.\n\n**Patch**\n\n```diff\n \tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n+\tif r3 > 47 goto l0_%=;\t\t\t\t\\\n \tr1 += r3;\t\t\t\t\t\\\n```\n\nWith this check, `r1`\u2019s variable offset is capped at 47, making the subsequent `bpf_probe_read_kernel` call satisfy `offset + 1 <= 48`.",
+  "must_mention": [
+    "The offset is variable and lacks an upper bound",
+    "The object/map value size is finite",
+    "The proof needed is offset plus access size within bounds"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks that map_lookup_elem returned non-NULL",
+    "Adds a lower-bound check only",
+    "Checks after the helper access"
+  ]
+}

@@ -1,0 +1,41 @@
+The verifier failure is not caused by register state or the naked inline asm itself. It fails immediately at instruction 0:
+
+```text
+0: (85) call bpf_ktime_get_coarse_ns#160
+program of this type cannot use helper bpf_ktime_get_coarse_ns#160
+```
+
+`SEC("kprobe")` makes this a kprobe/tracing program, and on this kernel/verifier `bpf_ktime_get_coarse_ns()` is not an allowed helper for that program type. The helper exists, but the helper allowlist for kprobe programs rejects it.
+
+Since the program ignores the helper return value anyway and then does:
+
+```asm
+r0 = 0;
+exit;
+```
+
+the smallest useful source-level fix is to call the regular kprobe-supported time helper instead, `bpf_ktime_get_ns()`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -8,11 +8,11 @@ SEC("kprobe")
+ __naked void entry(void)
+ {
+ 	asm volatile ("					\
+-	call %[bpf_ktime_get_coarse_ns];		\
++	call %[bpf_ktime_get_ns];			\
+ 	r0 = 0;						\
+ 	exit;						\
+ "	:
+-	: __imm(bpf_ktime_get_coarse_ns)
++	: __imm(bpf_ktime_get_ns)
+ 	: __clobber_all);
+ }
+```
+
+`bpf_ktime_get_ns()` takes no arguments like `bpf_ktime_get_coarse_ns()`, returns a scalar in `r0`, and is allowed for kprobe programs. The program then overwrites `r0` with `0`, which is a valid kprobe program return value, so this should satisfy the verifier.

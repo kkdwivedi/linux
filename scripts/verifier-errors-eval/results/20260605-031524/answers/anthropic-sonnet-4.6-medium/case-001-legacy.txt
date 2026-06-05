@@ -1,0 +1,30 @@
+## Explanation of the Failure
+
+The verifier error is:
+```
+R1 type=scalar expected=fp
+```
+
+`bpf_cpumask_populate()` requires its first argument to be a **stack pointer** (frame pointer, `fp`). The code casts the literal integer `0x123456` to `struct bpf_cpumask *`, so the verifier sees it as a raw scalar value, not a pointer into the stack frame. This violates the helper's argument constraints.
+
+## Fix
+
+Replace the hardcoded invalid pointer with a stack-allocated `struct cpumask`:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct cpumask mask;
+	u64 bits;
+	int ret;
+
+	ret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));
+	if (!ret)
+		return 2;
+
+	return 0;
+}
+```
+
+**Why this works:** By declaring `struct cpumask mask` as a local variable, `&mask` becomes a frame-pointer-relative address (type `fp` in verifier terms), which is exactly what `bpf_cpumask_populate` expects for its first argument. The verifier can then verify that the memory region is a valid, bounded stack allocation.

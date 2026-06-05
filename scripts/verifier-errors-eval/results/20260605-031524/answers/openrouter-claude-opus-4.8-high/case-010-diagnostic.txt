@@ -1,0 +1,35 @@
+## Explanation
+
+The verifier rejects the call because of this expression in `helper_b`:
+
+```c
+return helper_a(skb) + helper_c(val, skb + 1);
+```
+
+`skb` is a context pointer (`struct __sk_buff *`). Writing `skb + 1` advances it by `sizeof(struct __sk_buff)` = 192 bytes. That is exactly what the log shows:
+
+```
+21: (07) r6 += 192        ; R6=ctx(imm=192)
+...
+23: (bf) r2 = r6          ; R2=ctx(imm=192)
+24: (85) call pc+2        ; -> helper_c
+dereference of modified ctx ptr R2 off=192 disallowed
+```
+
+`helper_c` then does `skb->ifindex`, i.e. it dereferences the context pointer. The BPF verifier only allows context accesses through the **original, unmodified** ctx pointer (the offset must stay 0, because ctx field accesses are rewritten by the verifier based on fixed offsets). A ctx pointer with `off=192` cannot be dereferenced, so verification fails with "dereference of modified ctx ptr".
+
+## Fix
+
+The `+ 1` is the bug — `helper_c` expects a normal `struct __sk_buff *` it can dereference, so it must receive the original pointer. Pass `skb` instead of `skb + 1`:
+
+```c
+__attribute__((noinline))
+int helper_b(int val, struct __sk_buff *skb)
+{
+	return helper_a(skb) + helper_c(val, skb);
+}
+```
+
+With this change `R2` stays as `ctx()` with offset 0 when passed to `helper_c`, and the `skb->ifindex` access inside `helper_c` is allowed.
+
+(Equivalently, if the intent really were to pass an offset pointer, you'd need to stop treating it as ctx — but here the smallest correct fix is simply dropping the `+ 1`.)

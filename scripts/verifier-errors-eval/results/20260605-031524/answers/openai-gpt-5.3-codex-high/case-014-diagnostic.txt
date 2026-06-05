@@ -1,0 +1,34 @@
+`r3` comes from map data (`*(u32 *)(r0 + 0)`), so verifier treats it as **0..0xffffffff**.  
+Then `r1 = map_value + r3` becomes a pointer with unbounded offset, and you pass it as destination to `bpf_probe_read_kernel(..., size=1, ...)`.
+
+For helper calls that write to memory, verifier must prove:
+
+`offset + size <= map_value_size` → here `offset + 1 <= 48`.
+
+It can’t, so it rejects at the helper call.
+
+### Smallest likely fix
+Add an explicit bounds check on `r3` before `r1 += r3`.
+
+```diff
+@@ SEC("tracepoint")
+ 	asm volatile ("					\
+ 	r2 = r10;					\
+ 	r2 += -8;					\
+ 	r1 = 0;						\
+ 	*(u64*)(r2 + 0) = r1;				\
+ 	r1 = %[map_a] ll;				\
+ 	call %[bpf_map_lookup_elem];			\
+ 	if r0 == 0 goto l0_%=;				\
+ 	r1 = r0;					\
+ 	r3 = *(u32*)(r0 + 0);				\
++	if r3 > 47 goto l0_%=;				\
+ 	r1 += r3;					\
+ 	r2 = 1;						\
+ 	r3 = 0;						\
+ 	call %[bpf_probe_read_kernel];			\
+ l0_%=:	exit;						\
+ "	:
+```
+
+This gives verifier a safe upper bound (`r3 <= 47`), so `r1` stays within the 48-byte map value for a 1-byte write.

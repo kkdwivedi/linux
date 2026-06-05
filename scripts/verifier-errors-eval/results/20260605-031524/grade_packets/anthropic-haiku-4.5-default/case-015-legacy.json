@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Move helper_a(sk, 0) before taking and checking p.",
+    "Recompute p from sk->data after helper_a and repeat the data_end check before *p = 42.",
+    "Avoid calling a packet-data-invalidating helper between pointer validation and pointer use."
+  ],
+  "canonical_fix": "After helper_a returns, reload sk->data and sk->data_end, redo the bounds check, and only then write through the packet pointer.",
+  "case_id": "case-015",
+  "category": "Register Type Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program validates a packet data pointer, then calls a subprogram that invokes bpf_skb_pull_data. That helper can move packet data and invalidates packet pointers proven before the call. The later store through the old pointer uses an invalidated value.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-015-legacy.txt",
+    "case_id": "case-015",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 1984,
+    "prompt_path": "public/case-015/prompt_legacy.md",
+    "prompt_sha256": "dc0fc1e91b61bdf915966f9cbe5ae652d8b1776a8af859d12e6cd23d52604af2",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-015-legacy.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "ee79a53f-f9ca-40d2-b0f6-e014ecbda09d",
+    "started_at": "2026-06-05T03:17:58+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Explanation of the Verifier Failure\n\nThe verifier rejects the program with the error `R7 invalid mem access 'scalar'` at instruction 10 when attempting to write to `*p`.\n\n**Root cause:** After the call to `helper_a(sk, 0)` at instruction 8, the verifier loses track of the fact that `r7` (which holds `sk->data`) is a valid packet pointer. The verifier marks `r7` as a scalar value because:\n\n1. `helper_a` is declared `__noinline` and the verifier treats it as a global function that is \"assumed valid\"\n2. When control returns from a global function call, the verifier conservatively invalidates pointer registers that might have been modified\n3. `r7` (the packet data pointer) is therefore downgraded from `pkt(r=0)` to `scalar`\n4. Writing to a scalar value is invalid, hence the rejection\n\nThe bounds check at instructions 2-5 successfully validates that one 4-byte integer can be safely accessed, but this validation is lost after the function call because the register tracking is cleared.\n\n## Solution\n\nThe fix is to **reload `sk->data` after the function call** to restore the bounds information. This is necessary because global function calls invalidate pointer registers in the caller's context.\n\n### Patch\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\n__noinline long helper_b(struct __sk_buff *sk, __u32 len)\n{\n\treturn bpf_skb_pull_data(sk, len);\n}\n\n__noinline long helper_a(struct __sk_buff *sk, __u32 len)\n{\n\treturn helper_b(sk, len);\n}\n\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p = (void *)(long)sk->data;\n\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\thelper_a(sk, 0);\n\tp = (void *)(long)sk->data;  // Reload after function call\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\n**Why this works:** Reloading `sk->data` after the function call forces the verifier to re-read the packet pointer from the context structure, which restores the `pkt()` register state and allows the bounds check to be re-established. The subsequent write to `*p` then becomes valid.",
+  "must_mention": [
+    "bpf_skb_pull_data invalidates packet pointers",
+    "The previous packet bounds check no longer applies after the call",
+    "Reload and revalidate data/data_end before dereference"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check for p only",
+    "Uses the old p after the helper call",
+    "Changes the write value but not pointer provenance"
+  ]
+}

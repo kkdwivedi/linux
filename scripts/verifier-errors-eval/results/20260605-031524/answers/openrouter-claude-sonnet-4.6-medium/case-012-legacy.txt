@@ -1,0 +1,35 @@
+## Failure Analysis
+
+### What the verifier is rejecting
+
+The verifier produces two notable messages:
+
+1. **`arg#0 reference type('UNKNOWN ') size cannot be determined: -22`** – printed *before* the `entry` trace, meaning it comes from verifying the global function `helper_a` independently. It is a warning-level issue with the `bpf_copy_from_user(data, sizeof(data), NULL)` call (the `NULL` user-pointer has no resolvable BTF type). Crucially, `helper_a` still completes verification – but it is tagged as **sleepable** because `bpf_copy_from_user` is a sleepable helper.
+
+2. **`sleepable global function helper_a() called in IRQ-disabled region`** – this is the actual rejection. Because `helper_a` is a non-static (`__noinline`) global BPF function, the verifier verifies it independently and marks it sleepable for all callers. When `entry` calls it *between* `bpf_local_irq_save` and `bpf_local_irq_restore`, the verifier rejects the call because sleeping is not allowed while IRQs are disabled.
+
+### Root cause
+
+`helper_a` is a **global** BPF function (no `static`). The verifier conservatively marks any global function that can reach a sleepable helper (here `bpf_copy_from_user`) as sleepable, regardless of runtime argument values. Calling a sleepable global function inside an IRQ-disabled region is forbidden.
+
+### Smallest fix
+
+Move the call to `helper_a(0)` **outside** the IRQ-disabled region (before `bpf_local_irq_save`). This satisfies the verifier because the sleepable call no longer occurs while IRQs are disabled.
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -16,8 +16,8 @@ SEC("?syscall")
+ int entry(void *ctx)
+ {
+ 	unsigned long flags;
+ 
++	helper_a(0);
+ 	bpf_local_irq_save(&flags);
+-	helper_a(0);
+ 	bpf_local_irq_restore(&flags);
+ 	return 0;
+ }
+```
+
+After this change, `helper_a(0)` is called in a normal (non-IRQ-disabled) sleepable syscall context, so the sleepable-in-IRQ-disabled-region check is never triggered, and the program passes verification.

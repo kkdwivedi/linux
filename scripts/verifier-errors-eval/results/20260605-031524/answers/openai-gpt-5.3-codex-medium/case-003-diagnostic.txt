@@ -1,0 +1,31 @@
+The verifier is rejecting this because you **spill a `ctx` pointer to stack**, then **partially overwrite that same spilled slot**:
+
+- `*(u64 *)(r10 - 8) = r1` stores pointer at bytes `[-8..-1]`
+- `*(u8 *)(r10 - 7) = r0` overwrites one byte inside that 8-byte slot
+
+After partial overwrite, that stack slot is no longer a trusted spilled pointer; it becomes `mmmmmmmm` (unknown scalar bytes). So:
+
+- `r0 = *(u64 *)(r10 - 8)` loads a **scalar**, not a pointer
+- `*(u64 *)(r0 + 8)` is then invalid dereference of scalar
+
+### Smallest likely fix
+
+Do not overlap the byte store with the spilled pointer slot.  
+Change `r10 - 7` to a non-overlapping offset (e.g. `r10 - 9`).
+
+### Patch
+
+```diff
+@@
+ 	asm volatile ("					\
+ 	*(u64*)(r10 - 8) = r1;				\
+ 	r0 = 0x23;					\
+-	*(u8*)(r10 - 7) = r0;				\
++	*(u8*)(r10 - 9) = r0;				\
+ 	r0 = *(u64*)(r10 - 8);				\
+ 	r0 = *(u64*)(r0 + 8);				\
+ 	exit;						\
+ "	::: __clobber_all);
+```
+
+This preserves the spilled pointer’s type, so reloading from `fp-8` remains pointer-typed and the subsequent dereference should verify.

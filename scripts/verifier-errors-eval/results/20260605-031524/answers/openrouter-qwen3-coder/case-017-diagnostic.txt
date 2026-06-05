@@ -1,0 +1,32 @@
+The verifier failure occurs because `bpf_local_irq_save` and `bpf_local_irq_restore` must be used in a last-in, first-out (LIFO) order to ensure proper nesting and avoid race conditions. In the original code, the IRQ flags are saved in this order:
+
+1. `flags1` (first saved, ID=1)
+2. `flags2` (second saved, ID=2)
+
+But then they are restored in the same order they were saved:
+
+1. `flags1` (restored first - this is incorrect, as ID=2 should be restored first)
+2. `flags2` (restored second)
+
+The verifier correctly detects this as a violation of the required LIFO order. The fix is to restore `flags2` first, then `flags1`.
+
+Here's the minimal patch to fix the issue:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	unsigned long flags1, flags2;
+
+	bpf_local_irq_save(&flags1);
+	bpf_local_irq_save(&flags2);
+	bpf_local_irq_restore(&flags2);  // Restore in reverse order
+	bpf_local_irq_restore(&flags1);  // Restore in reverse order
+	return 0;
+}
+```
+
+This change ensures that the IRQ flags are restored in the correct LIFO order, which satisfies the verifier's resource lifetime safety checks.

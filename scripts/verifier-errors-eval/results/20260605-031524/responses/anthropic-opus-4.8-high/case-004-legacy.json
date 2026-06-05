@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\n`helper_a()` is a `__noinline` function, so the verifier treats it as a **global (BPF-to-BPF) function** and validates it independently from `entry()`. For such functions, a pointer-to-struct argument is passed in as type `PTR_TO_MEM_OR_NULL` (shown as `mem_or_null` in the log):\n\n```\n7: R1=mem_or_null(id=1,sz=4)\n```\n\nThe verifier does not assume the caller passes a non-NULL pointer. It only knows the pointer *may* be NULL and *may* point to 4 bytes of memory. When the function then dereferences it without first checking for NULL:\n\n```\n10: (61) r2 = *(u32 *)(r6 +0)\nR6 invalid mem access 'mem_or_null'\n```\n\nit rejects the access, because dereferencing a possibly-NULL pointer is unsafe.\n\n## Fix\n\nAdd an explicit NULL check inside `helper_a()` before dereferencing `s`. After the check, the verifier narrows the type from `mem_or_null` to `mem`, making the load valid.\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nThis is the smallest source-level change: the `if (!s)` branch lets the verifier prune the NULL case, so on the path reaching `s->x` the register is a valid `PTR_TO_MEM` of size 4, and the 4-byte load at offset 0 is accepted.\n\n(Equivalently, one could annotate the argument as non-null with the `__arg_nonnull` tag, e.g. `helper_a(const struct Item *s __arg_nonnull)`, but the explicit NULL check is the simplest and most portable fix.)",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-004-legacy.txt",
+    "case_id": "case-004",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 1415,
+    "prompt_path": "public/case-004/prompt_legacy.md",
+    "prompt_sha256": "5122475504cbe77965669ffc9de4273ee4a86feb8b73ecbb090ea008b68a08ae",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-004-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "b5d0413e-eb2f-43fb-85c7-cadfe09847bd",
+    "started_at": "2026-06-05T03:17:29+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00402,
+    "output_cost_usd": 0.021675,
+    "total_cost_usd": 0.025695
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 804,
+    "output_tokens": 867,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 804,
+      "output_tokens": 867,
+      "output_tokens_details": {
+        "thinking_tokens": 264
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1671
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EtsGCmMIDhgCKkByxuOJAlfzQSJS18c8c/RJr4IgSgOzyRr4BFSJsTv3vpo5SCiT3NWgpzQAdaQbkV5gckfuyPG8osnTH7Ers+lSMg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDF8t20T8J+xWNbqpgRoMgRx1xSt/CqBH+zIgIjBNVaFrRd6BzCoqhSmqFzrVX4vERKYPsMZnjpzp+/IxH4dclqROAYzD9kwcMDNQrCkqpQXGZFOCrHggnnKdr0IDce8sf8SDVKit96JQud8usdrXMqweyIJPrEk3KVjx6FCE84H+yDOMOfEVfjjrCc7d8ukivVo83eta2Qs3tnQdnzkg1IvrDdd1oM6wZf5D78D6Q2AjKEAlNJfZrBW+DRaUg2Ja6fg/JSzswMk7oIAcQQcJNj68pYI+7T754N27jnJJMI+K1lXxQlmFjfrQfD6JmBfBpiugP8M2vh21H90p+yOXdBMWr6EIkFZLjuqFB3IerXn1kO6awXOEfaLIW/NsF7ULAGEeUJ/LzqjpLUfxOpTrh0jIMOx/WIdy7jGfx3nWMv+H6TW9EzjAVVSj3Oh62pAiqVzccwkh68WPjHJ3U9yaCUpx1CwGtJYkrJ538UYfbfv8mslOBIsKwSkCYh946i5oImDZ/ozEcqJq7lMPN1JHtkKaVNVplhS4Ufilku1rWbFMykSJIXEkjUsGyJ8y6ETolFham3JxvPbLe9nYr9wCvBfqHBG6SjkcPKKsR8PJelgWT8nuRfZW1m0qVySK/shq6HYTd0SzWv5DEgodIttod6BG0jc/b8nP7S5tFkpqTraXlXTTHZirp56XH44Wy57VlC4wh+Cdya11LW6Iup8bup2ET+G316cYldpWbp5Ev1bV73yGYFvgIjvn9bbBQ2N7ncjUqMiqqZzUxP3HMoQtL5aeacH+lJ12lJjVb3ZOnvj+pRhLMudbbOr6z6kIhynPZvi1cyvE569ERLMy6mlQvXN2qebtqdzX9QTlIp3pNoje7ISAdP4vrQgrkuJnkRuRyRasmiM0A0fmI0cJ5Yd00NWh2tSZFd4jl7TsFjw4o96JRFLjcWM0EgZGQEDN5+nbXKF5/cpDxx+oBIi2oKpcMUsh+JTXs4xO3Wp8w2sQnISxIRh1iBgB",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\n`helper_a()` is a `__noinline` function, so the verifier treats it as a **global (BPF-to-BPF) function** and validates it independently from `entry()`. For such functions, a pointer-to-struct argument is passed in as type `PTR_TO_MEM_OR_NULL` (shown as `mem_or_null` in the log):\n\n```\n7: R1=mem_or_null(id=1,sz=4)\n```\n\nThe verifier does not assume the caller passes a non-NULL pointer. It only knows the pointer *may* be NULL and *may* point to 4 bytes of memory. When the function then dereferences it without first checking for NULL:\n\n```\n10: (61) r2 = *(u32 *)(r6 +0)\nR6 invalid mem access 'mem_or_null'\n```\n\nit rejects the access, because dereferencing a possibly-NULL pointer is unsafe.\n\n## Fix\n\nAdd an explicit NULL check inside `helper_a()` before dereferencing `s`. After the check, the verifier narrows the type from `mem_or_null` to `mem`, making the load valid.\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nThis is the smallest source-level change: the `if (!s)` branch lets the verifier prune the NULL case, so on the path reaching `s->x` the register is a valid `PTR_TO_MEM` of size 4, and the 4-byte load at offset 0 is accepted.\n\n(Equivalently, one could annotate the argument as non-null with the `__arg_nonnull` tag, e.g. `helper_a(const struct Item *s __arg_nonnull)`, but the explicit NULL check is the simplest and most portable fix.)",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01VAWBcf7bSkKyLJ6avaBAFs",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 804,
+      "output_tokens": 867,
+      "output_tokens_details": {
+        "thinking_tokens": 264
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

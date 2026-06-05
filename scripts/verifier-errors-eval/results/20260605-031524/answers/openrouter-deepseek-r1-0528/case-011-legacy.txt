@@ -1,0 +1,22 @@
+The verifier error indicates an unreleased reference (id=3) created at instruction 14 (second `bpf_ringbuf_reserve_dynptr` call). This occurs because `ptr2` is never cleaned up when the program takes the non-NULL sample path. Both ringbuf reservations must be explicitly released via submit/discard before exit.
+
+Fix: Add `bpf_ringbuf_discard_dynptr(&ptr2, 0);` after submitting `ptr1` in the non-NULL branch to release the unused reservation.
+
+```patch
+--- a.c
++++ b.c
+@@ -19,6 +19,7 @@
+ 	}
+ 
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
++	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+ 
+ 	return 0;
+ }
+```
+
+Explanation:
+1. The second ringbuf reservation (`ptr2`) is only discarded in the NULL sample branch
+2. In the non-NULL branch, `ptr2` remains unreleased when returning
+3. Adding discard for `ptr2` in this branch ensures proper cleanup
+4. The fix maintains symmetry - both branches now handle all reservations

@@ -1,0 +1,28 @@
+The verifier error occurs because the program attempts to restore interrupt flags out of order. The `bpf_local_irq_save` and `bpf_local_irq_restore` helpers require a strict LIFO (last-in-first-out) ordering. The program saves `flags1` first, then `flags2`, but tries to restore `flags1` before `flags2`, violating the stack-like behavior expected by the verifier.
+
+The fix is to reverse the order of the restore operations to match the save order:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	unsigned long flags1, flags2;
+
+	bpf_local_irq_save(&flags1);
+	bpf_local_irq_save(&flags2);
+	bpf_local_irq_restore(&flags2);  // Restore most recent first
+	bpf_local_irq_restore(&flags1);  // Then restore earlier state
+	return 0;
+}
+```
+
+This change ensures:
+1. `flags2` (last saved) is restored first
+2. `flags1` (first saved) is restored last
+3. Maintains the required LIFO ordering for interrupt state management
+4. Matches the verifier's internal stack tracking expectations
+
+The verifier log specifically indicates it expected to restore state ID=2 (from insn_idx=7) before state ID=1 (from insn_idx=3), which this fix addresses.

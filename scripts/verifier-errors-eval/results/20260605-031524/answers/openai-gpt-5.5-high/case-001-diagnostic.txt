@@ -1,0 +1,46 @@
+The verifier failure is because this line fabricates a pointer from an integer constant:
+
+```c
+struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+...
+ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
+```
+
+The cast does not make `0x123456` into verifier-known memory. In the verifier state, `R1` is just a scalar integer:
+
+```text
+2: (b7) r1 = 1193046
+...
+R1 type=scalar expected=fp
+```
+
+But `bpf_cpumask_populate()` expects its first argument to point to real memory large enough for a `struct cpumask` — the log says 16 bytes in this build. So the verifier rejects the kfunc call.
+
+The smallest likely fix is to use an actual stack-allocated `struct cpumask` and pass its address. Also initialize `bits`, because once the first argument is fixed, the verifier may then check that the second argument points to initialized stack memory.
+
+Patch:
+
+```diff
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+-	u64 bits;
++	struct cpumask mask = {};
++	u64 bits = 0;
+ 	int ret;
+ 
+-	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
++	ret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));
+ 	if (!ret)
+ 		return 2;
+ 
+ 	return 0;
+ }
+```
+
+Why this should satisfy the verifier:
+
+- `&mask` is a verifier-known stack pointer with enough space for `struct cpumask`.
+- `bits = 0` makes the 8-byte buffer passed as the second argument initialized.
+- `sizeof(bits)` still correctly describes the size of the second argument buffer.

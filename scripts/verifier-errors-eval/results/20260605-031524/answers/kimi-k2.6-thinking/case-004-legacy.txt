@@ -1,0 +1,29 @@
+**Explanation**
+
+The verifier analyzes `helper_a()` independently because it is marked `__noinline`.  
+When a subprogram receives a pointer argument, the verifier conservatively treats it
+as `mem_or_null` – i.e., the register may hold either a valid memory address or
+`NULL`.  Dereferencing such a pointer (instruction `r2 = *(u32 *)(r6 +0)`) is
+rejected unless the code first proves the pointer is non-null.
+
+The failure is therefore an **unchecked dereference of a potentially-NULL pointer
+argument**.
+
+**Fix**
+
+Add an explicit NULL check at the top of `helper_a`.  On the fall-through path the
+verifier refines the type from `mem_or_null` to a non-null `mem` pointer, allowing
+the subsequent read of `s->x`.
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -9,6 +9,8 @@ struct Item {
+ 
+ __noinline int helper_a(const struct Item *s)
+ {
++	if (!s)
++		return 0;
+ 	return bpf_get_prandom_u32() < s->x;
+ }
+```

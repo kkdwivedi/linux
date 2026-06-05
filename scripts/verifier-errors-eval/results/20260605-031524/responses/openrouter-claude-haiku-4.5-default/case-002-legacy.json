@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Verifier Failure Analysis\n\nThe verifier is detecting a **reference leak**. Here's what's happening:\n\n1. `bpf_cpumask_create()` at instruction 0 returns a trusted pointer with `refs=2` (reference count of 2)\n2. The pointer is stored in `r6` and later in stack at `fp-8`\n3. The function returns at instruction 21 without releasing the reference\n4. The verifier reports: \"Unreleased reference id=2\" - the cpumask object is never released\n\nThe issue is in the `entry` function: it calls `make_object()` which returns a `bpf_cpumask` pointer, but this pointer is never released before the program exits. Even though `make_object()` has a release path for the error case (line 21), the success path returns the pointer without releasing it, and the caller (`entry`) doesn't release it either.\n\n## Root Cause\n\nThe `entry` function acquires a reference to a cpumask via `make_object()` but never calls `bpf_cpumask_release()` on it before exiting.\n\n## Fix\n\nThe smallest fix is to release the cpumask in the `entry` function before returning:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *cpumask;\n\n\tcpumask = make_object();\n\t__sink(cpumask);\n\tif (cpumask)\n\t\tbpf_cpumask_release(cpumask);\n\n\treturn 0;\n}\n```\n\n**Why this works:** The `bpf_cpumask_release()` call explicitly releases the reference acquired by `bpf_cpumask_create()`, satisfying the verifier's requirement that all acquired references must be released before program exit.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-002-legacy.txt",
+    "case_id": "case-002",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 2521,
+    "prompt_path": "public/case-002/prompt_legacy.md",
+    "prompt_sha256": "b1009b27b63c85152af26046b06f483efc378f604fa60de5cb0fdda6b91ed858",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-002-legacy.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "d90d7b52-70e5-46d5-a0d3-253140907189",
+    "started_at": "2026-06-05T03:18:55+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.001188,
+    "output_cost_usd": 0.002265,
+    "total_cost_usd": 0.0034530000000000003
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1188,
+    "output_tokens": 453,
+    "raw_usage": {
+      "completion_tokens": 453,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.003453,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002265,
+        "upstream_inference_cost": 0.003453,
+        "upstream_inference_prompt_cost": 0.001188
+      },
+      "is_byok": false,
+      "prompt_tokens": 1188,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1641
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1641
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Verifier Failure Analysis\n\nThe verifier is detecting a **reference leak**. Here's what's happening:\n\n1. `bpf_cpumask_create()` at instruction 0 returns a trusted pointer with `refs=2` (reference count of 2)\n2. The pointer is stored in `r6` and later in stack at `fp-8`\n3. The function returns at instruction 21 without releasing the reference\n4. The verifier reports: \"Unreleased reference id=2\" - the cpumask object is never released\n\nThe issue is in the `entry` function: it calls `make_object()` which returns a `bpf_cpumask` pointer, but this pointer is never released before the program exits. Even though `make_object()` has a release path for the error case (line 21), the success path returns the pointer without releasing it, and the caller (`entry`) doesn't release it either.\n\n## Root Cause\n\nThe `entry` function acquires a reference to a cpumask via `make_object()` but never calls `bpf_cpumask_release()` on it before exiting.\n\n## Fix\n\nThe smallest fix is to release the cpumask in the `entry` function before returning:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *cpumask;\n\n\tcpumask = make_object();\n\t__sink(cpumask);\n\tif (cpumask)\n\t\tbpf_cpumask_release(cpumask);\n\n\treturn 0;\n}\n```\n\n**Why this works:** The `bpf_cpumask_release()` call explicitly releases the reference acquired by `bpf_cpumask_create()`, satisfying the verifier's requirement that all acquired references must be released before program exit.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629535,
+    "id": "gen-1780629535-GukmM0DtIjM2XOscgiG8",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 453,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.003453,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002265,
+        "upstream_inference_cost": 0.003453,
+        "upstream_inference_prompt_cost": 0.001188
+      },
+      "is_byok": false,
+      "prompt_tokens": 1188,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1641
+    }
+  },
+  "reasoning_content": ""
+}

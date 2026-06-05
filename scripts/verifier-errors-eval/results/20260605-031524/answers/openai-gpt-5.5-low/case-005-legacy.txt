@@ -1,0 +1,43 @@
+The verifier rejects the program because `bpf_copy_from_user()` is a sleepable helper, but it is being called while preemption is disabled:
+
+```c
+bpf_preempt_disable();
+bpf_copy_from_user(&data, sizeof(data), NULL);
+bpf_preempt_enable();
+```
+
+The log shows the exact reason:
+
+```text
+sleepable helper bpf_copy_from_user#148 in non-preemptible region
+```
+
+`bpf_preempt_disable()` starts a non-preemptible region. In that region, the verifier does not allow helpers/kfuncs that may sleep. `bpf_copy_from_user()` may fault on user memory and sleep, so it is forbidden there.
+
+The smallest source-level fix is to not call `bpf_copy_from_user()` inside the preempt-disabled section. Since the preempt-disabled region is otherwise unnecessary here, the simplest patch is to remove the `bpf_preempt_disable()` / `bpf_preempt_enable()` pair.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -8,9 +8,7 @@ int entry(void *ctx)
+ {
+ 	u32 data;
+ 
+-	bpf_preempt_disable();
+ 	bpf_copy_from_user(&data, sizeof(data), NULL);
+-	bpf_preempt_enable();
+ 	return 0;
+ }
+```
+
+After this change, `bpf_copy_from_user()` is still in a sleepable tracing program section:
+
+```c
+SEC("?fentry.s/sys_getpgid")
+```
+
+so the helper should be allowed by the verifier.

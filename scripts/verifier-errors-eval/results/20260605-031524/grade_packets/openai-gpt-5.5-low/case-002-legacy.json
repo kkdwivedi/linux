@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Release cpumask after __sink(cpumask) if cpumask is non-NULL.",
+    "Transfer the owned cpumask into a kptr/map in a verifier-accepted way so the program no longer owns it."
+  ],
+  "canonical_fix": "After make_object returns a non-NULL cpumask, call bpf_cpumask_release(cpumask) before returning on every path that still owns it.",
+  "case_id": "case-002",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "easy",
+  "expected_explanation": "make_object acquires an owned cpumask reference. The entry program stores/sinks it and returns without releasing or transferring ownership, so one exit path leaks the reference.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-low/case-002-legacy.txt",
+    "case_id": "case-002",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-low",
+    "prompt_bytes": 2521,
+    "prompt_path": "public/case-002/prompt_legacy.md",
+    "prompt_sha256": "b1009b27b63c85152af26046b06f483efc378f604fa60de5cb0fdda6b91ed858",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-low/case-002-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "low"
+    },
+    "run_id": "144a55ce-da3b-48ff-916d-eb0855df3a5a",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "The verifier failure is a reference leak.\n\n`bpf_cpumask_create()` returns a refcounted `struct bpf_cpumask *`:\n\n```c\ncpumask = bpf_cpumask_create();\n```\n\nOn the successful path, `make_object()` returns that owned reference to `entry()`:\n\n```c\nreturn cpumask;\n```\n\nThen `entry()` only passes it to `__sink(cpumask)` and exits:\n\n```c\ncpumask = make_object();\n__sink(cpumask);\n\nreturn 0;\n```\n\n`__sink()` does not release or transfer ownership of the reference. In the verifier log, this is the leaking path:\n\n```text\n0: call bpf_cpumask_create              ; R0=trusted_ptr_or_null_bpf_cpumask(id=2) refs=2\n...\n19: *(u64 *)(r10 -8) = r6               ; spilled by __sink(cpumask)\n20: w0 = 0\n21: exit\nUnreleased reference id=2 alloc_insn=0\n```\n\nThe error means: a `bpf_cpumask` object allocated at instruction 0 is still live when the program exits.\n\nThe failure path inside `make_object()` already releases correctly:\n\n```c\nif (!bpf_cpumask_empty(cast(cpumask))) {\n\tbpf_cpumask_release(cpumask);\n\treturn NULL;\n}\n```\n\nOnly the success path needs a release in the caller.\n\nSmallest likely fix:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..1111111 100644\n--- a/case.c\n+++ b/case.c\n@@ -32,6 +32,8 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)\n \n \tcpumask = make_object();\n \t__sink(cpumask);\n+\tif (cpumask)\n+\t\tbpf_cpumask_release(cpumask);\n \n \treturn 0;\n }\n```\n\nThis satisfies the verifier because every non-NULL reference returned by `make_object()` is released before program exit, while the NULL case is skipped safely.",
+  "must_mention": [
+    "An owned cpumask reference is acquired",
+    "Every exit path must release or transfer ownership",
+    "The NULL path does not need release"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Removes the acquisition without preserving the intended object use",
+    "Calls release without considering NULL when the API requires non-NULL",
+    "Releases only on an error path and still returns with ownership on success"
+  ]
+}

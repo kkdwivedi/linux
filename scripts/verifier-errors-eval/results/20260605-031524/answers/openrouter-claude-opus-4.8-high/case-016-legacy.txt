@@ -1,0 +1,55 @@
+## What the verifier is complaining about
+
+`bpf_sk_lookup_tcp()` returns a *referenced* socket pointer (`sock_or_null`, with an acquired reference id). The verifier tracks that reference and requires it to be released on **every** path that reaches `exit`.
+
+In the program there are two ways to leave after the lookup:
+
+```
+19: call bpf_sk_lookup_tcp        ; R0 = sock_or_null(id=2), refs=2
+20: if r6 == 0 goto l1_%=         ; if r6 != 0 fall through ...
+21: exit                          ; <-- leaks the reference!
+```
+
+When `r6 != 0` the code falls straight into `exit` (insn 21) **without** going through the `bpf_sk_release()` path (`l1_%=`). The socket reference acquired at insn 19 is never freed on that path, so:
+
+```
+Unreleased reference id=2 alloc_insn=19
+BPF_EXIT instruction in main prog would lead to reference leak
+```
+
+(The other path, `r6 == 0 → l1_%= → if r0==0 ... call bpf_sk_release`, is fine.)
+
+## Smallest fix
+
+Make sure the acquired socket is released on **all** exit paths. The cleanest minimal change is to do the NULL-check / `bpf_sk_release()` *before* (or independent of) the `r6` test, so that every path that reaches `exit` has already freed the reference.
+
+### Patch
+
+```c
+	call %[bpf_sk_lookup_tcp];			\
+-	if r6 == 0 goto l1_%=;				\
+-	exit;						\
+-l1_%=:	if r0 == 0 goto l2_%=;				\
++	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+```
+
+This removes the early `exit` that left the reference dangling, and routes both `r6` outcomes through the `r0 == 0 ? skip : bpf_sk_release()` logic before exiting.
+
+If the intent of the test is specifically to keep the `r6` branch around, an equivalent fix is to release the socket on the `r6 != 0` path as well, e.g.:
+
+```c
+	if r6 == 0 goto l1_%=;
+	if r0 == 0 goto l2_%=;     /* release before exiting too */
+	r1 = r0;
+	call %[bpf_sk_release];
+	exit;
+l1_%=:	if r0 == 0 goto l2_%=;
+	r1 = r0;
+	call %[bpf_sk_release];
+l2_%=:	exit;
+```
+
+Either way, the key is that **no `exit` is reachable while the socket reference (id=2) is still held**, which is exactly what the verifier requires.

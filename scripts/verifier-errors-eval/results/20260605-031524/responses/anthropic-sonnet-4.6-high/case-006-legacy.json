@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nThe verifier rejects the program because `bpf_ktime_get_coarse_ns` (helper #160) is **not permitted for `BPF_PROG_TYPE_KPROBE` programs**. Each BPF program type has an allowlist of helpers it may call, and `bpf_ktime_get_coarse_ns` is not on the kprobe allowlist.\n\nThe closely related helper `bpf_ktime_get_ns` *is* allowed in kprobe programs.\n\n## Fix\n\nReplace `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns` in both the inline-asm call and the `__imm` constraint:\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"kprobe\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_ns];\t\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_ns)\n\t: __clobber_all);\n}\n```\n\n`bpf_ktime_get_ns` is whitelisted for kprobe programs and provides essentially the same monotonic nanosecond timestamp (just not coarse-grained), so this is the minimal, correct substitution.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-high/case-006-legacy.txt",
+    "case_id": "case-006",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-high",
+    "prompt_bytes": 1056,
+    "prompt_path": "public/case-006/prompt_legacy.md",
+    "prompt_sha256": "120f6abe2c1570fcf1f340a5df8b99d8138acdc6e56cef9bda9d3f882cdbea64",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-high/case-006-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "0b372613-ae7a-473a-b559-97b448f31023",
+    "started_at": "2026-06-05T04:09:36+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.001476,
+    "output_cost_usd": 0.011685,
+    "total_cost_usd": 0.013160999999999999
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 492,
+    "output_tokens": 779,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 492,
+      "output_tokens": 779,
+      "output_tokens_details": {
+        "thinking_tokens": 406
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 728,
+    "reasoning_tokens": 0,
+    "total_tokens": 1271
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EusKCmUIDhgCKkBIqjugU8kTANTRCHzB/AZrNqLAWc+D0zCgWP91okhb06iuDW6kag7FuPT5DR6ERksA95tILq2n8e8gGHO8InX3MhFjbGF1ZGUtc29ubmV0LTQtNjgAQgh0aGlua2luZxIMVslsbhwt2Wbu8M9QGgy2vsDrOkHX2rKvJ5MiMDd3hj5M75Skq/pKJUwR7yttQGNX4PCd/MlSWA9BtKDzIJNt5fkvDlUxvdPRZNEFuCqzCTYSftx/YV4B3MqUAHwYrZ4mT/YqZ8Aw0/eRRoO3Lfe1E6ZeCuurN7l86s4PBzS0r8ozFSM0dGDPHFdTbX+gA7OWGmzCMTt+8HZ9y1UHnsUTIDueYCSyBg7ymoXfjXuGe/Mlk+F5sjHSDAttxdywIGqKWUry3qGwA5RdE+ioQ6odzdISk7FjHq4x1dHancb2SwDTijCxmG1IbVU7ZyH+sZwbEJWbej2YWwMbWvIqp/A458DpNsAXb2Q5QWJJ1MKzaTMu4YV2YZVvb2lADmF7dZc8nJJRMQqc5DUbP5VbMnlMR0Nkl8fd53vHv0ugG8w7ntJY+hbcBnccISwJ4UXdB4jRiuHmvB1YdoXm9M6R+DjNxWcS8HKR61k8VV/OvnF2tEO0h2ihxgYK8kJE+v9qV1nxfQP6b/EbMLHDHeZzKiQeltoil6pjLG8rwNLbG5Gq/dmuCqhZSKVlTkj19kahCPd1uNKQkj+OxpO1wmHhpbfadt39XxH4p0CJM0QIEqX/2bqZDYDVZlFeUom3aFMacLL0j3ADLyNN7clA43G1v0O2HhyZkRCnTAF1QswSe6b7j4U2wCcuYr82t+7XeG4jgSo+EdFHYkafSPQxRO14kXC0CEDqWAry1TFJ2WRugkE9hy6vNXEt3ipo4CxAGqhuLc8TTIbdxw1FI4XVJbZ1FW4f2XSD3UEgarn2GtHoQXM4hnv1rI1Sz+C0dA0PdPi1zSFNtbwT3+sMgMfMbYPGKG0KWggfJYoxrOQQxMxvqQ//pg5XeLDjO9l1sp6YlvmZT1rstxaXVGqlkUcTOdoEdLh2AcWsucdlvGm8ECxpFhhf5YvUMM5Hkx3igI7a6phD923IaZO/LqHucGJ/kjkreJdSlRQKCpgXd/UKVdUu8hg+RRBxYlpOY1PJ3PLBH5xk7UVI7yIWcHr+jUjBpby/gwgM7icR2UDvWgNg1xBWZlrCuMIUXCGQbrBD9F8rfYon29FoZGPGfR7z/zECMbqB37L5w65nMFms1/A0A/R2eWjuQ37NT7zpksZjzW3okzMTFT8iT4NNR6SEh+UgAVope/d2d+32AmvFa+0s2g/n2RDggRfbFwoD80MGqhUDLdHuR4VJzoIpvCdmvJ5JKK0x8ZHRdJr0Xxoh2p+YfgAcHXCrcw+hnx7k0bK1zhpBTPLODOgM/dIP8YbB1KyYtFMAkvmAu9kp2HjYio1oGLuKcfUveXODw6IoSjMCFW/C4iy3Dcx85Gbp/cuY8XjH+qIZW/I1KbXeE2tYYp22EQ1A7gQZB7//Tz2MmgV7+t+hSdXshdBmULr5pPQLkJe3nPSXyeU4845M9DCz1QXNS3ZP9O2rtHHjQbZpCv+4ECbUqn4I+kIzgaqgLzT0nlTDAxq9LeHW2fIHGS7ICQA0uuo+my4v9qB9BGJGfLhr34BHxAbQYRmOPqCK+StiZJx/ueqvR8aSZeKyJf+jMBhQKDz8bVm4Y2iKNTyG+radJDEzw6jcjY0MxlAYb8cW0o3o8cXfk21CLSr7H9gU5AzyoXVycI6woYiEBwPI5RUb34B0QJl9dpXV5vHwEz7g9pG6po6WIAMmwOyv7Zu7MqbbAMXL4zCJSe+svxgB",
+        "thinking": "The verifier error is clear: `bpf_ktime_get_coarse_ns` is not allowed for `kprobe` program type.\n\nThe fix is to either:\n1. Change the program type to one that allows `bpf_ktime_get_coarse_ns`, or\n2. Use a different helper that is allowed in kprobe programs (like `bpf_ktime_get_ns`)\n\n`bpf_ktime_get_coarse_ns` is available for certain program types but not kprobe. `bpf_ktime_get_ns` is available for kprobe programs.\n\n\nThe simplest solution is to swap `bpf_ktime_get_coarse_ns` for `bpf_ktime_get_ns`, which works with kprobe. Alternatively, I could change the program type to something like socket filter or cgroup skb that supports the coarse variant, but that's more involved than just switching to the standard time helper.",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nThe verifier rejects the program because `bpf_ktime_get_coarse_ns` (helper #160) is **not permitted for `BPF_PROG_TYPE_KPROBE` programs**. Each BPF program type has an allowlist of helpers it may call, and `bpf_ktime_get_coarse_ns` is not on the kprobe allowlist.\n\nThe closely related helper `bpf_ktime_get_ns` *is* allowed in kprobe programs.\n\n## Fix\n\nReplace `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns` in both the inline-asm call and the `__imm` constraint:\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"kprobe\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_ns];\t\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_ns)\n\t: __clobber_all);\n}\n```\n\n`bpf_ktime_get_ns` is whitelisted for kprobe programs and provides essentially the same monotonic nanosecond timestamp (just not coarse-grained), so this is the minimal, correct substitution.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01W2P5wzuNUmK4LczGrErZQb",
+    "model": "claude-sonnet-4-6",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 492,
+      "output_tokens": 779,
+      "output_tokens_details": {
+        "thinking_tokens": 406
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": "The verifier error is clear: `bpf_ktime_get_coarse_ns` is not allowed for `kprobe` program type.\n\nThe fix is to either:\n1. Change the program type to one that allows `bpf_ktime_get_coarse_ns`, or\n2. Use a different helper that is allowed in kprobe programs (like `bpf_ktime_get_ns`)\n\n`bpf_ktime_get_coarse_ns` is available for certain program types but not kprobe. `bpf_ktime_get_ns` is available for kprobe programs.\n\n\nThe simplest solution is to swap `bpf_ktime_get_coarse_ns` for `bpf_ktime_get_ns`, which works with kprobe. Alternatively, I could change the program type to something like socket filter or cgroup skb that supports the coarse variant, but that's more involved than just switching to the standard time helper."
+}

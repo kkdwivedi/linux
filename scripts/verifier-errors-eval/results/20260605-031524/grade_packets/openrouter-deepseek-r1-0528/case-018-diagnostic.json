@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Swap the two unlock calls on the success path.",
+    "Avoid taking lock_b while lock_a is still held if nesting is unnecessary."
+  ],
+  "canonical_fix": "On the path where both locks are held, call bpf_res_spin_unlock(&lock_b) before bpf_res_spin_unlock(&lock_a).",
+  "case_id": "case-018",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program acquires lock_a and then lock_b, but releases lock_a before lock_b on the success path. Nested resource spin locks must be unlocked in last-in, first-out order.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-r1-0528/case-018-diagnostic.txt",
+    "case_id": "case-018",
+    "model": "deepseek/deepseek-r1-0528",
+    "profile": "openrouter-deepseek-r1-0528",
+    "prompt_bytes": 2550,
+    "prompt_path": "public/case-018/prompt_diagnostic.md",
+    "prompt_sha256": "b2c0e6d8199078791c9358d84b560ed1081e0fd58d1a492ad2d0272f131fa115",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-r1-0528/case-018-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "8d89ed5a-cb44-4f4f-9708-104d62cfaee7",
+    "started_at": "2026-06-05T03:19:28+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier failure occurs because the spin locks are not released in the reverse order of acquisition. The program acquires `lock_a` first, then `lock_b`. However, in the normal execution path (both locks acquired), it attempts to release `lock_a` before `lock_b`, violating the last-in-first-out (LIFO) requirement for spin lock release.\n\n**Failure Explanation:**\n- Locks must be released in reverse acquisition order (`lock_b` before `lock_a`).\n- The normal path incorrectly releases `lock_a` (acquired first) before `lock_b` (acquired last).\n- The verifier detects this when processing `bpf_res_spin_unlock(&lock_a)` at the start of the normal path.\n\n**Fix:**\nSwap the unlock order in the normal path to release `lock_b` before `lock_a`. The error path (where `lock_b` acquisition fails) is correct since only `lock_a` is held.\n\n**Patch:**\n```diff\n--- original.c\n+++ fixed.c\n@@ -10,8 +10,8 @@\n \t\tbpf_res_spin_unlock(&lock_a);\n \t\treturn 0;\n \t}\n-\tbpf_res_spin_unlock(&lock_a);\n \tbpf_res_spin_unlock(&lock_b);\n+\tbpf_res_spin_unlock(&lock_a);\n \treturn 0;\n }\n```\n\n**Fixed Source:**\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nstruct bpf_res_spin_lock lock_a __hidden SEC(\".data.A\");\nstruct bpf_res_spin_lock lock_b __hidden SEC(\".data.B\");\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tif (bpf_res_spin_lock(&lock_a))\n\t\treturn 0;\n\tif (bpf_res_spin_lock(&lock_b)) {\n\t\tbpf_res_spin_unlock(&lock_a);\n\t\treturn 0;\n\t}\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n\treturn 0;\n}\n```",
+  "must_mention": [
+    "lock_b was acquired after lock_a",
+    "Unlock order must be LIFO",
+    "The success path unlocks the wrong lock first"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Changes only the error path where lock_b acquisition fails",
+    "Drops one unlock and leaks a held lock",
+    "Confuses spin lock order with IRQ flag variable order"
+  ]
+}

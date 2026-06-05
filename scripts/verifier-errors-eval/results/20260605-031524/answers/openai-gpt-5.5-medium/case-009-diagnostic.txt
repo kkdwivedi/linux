@@ -1,0 +1,90 @@
+The verifier failure is at:
+
+```c
+acquired = bpf_task_acquire(value->task);
+```
+
+`value` is known to be a non-NULL map value, but `value->task` is a kptr field loaded from the map. The verifier types that load as:
+
+```text
+R1=rcu_ptr_or_null_task_struct
+```
+
+So even though `map_insert()` tried to store a non-NULL acquired task into the map, the verifier cannot prove that the map field is non-NULL after the later lookup. Map contents are mutable and may contain `NULL`, and the verifier does not preserve the “we just inserted this kptr” fact across the helper calls / map lookup.
+
+`bpf_task_acquire()` requires its first argument to be a non-NULL `struct task_struct *`. The existing check:
+
+```c
+if (!acquired)
+	return 0;
+```
+
+checks the return value of `bpf_task_acquire()`, but the verifier rejects the program before that because the input argument may be NULL.
+
+The smallest likely fix is to load `value->task` into a temporary, check it for NULL, and only then call `bpf_task_acquire()` on the checked pointer.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..1111111 100644
+--- a/case.c
++++ b/case.c
+@@ -67,7 +67,7 @@ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+ 	struct task_struct *acquired;
+-	struct map_value *value;
++	struct task_struct *stored;
++	struct map_value *value;
+ 
+ 	value = helper_a(task);
+ 	if (!value)
+@@ -75,7 +75,11 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ 
+-	acquired = bpf_task_acquire(value->task);
++	stored = value->task;
++	if (!stored)
++		return 0;
++
++	acquired = bpf_task_acquire(stored);
+ 	if (!acquired)
+ 		return 0;
+ 
+```
+
+Equivalently, the final function should look like:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct task_struct *acquired, *stored;
+	struct map_value *value;
+
+	value = helper_a(task);
+	if (!value)
+		return 0;
+
+	stored = value->task;
+	if (!stored)
+		return 0;
+
+	acquired = bpf_task_acquire(stored);
+	if (!acquired)
+		return 0;
+
+	bpf_task_release(acquired);
+	return 0;
+}
+```
+
+Using a temporary is important: writing only
+
+```c
+if (!value->task)
+	return 0;
+acquired = bpf_task_acquire(value->task);
+```
+
+may compile into two separate loads from the map field, and the verifier may still consider the second load nullable. Loading once, checking that same value, and passing that checked pointer to the kfunc should satisfy the verifier.

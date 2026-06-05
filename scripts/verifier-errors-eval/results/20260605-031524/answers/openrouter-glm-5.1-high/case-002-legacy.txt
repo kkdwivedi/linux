@@ -1,0 +1,32 @@
+## Verifier Failure Explanation
+
+The verifier reports an **unreleased reference leak** (`Unreleased reference id=2 alloc_insn=0`). Here's the trace:
+
+1. `bpf_cpumask_create()` allocates a cpumask with reference id=2.
+2. The NULL check passes (cpumask is non-NULL).
+3. `bpf_cpumask_empty()` is called — this does **not** release the reference.
+4. The empty check passes (cpumask is empty), so `make_object()` returns the cpumask **without releasing it**.
+5. Back in `entry`, `__sink(cpumask)` is a no-op that does **not** release the reference.
+6. The program exits with `return 0`, leaking the reference.
+
+The core issue: `entry` obtains an owned `bpf_cpumask` reference from `make_object()` but never calls `bpf_cpumask_release()` before returning.
+
+## Fix
+
+Replace `__sink(cpumask)` with a proper NULL-check and release:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *cpumask;
+
+	cpumask = make_object();
+	if (cpumask)
+		bpf_cpumask_release(cpumask);
+
+	return 0;
+}
+```
+
+This ensures that if `make_object()` returns a non-NULL cpumask, the reference is released before the program exits. The `bpf_cpumask_release()` kfunc is the only way to drop a `bpf_cpumask` reference, and the verifier requires that every acquired reference is either released or transferred before the program returns.

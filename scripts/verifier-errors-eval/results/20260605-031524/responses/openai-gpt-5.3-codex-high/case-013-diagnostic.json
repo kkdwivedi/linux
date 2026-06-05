@@ -1,0 +1,130 @@
+{
+  "answer_text": "The failure is a **stack-depth limit** issue, not a type/ptr safety issue.\n\n### Why verifier rejects it\n\nBPF has a hard limit of **512 bytes combined stack across active call frames**.  \nIn your program:\n\n- `helper_c()` allocates `buf[MAX_STACK]`\n- `helper_b()` allocates `buf[MAX_STACK]`\n- (and `helper_d()` also does, for another path)\n\nWith `MAX_STACK = 260`, each of those frames becomes larger than 260 due to alignment/compiler layout, and on the call chain:\n\n`entry -> helper_c -> helper_b`\n\nthe verifier computes **544 bytes total**, which exceeds 512.\n\n---\n\n### Smallest likely fix\n\nReduce per-function stack allocation so nested `helper_c + helper_b` (and `helper_c + helper_d`) stay within 512.\n\nA one-line fix is:\n\n```diff\n-#define MAX_STACK 260\n+#define MAX_STACK 248\n```\n\nThis should drop each heavy frame enough to bring the combined chain to (about) 512 or less.\n\n---\n\n### Patch\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -2,7 +2,7 @@\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n \n-#define MAX_STACK 260\n+#define MAX_STACK 248\n \n static __attribute__((noinline))\n int helper_a(int val, struct __sk_buff *skb)\n```\n\n",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-013-diagnostic.txt",
+    "case_id": "case-013",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 2658,
+    "prompt_path": "public/case-013/prompt_diagnostic.md",
+    "prompt_sha256": "044070894a5a67f43ab32448001b1bd67c0db88fee4087d1bb67f71a9273513d",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-013-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "b6486050-66db-4969-8333-31190e373a6b",
+    "started_at": "2026-06-05T03:16:55+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00133,
+    "output_cost_usd": 0.057484,
+    "total_cost_usd": 0.058814
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 760,
+    "output_tokens": 4106,
+    "raw_usage": {
+      "input_tokens": 760,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 4106,
+      "output_tokens_details": {
+        "reasoning_tokens": 3793
+      },
+      "total_tokens": 4866
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 3793,
+    "total_tokens": 4866
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629479,
+    "created_at": 1780629415,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0128d2f51ebf3174006a223fa78640819ea2e05d795c6fe8c8",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0128d2f51ebf3174006a223fa7e580819eaff13e0efb1e526d",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is a **stack-depth limit** issue, not a type/ptr safety issue.\n\n### Why verifier rejects it\n\nBPF has a hard limit of **512 bytes combined stack across active call frames**.  \nIn your program:\n\n- `helper_c()` allocates `buf[MAX_STACK]`\n- `helper_b()` allocates `buf[MAX_STACK]`\n- (and `helper_d()` also does, for another path)\n\nWith `MAX_STACK = 260`, each of those frames becomes larger than 260 due to alignment/compiler layout, and on the call chain:\n\n`entry -> helper_c -> helper_b`\n\nthe verifier computes **544 bytes total**, which exceeds 512.\n\n---\n\n### Smallest likely fix\n\nReduce per-function stack allocation so nested `helper_c + helper_b` (and `helper_c + helper_d`) stay within 512.\n\nA one-line fix is:\n\n```diff\n-#define MAX_STACK 260\n+#define MAX_STACK 248\n```\n\nThis should drop each heavy frame enough to bring the combined chain to (about) 512 or less.\n\n---\n\n### Patch\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -2,7 +2,7 @@\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n \n-#define MAX_STACK 260\n+#define MAX_STACK 248\n \n static __attribute__((noinline))\n int helper_a(int val, struct __sk_buff *skb)\n```\n\n",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0128d2f51ebf3174006a223fe3d944819eb4b071e22838e305",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 760,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 4106,
+      "output_tokens_details": {
+        "reasoning_tokens": 3793
+      },
+      "total_tokens": 4866
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

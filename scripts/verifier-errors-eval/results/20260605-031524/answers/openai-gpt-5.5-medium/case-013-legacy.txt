@@ -1,0 +1,59 @@
+The verifier failure is due to the cumulative BPF stack usage across nested subprogram calls.
+
+Each of these helpers allocates a large stack buffer:
+
+```c
+volatile char buf[MAX_STACK] = {};
+```
+
+with:
+
+```c
+#define MAX_STACK 260
+```
+
+Even though the buffer is 260 bytes, the verifier accounts stack usage with alignment/rounding. In this case each such frame is being accounted as about 272 bytes. Along a nested call chain such as:
+
+```text
+entry -> helper_c -> helper_b -> helper_a
+```
+
+both `helper_c()` and `helper_b()` have one of these large stack buffers live in their frames. That gives:
+
+```text
+272 + 272 = 544 bytes
+```
+
+The BPF verifier stack limit for a call chain is 512 bytes, so it rejects the program with:
+
+```text
+combined stack size of 3 calls is 544. Too large
+```
+
+`helper_d()` itself is verified as safe, but the combined nested stack usage is too high.
+
+The smallest likely source-level fix is to reduce `MAX_STACK` so that the rounded stack usage per frame is no more than 256 bytes. Since `MAX_STACK` is currently 260 and appears to round up to 272, changing it to 256 should make the two-frame nested usage exactly 512 bytes, which is within the verifier limit.
+
+Patch:
+
+```diff
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ 
+-#define MAX_STACK 260
++#define MAX_STACK 256
+ 
+ static __attribute__((noinline))
+ int helper_a(int val, struct __sk_buff *skb)
+ {
+ 	asm volatile ("");
+ 	return skb->len;
+ }
+```
+
+Why this should pass:
+
+- `helper_b()`, `helper_c()`, and `helper_d()` each still allocate a stack buffer.
+- The maximum nested path contains two large-buffer frames at once, e.g. `helper_c()` calling `helper_b()`.
+- With `MAX_STACK` reduced to 256, each large frame should account as 256 bytes instead of 272.
+- Combined nested stack usage becomes `256 + 256 = 512`, satisfying the verifier’s maximum stack limit.

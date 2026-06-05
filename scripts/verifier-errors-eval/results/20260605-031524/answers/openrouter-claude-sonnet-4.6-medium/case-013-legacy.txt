@@ -1,0 +1,42 @@
+## Analysis
+
+### Root Cause
+
+The BPF verifier enforces a **combined stack limit of 512 bytes** across all nested call frames in a single call chain. The deepest call chain here is:
+
+```
+entry → helper_c → helper_b → helper_a
+```
+
+The verifier measures the combined stack at the 3-frame deep point:
+
+| Frame | Stack usage |
+|-------|------------|
+| `entry` | ~24 bytes (compiler-spilled callee-saved registers) |
+| `helper_c` | 260 bytes (`buf[MAX_STACK]`) |
+| `helper_b` | 260 bytes (`buf[MAX_STACK]`) |
+| **Total** | **544 bytes > 512** |
+
+`helper_a` has zero stack (only `asm volatile("")`) so it doesn't add to the count, but the 3-frame sum of 544 already exceeds the 512-byte BPF combined-stack limit.
+
+### Fix
+
+Reduce `MAX_STACK` so that the combined stack fits within 512 bytes. We need:
+
+```
+24 + MAX_STACK + MAX_STACK ≤ 512
+MAX_STACK ≤ 244
+```
+
+Using 240 gives comfortable headroom (504 bytes total):
+
+```diff
+-#define MAX_STACK 260
++#define MAX_STACK 240
+```
+
+With `MAX_STACK = 240`:
+- entry (~24) + helper_c (240) + helper_b (240) = **504 ≤ 512** ✓
+- All other call chains are shallower and well within limits.
+
+This is the minimal change needed — a single numeric constant adjustment that keeps the test's intent (exercising nested subprog calls with large stack frames) intact while satisfying the verifier's combined-stack constraint.

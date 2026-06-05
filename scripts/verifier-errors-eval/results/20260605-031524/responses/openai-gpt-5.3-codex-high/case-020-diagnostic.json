@@ -1,0 +1,130 @@
+{
+  "answer_text": "The failure is **not** a safety bug in `helper_g`; it is verifier **complexity blow-up** during inter-procedural liveness.\n\n### Why it blows up\nEach `CALL_AT()` builds `r1 = fp - <offset>` and calls the next subprog.  \nAcross 7 call levels, with many call sites and multiple stack offsets, the verifier keeps re-running callee liveness propagation for many call-path/arg combinations, eventually hitting:\n\n- `liveness analysis exceeded complexity limit (10001 calls)`\n\nSo `helper_g` is just where the limit is tripped, not where logic is wrong.\n\n---\n\n### Smallest likely source fix\nReduce distinct argument patterns reaching callees by using a single stack offset in `CALL_AT`.\n\n#### Patch\n```diff\n-#define CALL_AT(fn, off) \"r1 = r10;\" \"r1 += -\" #off \";\" \"call \" #fn \";\"\n+#define CALL_AT(fn, off) \"r1 = r10;\" \"r1 += -8;\" \"call \" #fn \";\"\n```\n\nThis is a one-line change and should drastically reduce liveness recomputation while keeping the overall structure intact.\n\nIf it still hits limits on your kernel, the next minimal step is reducing fan-out (e.g. make `CALLS_50` call `CALLS_10` only once).",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-020-diagnostic.txt",
+    "case_id": "case-020",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 4110,
+    "prompt_path": "public/case-020/prompt_diagnostic.md",
+    "prompt_sha256": "cb7344658f86bd080c64c73a9c8ee3095a7de5b045356c00872dce60afb5bfb8",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-020-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "1f8894f7-c78a-44d8-8bda-ea78121ef0e4",
+    "started_at": "2026-06-05T03:17:04+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.002534,
+    "output_cost_usd": 0.096782,
+    "total_cost_usd": 0.099316
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1448,
+    "output_tokens": 6913,
+    "raw_usage": {
+      "input_tokens": 1448,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 6913,
+      "output_tokens_details": {
+        "reasoning_tokens": 6624
+      },
+      "total_tokens": 8361
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 6624,
+    "total_tokens": 8361
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629545,
+    "created_at": 1780629424,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0a775e1811851035006a223fb09f5081a297ff709ec3ba5e5c",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0a775e1811851035006a223fb0fe4c81a2a6729491e492cce5",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is **not** a safety bug in `helper_g`; it is verifier **complexity blow-up** during inter-procedural liveness.\n\n### Why it blows up\nEach `CALL_AT()` builds `r1 = fp - <offset>` and calls the next subprog.  \nAcross 7 call levels, with many call sites and multiple stack offsets, the verifier keeps re-running callee liveness propagation for many call-path/arg combinations, eventually hitting:\n\n- `liveness analysis exceeded complexity limit (10001 calls)`\n\nSo `helper_g` is just where the limit is tripped, not where logic is wrong.\n\n---\n\n### Smallest likely source fix\nReduce distinct argument patterns reaching callees by using a single stack offset in `CALL_AT`.\n\n#### Patch\n```diff\n-#define CALL_AT(fn, off) \"r1 = r10;\" \"r1 += -\" #off \";\" \"call \" #fn \";\"\n+#define CALL_AT(fn, off) \"r1 = r10;\" \"r1 += -8;\" \"call \" #fn \";\"\n```\n\nThis is a one-line change and should drastically reduce liveness recomputation while keeping the overall structure intact.\n\nIf it still hits limits on your kernel, the next minimal step is reducing fan-out (e.g. make `CALLS_50` call `CALLS_10` only once).",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0a775e1811851035006a224025627881a2a9315bcb21f5273a",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1448,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 6913,
+      "output_tokens_details": {
+        "reasoning_tokens": 6624
+      },
+      "total_tokens": 8361
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

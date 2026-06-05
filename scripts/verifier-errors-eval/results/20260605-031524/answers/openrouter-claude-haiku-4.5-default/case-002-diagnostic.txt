@@ -1,0 +1,37 @@
+## Explanation of the Verifier Failure
+
+The verifier is detecting a **resource leak** of the `bpf_cpumask` object. Here's the issue:
+
+1. `bpf_cpumask_create()` is called at instruction 0, acquiring a reference (id=2) that must be released
+2. The code checks `if (!cpumask)` and returns NULL on failure (this path is safe)
+3. The code then checks `if (!bpf_cpumask_empty(cast(cpumask)))` and calls `bpf_cpumask_release()` in that branch
+4. **However**, when `bpf_cpumask_empty()` returns false (the `if` condition is not taken), the function returns the cpumask without releasing it
+5. The caller (`BPF_PROG(entry, ...)`) receives this cpumask but never releases it before exiting
+
+The verifier traces the path where:
+- `bpf_cpumask_create()` succeeds (instruction 0)
+- `!cpumask` check fails, so we continue (instruction 2)
+- `!bpf_cpumask_empty(cast(cpumask))` check fails, so we skip the release (instruction 11)
+- The function returns the unreleased cpumask to the caller
+- The caller exits without releasing it (instruction 21)
+
+## The Fix
+
+The issue is in the `entry` function: it calls `make_object()` which returns a cpumask, but never releases it. The simplest fix is to release the cpumask before returning:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *cpumask;
+
+	cpumask = make_object();
+	__sink(cpumask);
+	if (cpumask)
+		bpf_cpumask_release(cpumask);
+
+	return 0;
+}
+```
+
+**Why this works:** The verifier will now see that on all paths where `cpumask` is non-NULL (and thus holds a reference), it is released before the exit. The `if (cpumask)` check ensures we only call `bpf_cpumask_release()` when there's actually a reference to release.

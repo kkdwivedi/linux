@@ -1,0 +1,25 @@
+The verifier rejects the program because the first argument to `bpf_cpumask_populate` is an integer scalar (`0x123456`) cast to a pointer, but the kfunc requires a pointer to verifier-known memory (e.g., stack, map, or context) of at least 16 bytes for `struct cpumask`. The verifier cannot validate that the arbitrary integer points to valid, accessible memory.
+
+The smallest fix is to replace the invalid pointer with a stack-allocated `struct cpumask`, which provides the required 16 bytes of known memory.
+
+Here is the patch:
+
+```diff
+--- original.c
++++ fixed.c
+@@ -6,10 +6,10 @@
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
++	struct cpumask valid_cpumask;
+ 	u64 bits;
+ 	int ret;
+ 
+-	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
++	ret = bpf_cpumask_populate(&valid_cpumask, &bits, sizeof(bits));
+ 	if (!ret)
+ 		return 2;
+```
+
+This change ensures the first argument is a valid stack pointer to a `struct cpumask`, satisfying the verifier's memory requirements. The program should now pass verification, though its runtime behavior may differ (the kfunc may succeed instead of failing).

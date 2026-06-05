@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Explanation of the Verifier Failure\n\nThe verifier is rejecting the program because:\n\n1. **Program type mismatch**: The program is declared as `SEC(\"kprobe\")`, which makes it a kprobe program type.\n2. **Helper not allowed**: The `bpf_ktime_get_coarse_ns` helper function is not permitted for kprobe program types. The verifier explicitly states: \"program of this type cannot use helper bpf_ktime_get_coarse_ns#160\"\n\nDifferent BPF program types have different sets of allowed helpers. Kprobe programs have restrictions on which helpers they can call, and `bpf_ktime_get_coarse_ns` is not among the permitted ones for that type.\n\n## Solution\n\nThe smallest fix is to change the program type to one that **does** support `bpf_ktime_get_coarse_ns`. Common program types that support this helper include:\n- `tracepoint`\n- `raw_tracepoint`\n- `perf_event`\n- `syscalls/sys_enter_*` (tracepoint variant)\n\n### Proposed Patch\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"tracepoint/syscalls/sys_enter_openat\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_coarse_ns];\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_coarse_ns)\n\t: __clobber_all);\n}\n```\n\n**Change**: Replace `SEC(\"kprobe\")` with `SEC(\"tracepoint/syscalls/sys_enter_openat\")` (or another appropriate tracepoint that supports the helper).\n\nThis allows the program to use the `bpf_ktime_get_coarse_ns` helper while maintaining the same inline assembly logic.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-006-legacy.txt",
+    "case_id": "case-006",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 1056,
+    "prompt_path": "public/case-006/prompt_legacy.md",
+    "prompt_sha256": "120f6abe2c1570fcf1f340a5df8b99d8138acdc6e56cef9bda9d3f882cdbea64",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-006-legacy.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "86cd2fb8-217b-4b22-aed5-3b4b15b0afb5",
+    "started_at": "2026-06-05T03:18:59+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000491,
+    "output_cost_usd": 0.002505,
+    "total_cost_usd": 0.002996
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 491,
+    "output_tokens": 501,
+    "raw_usage": {
+      "completion_tokens": 501,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.002996,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002505,
+        "upstream_inference_cost": 0.002996,
+        "upstream_inference_prompt_cost": 0.000491
+      },
+      "is_byok": false,
+      "prompt_tokens": 491,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 992
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 992
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation of the Verifier Failure\n\nThe verifier is rejecting the program because:\n\n1. **Program type mismatch**: The program is declared as `SEC(\"kprobe\")`, which makes it a kprobe program type.\n2. **Helper not allowed**: The `bpf_ktime_get_coarse_ns` helper function is not permitted for kprobe program types. The verifier explicitly states: \"program of this type cannot use helper bpf_ktime_get_coarse_ns#160\"\n\nDifferent BPF program types have different sets of allowed helpers. Kprobe programs have restrictions on which helpers they can call, and `bpf_ktime_get_coarse_ns` is not among the permitted ones for that type.\n\n## Solution\n\nThe smallest fix is to change the program type to one that **does** support `bpf_ktime_get_coarse_ns`. Common program types that support this helper include:\n- `tracepoint`\n- `raw_tracepoint`\n- `perf_event`\n- `syscalls/sys_enter_*` (tracepoint variant)\n\n### Proposed Patch\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"tracepoint/syscalls/sys_enter_openat\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_coarse_ns];\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_coarse_ns)\n\t: __clobber_all);\n}\n```\n\n**Change**: Replace `SEC(\"kprobe\")` with `SEC(\"tracepoint/syscalls/sys_enter_openat\")` (or another appropriate tracepoint that supports the helper).\n\nThis allows the program to use the `bpf_ktime_get_coarse_ns` helper while maintaining the same inline assembly logic.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629539,
+    "id": "gen-1780629539-S0wWiut9f0Sya3PhLGHq",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 501,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.002996,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002505,
+        "upstream_inference_cost": 0.002996,
+        "upstream_inference_prompt_cost": 0.000491
+      },
+      "is_byok": false,
+      "prompt_tokens": 491,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 992
+    }
+  },
+  "reasoning_content": ""
+}

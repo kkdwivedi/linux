@@ -1,0 +1,31 @@
+`bpf_dynptr_slice()` takes `(ptr, offset, buffer, buffer_len)` where `buffer`/`buffer_len` is a verifier-checked memory+length pair.
+
+In your program:
+
+```c
+char buffer[8] = {};
+...
+data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
+```
+
+you ask for **9 bytes** into an **8-byte** stack buffer.  
+Verifier sees `R3 = fp-24`, `R4 = 9`, so range is `[-24, -16]`, which spills into the next stack object (`ptr` at `fp-16`), and rejects it.
+
+### Smallest fix
+Use a length that fits the buffer (best: `sizeof(buffer)`).
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -9,7 +9,7 @@ int entry(struct __sk_buff *skb)
+ 	if (bpf_dynptr_from_skb(skb, 0, &ptr))
+ 		return 1;
+ 
+-	data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
++	data = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+ 
+ 	return !!data;
+ }
+```
+
+This should satisfy the verifier’s memory/length contract for arg3/arg4.

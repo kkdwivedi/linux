@@ -1,0 +1,68 @@
+{
+  "acceptable_fixes": [
+    "Move helper_a(0) after bpf_local_irq_restore(&flags).",
+    "Split helper_a so the IRQ-disabled path calls only a non-sleepable helper.",
+    "Avoid disabling IRQs around the call if the critical section is not needed."
+  ],
+  "canonical_fix": "Restore IRQ state before calling the sleepable subprogram, or remove/replace the sleepable helper from the subprogram used in the IRQ-disabled region.",
+  "case_id": "case-012",
+  "category": "Execution Context Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The entry program disables IRQs and then calls a global subprogram that can call a sleepable helper. The verifier treats the sleepable call through the subprogram as occurring inside the IRQ-disabled region.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-012-legacy.txt",
+    "case_id": "case-012",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 1526,
+    "prompt_path": "public/case-012/prompt_legacy.md",
+    "prompt_sha256": "3c7396a0a94e22b4ffa05f47bf695c68faeca27ec07a26da548d621cb3473cdb",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-012-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "b04ae649-8f19-405c-b27e-9e0ce2ac6efc",
+    "started_at": "2026-06-05T03:17:20+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## What the verifier is complaining about\n\nThere are two related things in the log, but the fatal one is the last line:\n\n```\nsleepable global function helper_a() called in IRQ-disabled region\n```\n\n`helper_a()` is a **global** (`__noinline`, non-`static`, externally visible) function. Global subprograms are verified independently, and the verifier propagates a \"sleepable\" property to them: because `helper_a()` (transitively) calls `bpf_copy_from_user()`, which may sleep, `helper_a()` is marked as a *sleepable* global function.\n\n`bpf_local_irq_save()` / `bpf_local_irq_restore()` open a non-preemptible, IRQ-disabled critical section. Inside such a region you are **not allowed to call anything that may sleep** \u2014 neither sleepable helpers/kfuncs nor a sleepable global function. So the call\n\n```c\nbpf_local_irq_save(&flags);\nhelper_a(0);          /* <-- sleepable global func in IRQ-disabled region */\nbpf_local_irq_restore(&flags);\n```\n\nis rejected.\n\n(The first line, `arg#0 reference type('UNKNOWN ') size cannot be determined`, comes from independently checking `helper_a` with the `NULL`/typeless argument to `bpf_copy_from_user`; it\u2019s noise relative to the hard error, which is the IRQ-region rule.)\n\n## Smallest fix\n\nDo not invoke anything that can sleep inside the IRQ-disabled section. The minimal source change is to move the `helper_a()` call out of the `bpf_local_irq_save()`/`bpf_local_irq_restore()` window:\n\n```c\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\thelper_a(0);\n\tbpf_local_irq_save(&flags);\n\tbpf_local_irq_restore(&flags);\n\treturn 0;\n}\n```\n\nNow the sleepable global function is called outside the critical section, and nothing sleepable remains between save and restore, so the IRQ-region check passes.\n\n### Why other \"obvious\" tweaks don't help\n- Making `helper_a` `static` doesn\u2019t fix it: it would be inlined/traced with `i == 0`, so the `if (!i)` branch is taken and `bpf_copy_from_user()` (a sleepable helper) still ends up being reachable inside the IRQ-disabled region.\n- Keeping the call inside the region but trying to dodge the branch is fragile; the only robust fix that satisfies the verifier\u2019s rule is to keep the sleepable call outside the `irq_save`/`irq_restore` pair.\n\nIf the test\u2019s intent is specifically to exercise something *inside* the IRQ-disabled region, replace `helper_a(0)` with a non-sleepable operation; but to make this exact program pass with the smallest edit, relocating the `helper_a(0)` call before `bpf_local_irq_save()` is sufficient.",
+  "must_mention": [
+    "A sleepable operation is reached through a global subprogram",
+    "IRQs are disabled at that point",
+    "The call must be outside the IRQ-disabled region"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes helper_a's argument value",
+    "Moves bpf_local_irq_restore after the return",
+    "Adds a NULL check for the local buffer"
+  ]
+}

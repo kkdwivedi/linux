@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier failure is due to the cumulative BPF stack usage across nested subprogram calls.\n\nEach of these helpers allocates a large stack buffer:\n\n```c\nvolatile char buf[MAX_STACK] = {};\n```\n\nwith:\n\n```c\n#define MAX_STACK 260\n```\n\nEven though the buffer is 260 bytes, the verifier accounts stack usage with alignment/rounding. In this case each such frame is being accounted as about 272 bytes. Along a nested call chain such as:\n\n```text\nentry -> helper_c -> helper_b -> helper_a\n```\n\nboth `helper_c()` and `helper_b()` have one of these large stack buffers live in their frames. That gives:\n\n```text\n272 + 272 = 544 bytes\n```\n\nThe BPF verifier stack limit for a call chain is 512 bytes, so it rejects the program with:\n\n```text\ncombined stack size of 3 calls is 544. Too large\n```\n\n`helper_d()` itself is verified as safe, but the combined nested stack usage is too high.\n\nThe smallest likely source-level fix is to reduce `MAX_STACK` so that the rounded stack usage per frame is no more than 256 bytes. Since `MAX_STACK` is currently 260 and appears to round up to 272, changing it to 256 should make the two-frame nested usage exactly 512 bytes, which is within the verifier limit.\n\nPatch:\n\n```diff\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n \n-#define MAX_STACK 260\n+#define MAX_STACK 256\n \n static __attribute__((noinline))\n int helper_a(int val, struct __sk_buff *skb)\n {\n \tasm volatile (\"\");\n \treturn skb->len;\n }\n```\n\nWhy this should pass:\n\n- `helper_b()`, `helper_c()`, and `helper_d()` each still allocate a stack buffer.\n- The maximum nested path contains two large-buffer frames at once, e.g. `helper_c()` calling `helper_b()`.\n- With `MAX_STACK` reduced to 256, each large frame should account as 256 bytes instead of 272.\n- Combined nested stack usage becomes `256 + 256 = 512`, satisfying the verifier\u2019s maximum stack limit.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-medium/case-013-legacy.txt",
+    "case_id": "case-013",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-medium",
+    "prompt_bytes": 1649,
+    "prompt_path": "public/case-013/prompt_legacy.md",
+    "prompt_sha256": "4d1d466cfe05bcf610e895dd892a6a1aa50e76dc1045f63dfca8de2da264bd35",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-medium/case-013-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "eb1902bc-7470-4276-9650-463063969a48",
+    "started_at": "2026-06-05T03:15:39+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.002735,
+    "output_cost_usd": 0.02952,
+    "total_cost_usd": 0.032255
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 547,
+    "output_tokens": 984,
+    "raw_usage": {
+      "input_tokens": 547,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 984,
+      "output_tokens_details": {
+        "reasoning_tokens": 516
+      },
+      "total_tokens": 1531
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 516,
+    "total_tokens": 1531
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629363,
+    "created_at": 1780629339,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0fe3641caf8b8aef006a223f5b7b04819fb5bb880fa0ae16e8",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0fe3641caf8b8aef006a223f5c1188819fa57b0f3bf211a55f",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier failure is due to the cumulative BPF stack usage across nested subprogram calls.\n\nEach of these helpers allocates a large stack buffer:\n\n```c\nvolatile char buf[MAX_STACK] = {};\n```\n\nwith:\n\n```c\n#define MAX_STACK 260\n```\n\nEven though the buffer is 260 bytes, the verifier accounts stack usage with alignment/rounding. In this case each such frame is being accounted as about 272 bytes. Along a nested call chain such as:\n\n```text\nentry -> helper_c -> helper_b -> helper_a\n```\n\nboth `helper_c()` and `helper_b()` have one of these large stack buffers live in their frames. That gives:\n\n```text\n272 + 272 = 544 bytes\n```\n\nThe BPF verifier stack limit for a call chain is 512 bytes, so it rejects the program with:\n\n```text\ncombined stack size of 3 calls is 544. Too large\n```\n\n`helper_d()` itself is verified as safe, but the combined nested stack usage is too high.\n\nThe smallest likely source-level fix is to reduce `MAX_STACK` so that the rounded stack usage per frame is no more than 256 bytes. Since `MAX_STACK` is currently 260 and appears to round up to 272, changing it to 256 should make the two-frame nested usage exactly 512 bytes, which is within the verifier limit.\n\nPatch:\n\n```diff\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n \n-#define MAX_STACK 260\n+#define MAX_STACK 256\n \n static __attribute__((noinline))\n int helper_a(int val, struct __sk_buff *skb)\n {\n \tasm volatile (\"\");\n \treturn skb->len;\n }\n```\n\nWhy this should pass:\n\n- `helper_b()`, `helper_c()`, and `helper_d()` each still allocate a stack buffer.\n- The maximum nested path contains two large-buffer frames at once, e.g. `helper_c()` calling `helper_b()`.\n- With `MAX_STACK` reduced to 256, each large frame should account as 256 bytes instead of 272.\n- Combined nested stack usage becomes `256 + 256 = 512`, satisfying the verifier\u2019s maximum stack limit.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0fe3641caf8b8aef006a223f696cf8819fb6ea4d7e91d9918e",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 547,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 984,
+      "output_tokens_details": {
+        "reasoning_tokens": 516
+      },
+      "total_tokens": 1531
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

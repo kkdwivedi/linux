@@ -1,0 +1,32 @@
+## Verifier Failure Explanation
+
+The program calls `bpf_sk_lookup_tcp` (instruction 19), which acquires a socket reference stored in `r0`. Immediately after, it checks `if r6 == 0 goto l1_%=` (instruction 20). When `r6 != 0` (the mark is non-zero), the branch is **not taken**, and the program falls through to `exit` (instruction 21) **without releasing the socket reference**. This is a resource leak — the verifier correctly flags that the owned resource (id=2) acquired at instruction 19 was never released on this path.
+
+The problematic control flow:
+```
+call bpf_sk_lookup_tcp    → r0 = socket or NULL (acquires reference)
+if r6 == 0 goto l1        → if mark==0, go to release check
+exit                      → mark!=0: EXIT WITHOUT RELEASING ← LEAK
+l1: if r0 == 0 goto l2    → if no socket, skip release
+    r1 = r0
+    call bpf_sk_release   → release socket
+l2: exit
+```
+
+## Fix
+
+The smallest fix is to change `if r6 == 0 goto l1_%=;` to `goto l1_%=;`, so the program **always** proceeds to the release-check path regardless of `r6`. The subsequent `exit;` becomes dead code.
+
+```c
+/* Change this line: */
+	if r6 == 0 goto l1_%=;				\
+	exit;						\
+
+/* To: */
+	goto l1_%=;					\
+	exit;						\
+```
+
+This ensures that on every path after `bpf_sk_lookup_tcp`, the program checks whether `r0` is non-NULL and calls `bpf_sk_release` if needed, satisfying the verifier's resource lifetime safety requirement. The `exit;` after the `goto` becomes unreachable but harmless.
+
+If you prefer to also clean up the dead code, remove both the `goto l1_%=;` and `exit;` lines entirely (execution falls through to `l1_%=:` naturally), but the one-word change from `if r6 == 0 goto` to `goto` is the minimal edit.

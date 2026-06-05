@@ -1,0 +1,68 @@
+{
+  "acceptable_fixes": [
+    "Add bpf_ringbuf_discard_dynptr(&ptr2, 0) before the final return.",
+    "Submit ptr2 too, if the program actually initializes and intends to publish it.",
+    "Restructure cleanup so both ptr1 and ptr2 are released on all exits after reservation."
+  ],
+  "canonical_fix": "Submit or discard ptr2 on every path after it is reserved, including the path where ptr1 is submitted successfully.",
+  "case_id": "case-011",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The program reserves two ringbuf dynptrs. On the success path it submits/releases only ptr1 and returns while ptr2 is still live.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-011-diagnostic.txt",
+    "case_id": "case-011",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 5553,
+    "prompt_path": "public/case-011/prompt_diagnostic.md",
+    "prompt_sha256": "c4e9b1631d514a5b5c9e921fc3dfd8dc5de6eebfbb59913cb9ede46e6625c9ef",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-011-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "26b5ca2d-0f86-49f8-89c9-1c555808ed92",
+    "started_at": "2026-06-05T03:17:38+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation\n\nThe verifier tracks \"reference\" resources that must be released on every exit path. Here two ring-buffer dynptrs are acquired:\n\n- `ptr1` \u2192 reference id=2/1\n- `ptr2` \u2192 reference id=3 (acquired at insn 14)\n\nLook at the two control-flow paths:\n\n- **`if (!sample)` true branch** (sample is NULL): both `ptr1` and `ptr2` are discarded. \u2705\n- **fall-through branch** (sample is non-NULL): only `ptr1` is submitted via `bpf_ringbuf_submit_dynptr(&ptr1, 0)`. `ptr2` is **never** released. \u274c\n\nSo on the success path the resource `id=3` (`ptr2`) leaks, and the verifier rejects the `exit` at line 115:\n\n```\nUnreleased reference id=3 alloc_insn=14\n```\n\n## Fix\n\nRelease (submit or discard) `ptr2` on the success path as well. Smallest change is to add one call before the final `return 0;`:\n\n```c\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_submit_dynptr(&ptr2, 0);   /* <-- add this */\n\n\treturn 0;\n```\n\n(Using `bpf_ringbuf_discard_dynptr(&ptr2, 0)` would work equally for verifier purposes; the point is that every dynptr acquired by `bpf_ringbuf_reserve_dynptr` must be released exactly once on every path to `exit`.)\n\nWith that addition, `ptr2`'s reference is released on both branches, eliminating the leak and letting the program verify.\n\nNote: the unrelated message at the top\n```\narg#0 reference type('UNKNOWN ') size cannot be determined: -22\n```\nis a separate BTF/info diagnostic and is not the cause of the verification failure; the actual failure is the unreleased `ptr2`.",
+  "must_mention": [
+    "The second dynptr reservation is leaked",
+    "Every reserved dynptr must be submitted or discarded",
+    "The successful ptr1 path still needs ptr2 cleanup"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only releases ptr1",
+    "Adds cleanup only in the !sample branch, which already releases both",
+    "Calls a non-dynptr ringbuf cleanup API on the dynptr"
+  ]
+}

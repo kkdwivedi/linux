@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Analysis\n\nThe verifier is failing due to **excessive call depth and complexity**. The program creates a deeply nested call chain:\n\n- `entry` calls `helper_a` 50 times\n- Each `helper_a` calls `helper_b` 50 times\n- Each `helper_b` calls `helper_c` 50 times\n- ... continuing through `helper_d`, `helper_e`, `helper_f`\n- Each `helper_f` calls `helper_g` 50 times\n\nThis creates a call depth of **7 levels** with **50^6 potential execution paths** through the call graph. The verifier's liveness analysis hits the complexity limit (10001 calls) while trying to track state through this exponential explosion of call paths.\n\nThe key issue is in the log: `liveness analysis exceeded complexity limit (10001 calls)` - the verifier cannot complete its analysis within reasonable bounds.\n\n## Solution\n\nThe simplest fix is to **reduce the number of calls per level**. Change `CALLS_50` to `CALLS_10` (or even smaller) to reduce the exponential explosion:\n\n```c\n#define CALL_AT(fn, off) \"r1 = r10;\" \"r1 += -\" #off \";\" \"call \" #fn \";\"\n#define CALLS_10(fn) \\\n\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n\tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n#define CALLS_5(fn) CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40)\n\n__naked __noinline __used\nstatic unsigned long helper_g(void)\n{\n\tasm volatile (\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_f(void)\n{\n\tasm volatile (\n\t\tCALLS_5(helper_g)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_e(void)\n{\n\tasm volatile (\n\t\tCALLS_5(helper_f)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_d(void)\n{\n\tasm volatile (\n\t\tCALLS_5(helper_e)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_c(void)\n{\n\tasm volatile (\n\t\tCALLS_5(helper_d)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_b(void)\n{\n\tasm volatile (\n\t\tCALLS_5(helper_c)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_a(void)\n{\n\tasm volatile (\n\t\tCALLS_5(helper_b)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\nSEC(\"?raw_tp\")\n__naked int entry(void)\n{\n\tasm volatile (\n\t\tCALLS_5(helper_a)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n```\n\n**Why this works:** Reducing from 50 to 5 calls per level reduces the complexity from 50^6 \u2248 15 billion paths to 5^6 = 15,625 paths, which is well within the verifier's complexity limits while still maintaining the nested call structure for testing purposes.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-020-legacy.txt",
+    "case_id": "case-020",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 6158,
+    "prompt_path": "public/case-020/prompt_legacy.md",
+    "prompt_sha256": "cecfa6936349490d4b7bd2b0131df3ba133333894cfcdcc4438f6f6f0196b689",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-020-legacy.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "4efb5893-0b94-4702-a4da-95ead6ede719",
+    "started_at": "2026-06-05T03:19:06+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.003136,
+    "output_cost_usd": 0.005315,
+    "total_cost_usd": 0.008451
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 3136,
+    "output_tokens": 1063,
+    "raw_usage": {
+      "completion_tokens": 1063,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.008451,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.005315,
+        "upstream_inference_cost": 0.008451,
+        "upstream_inference_prompt_cost": 0.003136
+      },
+      "is_byok": false,
+      "prompt_tokens": 3136,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 4199
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 4199
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Analysis\n\nThe verifier is failing due to **excessive call depth and complexity**. The program creates a deeply nested call chain:\n\n- `entry` calls `helper_a` 50 times\n- Each `helper_a` calls `helper_b` 50 times\n- Each `helper_b` calls `helper_c` 50 times\n- ... continuing through `helper_d`, `helper_e`, `helper_f`\n- Each `helper_f` calls `helper_g` 50 times\n\nThis creates a call depth of **7 levels** with **50^6 potential execution paths** through the call graph. The verifier's liveness analysis hits the complexity limit (10001 calls) while trying to track state through this exponential explosion of call paths.\n\nThe key issue is in the log: `liveness analysis exceeded complexity limit (10001 calls)` - the verifier cannot complete its analysis within reasonable bounds.\n\n## Solution\n\nThe simplest fix is to **reduce the number of calls per level**. Change `CALLS_50` to `CALLS_10` (or even smaller) to reduce the exponential explosion:\n\n```c\n#define CALL_AT(fn, off) \"r1 = r10;\" \"r1 += -\" #off \";\" \"call \" #fn \";\"\n#define CALLS_10(fn) \\\n\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n\tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n#define CALLS_5(fn) CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40)\n\n__naked __noinline __used\nstatic unsigned long helper_g(void)\n{\n\tasm volatile (\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_f(void)\n{\n\tasm volatile (\n\t\tCALLS_5(helper_g)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_e(void)\n{\n\tasm volatile (\n\t\tCALLS_5(helper_f)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_d(void)\n{\n\tasm volatile (\n\t\tCALLS_5(helper_e)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_c(void)\n{\n\tasm volatile (\n\t\tCALLS_5(helper_d)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_b(void)\n{\n\tasm volatile (\n\t\tCALLS_5(helper_c)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_a(void)\n{\n\tasm volatile (\n\t\tCALLS_5(helper_b)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\nSEC(\"?raw_tp\")\n__naked int entry(void)\n{\n\tasm volatile (\n\t\tCALLS_5(helper_a)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n```\n\n**Why this works:** Reducing from 50 to 5 calls per level reduces the complexity from 50^6 \u2248 15 billion paths to 5^6 = 15,625 paths, which is well within the verifier's complexity limits while still maintaining the nested call structure for testing purposes.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629546,
+    "id": "gen-1780629546-NRNSztrZ7quYw5DjilLn",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1063,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.008451,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.005315,
+        "upstream_inference_cost": 0.008451,
+        "upstream_inference_prompt_cost": 0.003136
+      },
+      "is_byok": false,
+      "prompt_tokens": 3136,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 4199
+    }
+  },
+  "reasoning_content": ""
+}

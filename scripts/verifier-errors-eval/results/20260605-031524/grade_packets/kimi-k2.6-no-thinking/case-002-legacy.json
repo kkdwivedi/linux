@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Release cpumask after __sink(cpumask) if cpumask is non-NULL.",
+    "Transfer the owned cpumask into a kptr/map in a verifier-accepted way so the program no longer owns it."
+  ],
+  "canonical_fix": "After make_object returns a non-NULL cpumask, call bpf_cpumask_release(cpumask) before returning on every path that still owns it.",
+  "case_id": "case-002",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "easy",
+  "expected_explanation": "make_object acquires an owned cpumask reference. The entry program stores/sinks it and returns without releasing or transferring ownership, so one exit path leaks the reference.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-no-thinking/case-002-legacy.txt",
+    "case_id": "case-002",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-no-thinking",
+    "prompt_bytes": 2521,
+    "prompt_path": "public/case-002/prompt_legacy.md",
+    "prompt_sha256": "b1009b27b63c85152af26046b06f483efc378f604fa60de5cb0fdda6b91ed858",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-no-thinking/case-002-legacy.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "disabled"
+    },
+    "run_id": "ef79289d-7eb5-4d88-b61c-e8c887cc618c",
+    "started_at": "2026-06-05T03:18:00+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "Looking at the verifier log, I can analyze the failure:\n\n## Verifier Failure Explanation\n\nThe error is: **\"Unreleased reference id=2 alloc_insn=0\"** and **\"BPF_EXIT instruction in main prog would lead to reference leak\"**\n\nThe problem is a **reference leak** of a `bpf_cpumask` object. Let me trace through the control flow:\n\n1. At insn 0: `bpf_cpumask_create()` allocates a cpumask, returning a trusted pointer with `id=2`\n2. At insn 1: This is stored in `r6`\n3. At insn 2: If `r6 != 0`, we jump to insn 8 (the non-NULL path)\n4. At insn 8-11: We call `bpf_cpumask_empty(cast(cpumask))`. If the cpumask is **not** empty (`w0 == 0`), we fall through. If it **is** empty (`w0 != 0`), we jump to insn 19.\n\nThe issue is in the branch at insn 11:\n- **Taken branch (jump to 19)**: cpumask IS empty, so we skip the `bpf_cpumask_release(cpumask)` and `return NULL`, going directly to where `r6` is stored to the stack and the function returns 0. The cpumask with `id=2` is never released!\n- **Fall-through**: cpumask is NOT empty, we call `bpf_cpumask_release(cpumask)` and return NULL. This path is fine.\n\nWait, let me re-read. Looking at the C code:\n```c\nif (!bpf_cpumask_empty(cast(cpumask))) {  // if NOT empty\n    bpf_cpumask_release(cpumask);         // release and return NULL\n    return NULL;\n}\nreturn cpumask;  // return the cpumask (ownership transferred to caller)\n```\n\nSo when the cpumask IS empty, we fall through to `return cpumask`. The caller (`entry`) receives it, stores it in `cpumask` local variable, calls `__sink(cpumask)`, and then exits without releasing it.\n\nThe issue is: when `make_object()` returns a non-NULL cpumask (the empty case), the caller receives ownership but never releases it.\n\nBut wait - the verifier says the leak is at the EXIT instruction. Let me look more carefully...\n\nActually, looking at the verifier state at insn 19: `R6=trusted_ptr_bpf_cpumask(id=2) refs=2` - the reference is still live. The function stores it to the stack but never releases it before exit.\n\nThe `__sink(cpumask)` call doesn't consume the reference - it just prevents the variable from being optimized away. The cpumask needs to be explicitly released.\n\n## The Fix\n\nThe simplest fix is to release the cpumask in the `entry` function after we're done with it. We need to add `bpf_cpumask_release(cpumask)` before returning, but only when `cpumask` is non-NULL.\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *cpumask;\n\n\tcpumask = make_object();\n\t__sink(cpumask);\n\tif (cpumask)\n\t\tbpf_cpumask_release(cpumask);\n\n\treturn 0;\n}\n```\n\nThis ensures that if `make_object()` returns a valid cpumask (the empty case), we properly release it before the program exits.\n\n## Patch\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -38,6 +38,8 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)\n \n \tcpumask = make_object();\n \t__sink(cpumask);\n+\tif (cpumask)\n+\t\tbpf_cpumask_release(cpumask);\n \n \treturn 0;\n }\n```\n\nThis is the minimal fix: we simply need to release the cpumask reference that `make_object()` returns when it's non-NULL, since the `entry` function takes ownership but never transfers or releases it.",
+  "must_mention": [
+    "An owned cpumask reference is acquired",
+    "Every exit path must release or transfer ownership",
+    "The NULL path does not need release"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Removes the acquisition without preserving the intended object use",
+    "Calls release without considering NULL when the API requires non-NULL",
+    "Releases only on an error path and still returns with ownership on success"
+  ]
+}

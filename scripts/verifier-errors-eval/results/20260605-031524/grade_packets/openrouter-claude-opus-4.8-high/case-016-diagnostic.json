@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Before the r6 != 0 exit path, if r0 is non-NULL, release it with bpf_sk_release(r0).",
+    "Move the mark branch before acquiring the socket when possible so no reference exists on that exit path.",
+    "Restructure cleanup with a common release path for all exits after lookup."
+  ],
+  "canonical_fix": "On every path after bpf_sk_lookup_tcp returns a non-NULL reference, call bpf_sk_release before exiting unless ownership is transferred.",
+  "case_id": "case-016",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "hard",
+  "expected_explanation": "bpf_sk_lookup_tcp can return an owned socket reference. One branch exits based on packet mark/r6 after the lookup without releasing the reference if it was acquired.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-opus-4.8-high/case-016-diagnostic.txt",
+    "case_id": "case-016",
+    "model": "anthropic/claude-opus-4.8",
+    "profile": "openrouter-claude-opus-4.8-high",
+    "prompt_bytes": 5484,
+    "prompt_path": "public/case-016/prompt_diagnostic.md",
+    "prompt_sha256": "26bd47d73322ec44031e7eab349344e578529fd97883aba22a22f0b6717c829d",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-opus-4.8-high/case-016-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "80fccf9c-cb2f-4002-ac05-8bffa2034cb9",
+    "started_at": "2026-06-05T03:18:31+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## What the verifier is complaining about\n\n`bpf_sk_lookup_tcp()` is an *acquire* helper. Its return value in `r0` is a `sock_or_null` carrying a reference (id=2) that **must be released on every path** before the program exits (or transferred to a release helper like `bpf_sk_release`).\n\nLook at the control flow right after the lookup:\n\n```\n19: call bpf_sk_lookup_tcp     ; R0=sock_or_null(id=2)  refs=2\n20: if r6 == 0 goto l1_%=      ; r6 is the skb->mark, an unknown scalar\n21: exit                       ; <-- leaks id=2\n```\n\n`r6` is loaded from `skb->mark`, so the verifier treats it as an arbitrary scalar (`smin=1,...` on the fall-through branch). When `r6 != 0`, execution falls through to instruction 21 (`exit`) **without ever calling `bpf_sk_release`**, so the acquired socket reference leaks. That is exactly the \"Unreleased reference id=2\" / \"Resource Lifetime Safety\" error.\n\nOnly the `l1_%=` path releases the socket:\n\n```\nl1_%=: if r0 == 0 goto l2_%=\n       r1 = r0\n       call bpf_sk_release\nl2_%=: exit\n```\n\nThe `if r6 == 0 ... exit` early-out bypasses that release entirely.\n\n## Smallest fix\n\nMake the `r6 != 0` path also flow through the release code instead of exiting directly. The minimal edit is to turn the bare early `exit;` into a jump to the release sequence at `l1_%=`:\n\n```c\n\tif r6 == 0 goto l1_%=;\t\t\t\t\\\n\tgoto l1_%=;\t\t\t\t\t\\\nl1_%=:\tif r0 == 0 goto l2_%=;\t\t\t\t\\\n\tr1 = r0;\t\t\t\t\t\\\n\tcall %[bpf_sk_release];\t\t\t\t\\\nl2_%=:\texit;\t\t\t\t\t\t\\\n```\n\nAfter this change, regardless of the value of `r6`, both branches reach `l1_%=`, where the socket is released (when non-NULL) before the final `exit`, so the reference is accounted for on every path.\n\nEquivalently (and more cleanly), since the `r6` test now selects between two identical destinations, you can drop the `r6` conditional altogether and just fall straight into the release path:\n\n```c\nl0_%=:\tr6 = *(u32*)(r2 + %[mark]);\t\t\t\\\n\t... (stack init, call bpf_sk_lookup_tcp) ...\t\\\n\tif r0 == 0 goto l2_%=;\t\t\t\t\\\n\tr1 = r0;\t\t\t\t\t\\\n\tcall %[bpf_sk_release];\t\t\t\t\\\nl2_%=:\texit;\t\t\t\t\t\t\\\n```\n\nEither form satisfies the verifier because the acquired reference (id=2) is now released (or is NULL) on every exit path.",
+  "must_mention": [
+    "An owned socket reference is acquired",
+    "The mark/r6 branch exits with the reference live",
+    "Release is needed on that branch"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only releases in the r6 == 0 branch",
+    "Releases before checking that lookup returned non-NULL in a way rejected by the verifier",
+    "Adds packet bounds checks but no reference cleanup"
+  ]
+}

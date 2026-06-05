@@ -1,0 +1,54 @@
+The verifier error occurs because the program acquires a socket reference via `bpf_sk_lookup_tcp` but fails to release it on one code path. Specifically, when `r6 != 0`, the program exits immediately without calling `bpf_sk_release` on the socket reference stored in `r0`. This leaks a resource, violating the verifier's resource lifetime safety rules.
+
+The fix ensures the socket is released on all paths before exit. The minimal change adds a release check in the branch where `r6 != 0`, matching the existing pattern used when `r6 == 0`. The updated assembly block after the `bpf_sk_lookup_tcp` call now releases the socket if `r0 != 0` in both branches.
+
+Here is the complete fixed source:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("tc")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = *(u32*)(r1 + %[data]);			\
+	r3 = *(u32*)(r1 + %[data_end]);			\
+	r0 = r2;					\
+	r0 += 16;					\
+	if r0 <= r3 goto l0_%=;				\
+	exit;						\
+l0_%=:	r6 = *(u32*)(r2 + %[mark]);			\
+	r2 = 0;						\
+	*(u32*)(r10 -8) = r2;				\
+	*(u64*)(r10 -16) = r2;				\
+	*(u64*)(r10 -24) = r2;				\
+	*(u64*)(r10 -32) = r2;				\
+	*(u64*)(r10 -40) = r2;				\
+	*(u64*)(r10 -48) = r2;				\
+	r2 = r10;					\
+	r2 += -48;					\
+	r3 = 36;					\
+	r4 = 0;						\
+	r5 = 0;						\
+	call %[bpf_sk_lookup_tcp];			\
+	if r6 == 0 goto l1_%=;				\
+	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+l1_%=:	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+	exit;						\
+"	:
+	: __imm(bpf_sk_lookup_tcp),
+	  __imm(bpf_sk_release),
+	  __imm_const(data, offsetof(struct __sk_buff, data)),
+	  __imm_const(data_end, offsetof(struct __sk_buff, data_end)),
+	  __imm_const(mark, offsetof(struct __sk_buff, mark))
+	: __clobber_all);
+}
+```
+
+This change adds three instructions (`if r0 == 0 goto l2_%=; r1 = r0; call %[bpf_sk_release];`) in the `r6 != 0` branch, ensuring the socket reference is released before exit, satisfying the verifier's resource safety requirements.

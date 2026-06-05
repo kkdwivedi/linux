@@ -1,0 +1,14 @@
+The verifier treats the pointer parameter to `__noinline` functions as `mem_or_null` — it doesn't know at validation time that the caller always passes a valid (stack) pointer. So inside `helper_a`, `s` (and `r6`) is typed `mem_or_null`, and dereferencing it without a NULL check is rejected.
+
+The fix: add a NULL check inside `helper_a` before dereferencing `s`.
+
+```c
+__noinline int helper_a(const struct Item *s)
+{
+	if (!s)
+		return 0;
+	return bpf_get_prandom_u32() < s->x;
+}
+```
+
+This satisfies the verifier: after the `if (!s) return 0;` guard, `s` is known non-NULL on the dereference path.

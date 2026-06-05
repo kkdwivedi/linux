@@ -1,0 +1,50 @@
+The failure is a **stack-depth limit** issue, not a type/ptr safety issue.
+
+### Why verifier rejects it
+
+BPF has a hard limit of **512 bytes combined stack across active call frames**.  
+In your program:
+
+- `helper_c()` allocates `buf[MAX_STACK]`
+- `helper_b()` allocates `buf[MAX_STACK]`
+- (and `helper_d()` also does, for another path)
+
+With `MAX_STACK = 260`, each of those frames becomes larger than 260 due to alignment/compiler layout, and on the call chain:
+
+`entry -> helper_c -> helper_b`
+
+the verifier computes **544 bytes total**, which exceeds 512.
+
+---
+
+### Smallest likely fix
+
+Reduce per-function stack allocation so nested `helper_c + helper_b` (and `helper_c + helper_d`) stay within 512.
+
+A one-line fix is:
+
+```diff
+-#define MAX_STACK 260
++#define MAX_STACK 248
+```
+
+This should drop each heavy frame enough to bring the combined chain to (about) 512 or less.
+
+---
+
+### Patch
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -2,7 +2,7 @@
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ 
+-#define MAX_STACK 260
++#define MAX_STACK 248
+ 
+ static __attribute__((noinline))
+ int helper_a(int val, struct __sk_buff *skb)
+```
+

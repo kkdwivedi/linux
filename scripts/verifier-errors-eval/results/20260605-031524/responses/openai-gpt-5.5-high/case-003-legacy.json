@@ -1,0 +1,130 @@
+{
+  "answer_text": "The failure is caused by the byte store corrupting the verifier\u2019s spilled-pointer state.\n\n`r1` is the socket context pointer. Instruction 0 spills it to stack bytes `fp[-8, -1]`:\n\n```asm\n*(u64*)(r10 - 8) = r1;\n```\n\nThen this instruction writes one byte into that same 8-byte stack slot:\n\n```asm\n*(u8*)(r10 - 7) = r0;\n```\n\nSo the verifier can no longer treat `fp-8` as a clean spilled `ctx` pointer. The log shows that transition:\n\n```text\nfp-8=ctx()\n...\nfp-8=mmmmmmmm\n```\n\nAfter that, reloading from `r10 - 8` gives an unknown scalar, not a pointer:\n\n```text\n3: r0 = *(u64 *)(r10 -8) ; R0=scalar()\n```\n\nThen the program tries to dereference that scalar:\n\n```asm\nr0 = *(u64*)(r0 + 8);\n```\n\nand the verifier rejects it:\n\n```text\nR0 invalid mem access 'scalar'\n```\n\nSmallest source-level fix: do not write into the stack slot containing the spilled pointer. Move the `u8` store to a non-overlapping stack location, e.g. `r10 - 16`.\n\nPatch:\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -8,7 +8,7 @@ __naked void entry(void)\n \tasm volatile (\"\t\t\t\t\t\\\n \t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n \tr0 = 0x23;\t\t\t\t\t\\\n-\t*(u8*)(r10 - 7) = r0;\t\t\t\t\\\n+\t*(u8*)(r10 - 16) = r0;\t\t\t\t\\\n \tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n \tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n```\n\nWith that change, the verifier should preserve `fp-8` as a spilled `ctx` pointer, so the reload becomes `R0=ctx()` instead of `R0=scalar()`, satisfying the verifier for the shown failure.\n\nOne additional note: for `SEC(\"socket\")`, if the verifier then reports an invalid context access at `ctx + 8` with size 8, change the final load to a 32-bit load:\n\n```asm\nr0 = *(u32*)(r0 + 8);\n```\n\nBut the logged failure itself is the partial overwrite of the spilled pointer.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-high/case-003-legacy.txt",
+    "case_id": "case-003",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-high",
+    "prompt_bytes": 1266,
+    "prompt_path": "public/case-003/prompt_legacy.md",
+    "prompt_sha256": "ff79e3ce2090bf446fcac0650e4037fac5ac92314018b0ce73b4c838bf23c7cf",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-high/case-003-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "cc573e56-a8ce-4633-aae3-022db5af8a3d",
+    "started_at": "2026-06-05T03:15:47+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.002735,
+    "output_cost_usd": 0.29655,
+    "total_cost_usd": 0.29928499999999997
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 547,
+    "output_tokens": 9885,
+    "raw_usage": {
+      "input_tokens": 547,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 9885,
+      "output_tokens_details": {
+        "reasoning_tokens": 9322
+      },
+      "total_tokens": 10432
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 9322,
+    "total_tokens": 10432
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629549,
+    "created_at": 1780629347,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_06e0d90f044c0f6c006a223f63350c819ea97474437c198550",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_06e0d90f044c0f6c006a223f63df7c819e86df8b08495be666",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is caused by the byte store corrupting the verifier\u2019s spilled-pointer state.\n\n`r1` is the socket context pointer. Instruction 0 spills it to stack bytes `fp[-8, -1]`:\n\n```asm\n*(u64*)(r10 - 8) = r1;\n```\n\nThen this instruction writes one byte into that same 8-byte stack slot:\n\n```asm\n*(u8*)(r10 - 7) = r0;\n```\n\nSo the verifier can no longer treat `fp-8` as a clean spilled `ctx` pointer. The log shows that transition:\n\n```text\nfp-8=ctx()\n...\nfp-8=mmmmmmmm\n```\n\nAfter that, reloading from `r10 - 8` gives an unknown scalar, not a pointer:\n\n```text\n3: r0 = *(u64 *)(r10 -8) ; R0=scalar()\n```\n\nThen the program tries to dereference that scalar:\n\n```asm\nr0 = *(u64*)(r0 + 8);\n```\n\nand the verifier rejects it:\n\n```text\nR0 invalid mem access 'scalar'\n```\n\nSmallest source-level fix: do not write into the stack slot containing the spilled pointer. Move the `u8` store to a non-overlapping stack location, e.g. `r10 - 16`.\n\nPatch:\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -8,7 +8,7 @@ __naked void entry(void)\n \tasm volatile (\"\t\t\t\t\t\\\n \t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n \tr0 = 0x23;\t\t\t\t\t\\\n-\t*(u8*)(r10 - 7) = r0;\t\t\t\t\\\n+\t*(u8*)(r10 - 16) = r0;\t\t\t\t\\\n \tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n \tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n```\n\nWith that change, the verifier should preserve `fp-8` as a spilled `ctx` pointer, so the reload becomes `R0=ctx()` instead of `R0=scalar()`, satisfying the verifier for the shown failure.\n\nOne additional note: for `SEC(\"socket\")`, if the verifier then reports an invalid context access at `ctx + 8` with size 8, change the final load to a 32-bit load:\n\n```asm\nr0 = *(u32*)(r0 + 8);\n```\n\nBut the logged failure itself is the partial overwrite of the spilled pointer.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_06e0d90f044c0f6c006a224024fa30819ebfb19e729e72183a",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 547,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 9885,
+      "output_tokens_details": {
+        "reasoning_tokens": 9322
+      },
+      "total_tokens": 10432
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

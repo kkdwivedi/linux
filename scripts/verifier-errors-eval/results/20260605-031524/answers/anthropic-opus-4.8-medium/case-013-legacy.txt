@@ -1,0 +1,48 @@
+## What the verifier is complaining about
+
+This is not a logic error in the program — it is a **stack budget** error.
+
+The BPF verifier limits the *combined* stack usage along any chain of nested
+(non‑inlined, "global"/`noinline`) function calls to **512 bytes**.
+
+Here every helper allocates a `MAX_STACK` (260‑byte) on‑stack buffer:
+
+```
+entry
+  └─ helper_c   buf[260]
+        ├─ helper_b   buf[260]
+        │     └─ helper_a   (no buffer)
+        └─ helper_d   buf[260]
+```
+
+The deepest path that simultaneously holds two of those buffers
+(`entry → helper_c → helper_b`, or `entry → helper_c → helper_d`) needs
+`260 + 260` bytes plus a little call‑frame overhead, which the verifier rounds up
+to **544 bytes**:
+
+```
+combined stack size of 3 calls is 544. Too large
+```
+
+Since `544 > 512`, verification is rejected. Nothing about pointer safety is
+wrong — `helper_d` is already reported "safe".
+
+## Smallest fix
+
+Shrink the per‑frame stack buffers so the two‑deep chain fits under the
+512‑byte limit. Two buffers must satisfy roughly `2 * MAX_STACK + overhead ≤ 512`.
+With the observed ~24 bytes of overhead, `MAX_STACK` must be `≤ 244`. Pick a
+safe round value:
+
+```c
+-#define MAX_STACK 260
++#define MAX_STACK 200
+```
+
+With `MAX_STACK = 200`, the deepest live combination is about
+`200 + 200 + overhead ≈ 424 bytes`, comfortably under 512, and the program
+verifies.
+
+No other code changes are required — the call graph, signatures, and `__sink`
+usage are all fine; only the aggregate stack size violated the verifier’s
+512‑byte limit.

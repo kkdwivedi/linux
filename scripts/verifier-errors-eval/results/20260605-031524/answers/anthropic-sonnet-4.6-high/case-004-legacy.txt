@@ -1,0 +1,41 @@
+## Explanation
+
+When BPF validates a `__noinline` function, it does so independently of its call sites. The verifier conservatively assigns the pointer parameter `s` the type `mem_or_null` — meaning it could be null — regardless of the fact that the caller always passes a valid stack address. The function body then dereferences `r6` (a copy of `s`) at instruction 10 without any prior null check:
+
+```
+R6 invalid mem access 'mem_or_null'
+```
+
+The verifier refuses to allow a memory load through a pointer that hasn't been proven non-null.
+
+## Fix
+
+Add a null check for `s` at the start of `helper_a`. This causes the verifier to narrow the type from `mem_or_null` to `mem` before the dereference, satisfying the constraint.
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+struct Item {
+	int x;
+};
+
+__noinline int helper_a(const struct Item *s)
+{
+	if (!s)
+		return 0;
+	return bpf_get_prandom_u32() < s->x;
+}
+
+SEC("cgroup_skb/ingress")
+int entry(struct __sk_buff *skb)
+{
+	const struct Item s = {.x = skb->len};
+
+	helper_a(&s);
+
+	return 1;
+}
+```
+
+The added `if (!s) return 0;` guard satisfies the verifier: after the check, on the taken path the function returns immediately, and on the fall-through path `s` is known to be non-null, so `s->x` is a valid access.

@@ -1,0 +1,41 @@
+## Explanation
+
+The verifier rejects the program because `bpf_ktime_get_coarse_ns` (helper #160) is **not permitted for `kprobe` program types**. The kernel's helper-permission table does not list this helper as allowed for kprobe programs.
+
+## Fix
+
+The smallest change is to replace the disallowed helper with `bpf_ktime_get_ns`, which *is* permitted for kprobe programs (and whose return value is equally unused here):
+
+```diff
+-	call %[bpf_ktime_get_coarse_ns];		\
++	call %[bpf_ktime_get_ns];			\
+ 	r0 = 0;						\
+ 	exit;						\
+ "	:
+-	: __imm(bpf_ktime_get_coarse_ns)
++	: __imm(bpf_ktime_get_ns)
+ 	: __clobber_all);
+```
+
+Full corrected source:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("kprobe")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_ns];			\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+```
+
+`bpf_ktime_get_ns` is allowed in kprobe programs and provides the same monotonic clock reading (just without the coarse/jiffy-based approximation). Since `r0` is immediately overwritten with `0` before `exit`, the semantic difference between the two helpers is irrelevant here.

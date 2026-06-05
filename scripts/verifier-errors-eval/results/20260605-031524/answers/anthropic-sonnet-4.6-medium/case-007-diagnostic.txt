@@ -1,0 +1,19 @@
+## Explanation
+
+The verifier rejects the call because `slice_len` is a global variable read from a map value at runtime (`R4 = *(u32 *)(r1 +0)`), so its value is unbounded (`smin=0, smax=0xffffffff`). `bpf_dynptr_slice` requires that the length (4th argument) be a proven compile-time constant so the verifier can confirm the stack buffer (3rd argument) is large enough.
+
+## Fix
+
+Replace the runtime `slice_len` with the compile-time constant `sizeof(buffer)` (or equivalently `sizeof(*hdr)`):
+
+```c
+	hdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+```
+
+This makes R4 a known constant (`sizeof(struct ethhdr) == 14`), which satisfies the verifier's requirement that the memory/length pair is bounded and the stack buffer is valid for the requested length.
+
+**Patch:**
+```diff
+-	hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
++	hdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+```

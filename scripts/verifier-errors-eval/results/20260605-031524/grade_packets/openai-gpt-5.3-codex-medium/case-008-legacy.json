@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Change char buffer[8] to char buffer[9] or larger.",
+    "Change the bpf_dynptr_slice length argument from 9 to sizeof(buffer) or 8."
+  ],
+  "canonical_fix": "Make the fallback buffer at least 9 bytes or reduce the requested slice length to 8 bytes.",
+  "case_id": "case-008",
+  "category": "Call Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The fallback stack buffer is 8 bytes, but bpf_dynptr_slice is asked to use 9 bytes. The memory/length pair therefore describes a read beyond the stack object.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-medium/case-008-legacy.txt",
+    "case_id": "case-008",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-medium",
+    "prompt_bytes": 1995,
+    "prompt_path": "public/case-008/prompt_legacy.md",
+    "prompt_sha256": "bb69e9d81c52b441a9ca18ed1387cdaf4d358455af3a7eb36dc706949cff365c",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-medium/case-008-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "f723a7f0-bc4f-4d8c-8f6e-4d6b6e6a32ce",
+    "started_at": "2026-06-05T03:16:26+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "The verifier is rejecting this because of a **stack buffer size mismatch** in the `bpf_dynptr_slice()` call.\n\n### Why it fails\n\nYou declare:\n\n```c\nchar buffer[8] = {};\n```\n\nbut call:\n\n```c\ndata = bpf_dynptr_slice(&ptr, 0, buffer, 9);\n```\n\nFor `bpf_dynptr_slice()`, arg3 (`buffer`) + arg4 (`len`) is a memory/length pair that verifier checks strictly.  \n`len=9` means helper may access 9 bytes at `buffer`, but only 8 bytes are valid there.\n\nThat matches the log:\n\n- `R3 = fp-24` (buffer start)\n- `R4 = 9`\n- `invalid read from stack R3 off -24+8 size 9`\n\nSo the helper could touch past `buffer` into adjacent stack area (where dynptr lives), which verifier forbids.\n\n---\n\n### Smallest likely fix\n\nPass a length that fits the buffer (or enlarge buffer). Smallest safe edit is to use buffer size directly.\n\n#### Patch\n\n```diff\n@@\n-\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 9);\n+\tdata = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));\n```\n\n(Equivalent fix: change `9` to `8`.)",
+  "must_mention": [
+    "Requested length is 9",
+    "Buffer size is 8",
+    "The memory/length pair must fit"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks data for NULL after the call",
+    "Changes the dynptr initialization but leaves 9 against an 8-byte buffer",
+    "Treats the problem as a ringbuf capacity issue"
+  ]
+}

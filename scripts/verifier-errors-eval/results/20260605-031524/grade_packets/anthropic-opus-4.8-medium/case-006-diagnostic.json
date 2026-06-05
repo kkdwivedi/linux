@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Replace bpf_ktime_get_coarse_ns with bpf_ktime_get_ns if that satisfies the program's requirements and is allowed.",
+    "Change the program type/section to one where the helper is allowed."
+  ],
+  "canonical_fix": "Use a helper allowed for this program type, such as an allowed time helper with suitable semantics, or move the logic to a program type/attach point where bpf_ktime_get_coarse_ns is permitted.",
+  "case_id": "case-006",
+  "category": "Policy",
+  "difficulty": "easy",
+  "expected_explanation": "The program type used by this case is not allowed to call bpf_ktime_get_coarse_ns. This is a helper policy/program-type compatibility failure, not a register or memory proof failure.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-006-diagnostic.txt",
+    "case_id": "case-006",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 1849,
+    "prompt_path": "public/case-006/prompt_diagnostic.md",
+    "prompt_sha256": "0c351f7275500308d5dd7e77f65459b6d00560f51ba8d1d768a521650bb1de73",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-006-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "d3396d45-8708-49d1-85e2-c1025565eb42",
+    "started_at": "2026-06-05T03:17:15+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation\n\nThe verifier rejects the program because `bpf_ktime_get_coarse_ns()` is **not in the allowed helper set for `BPF_PROG_TYPE_KPROBE`**.\n\n`bpf_ktime_get_coarse_ns()` is intentionally restricted: it reads a coarse timestamp that is only updated under certain conditions and is not safe/permitted from arbitrary NMI/interrupt contexts such as kprobes. The kprobe program type's helper-allow check (`kprobe_prog_func_proto`) does not expose this helper, so the call fails the policy check at load time:\n\n```\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\nThis is a program-type/helper compatibility error, not a data-flow or safety error.\n\n## Fix\n\nUse a time helper that *is* permitted for kprobe programs. `bpf_ktime_get_ns()` is allowed for tracing/kprobe program types and provides equivalent functionality.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"kprobe\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_ns];\t\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_ns)\n\t: __clobber_all);\n}\n```\n\nThis is the smallest change: swap `bpf_ktime_get_coarse_ns` \u2192 `bpf_ktime_get_ns` (in both the `call` and the `__imm(...)` operand). \n\nAlternatively, if the intent is to test `bpf_ktime_get_coarse_ns()` specifically, change the program type to one that allows it (e.g. `SEC(\"tc\")`/`BPF_PROG_TYPE_SCHED_CLS` or a socket filter), which would satisfy the helper policy.",
+  "must_mention": [
+    "Helper is forbidden for this program type",
+    "The fix is to use an allowed helper or compatible program type"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds register initialization around the helper call",
+    "Treats it as a GPL license issue",
+    "Suggests a bounds or NULL check"
+  ]
+}

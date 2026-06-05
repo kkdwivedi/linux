@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier rejects this because `p`/`r7` is a **packet pointer derived before a call path that can change skb data**:\n\n- `p` comes from `sk->data` (`r7 = pkt(...)`).\n- You bounds-check it once.\n- Then call `helper_a() -> helper_b() -> bpf_skb_pull_data()`.\n\n`bpf_skb_pull_data()` is one of the helpers that may reallocate/linearize packet data, so the verifier invalidates previously derived packet pointers. After the call, `r7` is no longer trusted as `pkt` (shown as `scalar`), so `*(u32 *)(r7 + 0)` fails.\n\n### Smallest likely fix\n\nReacquire `sk->data`/`sk->data_end` and re-check bounds **after** `helper_a()` (or move the helper call before pointer derivation).  \nA minimal patch:\n\n```diff\n SEC(\"tc\")\n int entry(struct __sk_buff *sk)\n {\n-\tint *p = (void *)(long)sk->data;\n-\n-\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n-\t\treturn TCX_DROP;\n+\tint *p;\n \thelper_a(sk, 0);\n+\n+\tp = (void *)(long)sk->data;\n+\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n+\t\treturn TCX_DROP;\n \t*p = 42;\n \treturn TCX_PASS;\n }\n```\n\nThis satisfies verifier rules: no packet pointer survives across a potentially data-mutating helper call without revalidation.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-medium/case-015-legacy.txt",
+    "case_id": "case-015",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-medium",
+    "prompt_bytes": 1984,
+    "prompt_path": "public/case-015/prompt_legacy.md",
+    "prompt_sha256": "dc0fc1e91b61bdf915966f9cbe5ae652d8b1776a8af859d12e6cd23d52604af2",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-medium/case-015-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "f9be8e2c-5a29-479c-b095-b6d079c862f8",
+    "started_at": "2026-06-05T03:16:33+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00139825,
+    "output_cost_usd": 0.011032,
+    "total_cost_usd": 0.01243025
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 799,
+    "output_tokens": 788,
+    "raw_usage": {
+      "input_tokens": 799,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 788,
+      "output_tokens_details": {
+        "reasoning_tokens": 436
+      },
+      "total_tokens": 1587
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 436,
+    "total_tokens": 1587
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629405,
+    "created_at": 1780629393,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_05520a420e6d1f3c006a223f919bfc819285061276a7f9ec7b",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_05520a420e6d1f3c006a223f9207888192927e761d929e40ab",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier rejects this because `p`/`r7` is a **packet pointer derived before a call path that can change skb data**:\n\n- `p` comes from `sk->data` (`r7 = pkt(...)`).\n- You bounds-check it once.\n- Then call `helper_a() -> helper_b() -> bpf_skb_pull_data()`.\n\n`bpf_skb_pull_data()` is one of the helpers that may reallocate/linearize packet data, so the verifier invalidates previously derived packet pointers. After the call, `r7` is no longer trusted as `pkt` (shown as `scalar`), so `*(u32 *)(r7 + 0)` fails.\n\n### Smallest likely fix\n\nReacquire `sk->data`/`sk->data_end` and re-check bounds **after** `helper_a()` (or move the helper call before pointer derivation).  \nA minimal patch:\n\n```diff\n SEC(\"tc\")\n int entry(struct __sk_buff *sk)\n {\n-\tint *p = (void *)(long)sk->data;\n-\n-\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n-\t\treturn TCX_DROP;\n+\tint *p;\n \thelper_a(sk, 0);\n+\n+\tp = (void *)(long)sk->data;\n+\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n+\t\treturn TCX_DROP;\n \t*p = 42;\n \treturn TCX_PASS;\n }\n```\n\nThis satisfies verifier rules: no packet pointer survives across a potentially data-mutating helper call without revalidation.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_05520a420e6d1f3c006a223f98cf7c8192b152f33b2d3b1d8a",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 799,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 788,
+      "output_tokens_details": {
+        "reasoning_tokens": 436
+      },
+      "total_tokens": 1587
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

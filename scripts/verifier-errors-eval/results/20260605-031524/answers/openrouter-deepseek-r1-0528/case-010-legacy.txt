@@ -1,0 +1,61 @@
+The verifier failure occurs because the context pointer (`struct __sk_buff *skb`) is modified before being passed to `helper_c` in `helper_b`. Specifically, `skb + 1` creates a pointer outside the valid context, which is not allowed.
+
+### Error Explanation:
+- In `helper_b`, the call `helper_c(val, skb + 1)` modifies the context pointer (`skb`) by adding 1 (pointer arithmetic).
+- The verifier detects this modified context pointer (`R2=ctx(imm=192)`) and rejects it with "dereference of modified ctx ptr disallowed".
+- Context pointers must be passed unmodified to helper functions.
+
+### Fix:
+Remove the `+ 1` pointer arithmetic when passing `skb` to `helper_c` in `helper_b`. This ensures the context pointer remains unmodified.
+
+### Patch:
+```diff
+--- original.c
++++ fixed.c
+@@ -11,7 +11,7 @@
+ __attribute__((noinline))
+ int helper_b(int val, struct __sk_buff *skb)
+ {
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+ }
+ 
+ __attribute__((noinline))
+```
+
+### Fixed Source:
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+__attribute__((noinline))
+int helper_a(struct __sk_buff *skb)
+{
+	return skb->len;
+}
+
+int helper_c(int val, struct __sk_buff *skb);
+
+__attribute__((noinline))
+int helper_b(int val, struct __sk_buff *skb)
+{
+	return helper_a(skb) + helper_c(val, skb); // Modified line
+}
+
+__attribute__((noinline))
+int helper_c(int val, struct __sk_buff *skb)
+{
+	return skb->ifindex * val;
+}
+
+SEC("tc")
+int entry(struct __sk_buff *skb)
+{
+	return helper_a(skb) + helper_b(2, skb) + helper_c(3, skb);
+}
+```
+
+### Why This Fix Works:
+- The context pointer `skb` is now passed directly to `helper_c` without modification.
+- The verifier will allow the unmodified context pointer, satisfying its safety checks.
+- The program logic remains consistent as `helper_c` only accesses valid context fields (`ifindex`).

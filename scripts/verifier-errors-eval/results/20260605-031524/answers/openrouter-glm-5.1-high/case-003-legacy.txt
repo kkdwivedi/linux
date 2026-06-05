@@ -1,0 +1,29 @@
+## Verifier Failure Analysis
+
+The program stores the context pointer `r1` (type `ctx()`) at stack location `r10 - 8`, then writes a single byte `0x23` at `r10 - 7`. Since `r10 - 7` falls **within** the 8-byte region `[r10-8, r10-1]` occupied by the stored ctx pointer, this partial overwrite corrupts the pointer. The verifier marks the stack slot as `mmmmmmmm` (mixed/unknown), so when the 8-byte value is read back into `r0`, it becomes `scalar()` instead of `ctx()`. The subsequent dereference `*(u64*)(r0 + 8)` then fails because you cannot dereference a scalar.
+
+Key log entries:
+- After the byte write: `fp-8=mmmmmmmm` — the ctx pointer type is lost
+- After the read-back: `R0=scalar()` — no longer a pointer
+- At dereference: `R0 invalid mem access 'scalar'` — fatal error
+
+## Fix
+
+Move the byte write to a stack location that does **not** overlap with the 8-byte ctx pointer slot at `[r10-8, r10-1]`. Changing `r10 - 7` to `r10 - 16` is the minimal fix:
+
+```c
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	*(u64*)(r10 - 8) = r1;				\
+	r0 = 0x23;					\
+	*(u8*)(r10 - 16) = r0;				\
+	r0 = *(u64*)(r10 - 8);				\
+	r0 = *(u64*)(r0 + 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+This keeps the byte store in a separate stack slot, so the ctx pointer at `fp-8` remains intact with its type information. When read back, `r0` will still be `ctx()`, and the dereference at `r0 + 8` will be valid.

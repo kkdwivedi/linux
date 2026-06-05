@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Reduce CALLS_50 fan-out or the number of helper layers.",
+    "Pass a stable non-FP-derived argument pattern when possible.",
+    "Replace the generated call tree with a simpler bounded loop or less duplicated call structure."
+  ],
+  "canonical_fix": "Reduce the number of distinct call paths or argument patterns reaching the subprograms, for example by reducing fan-out/depth, consolidating calls, or avoiding many distinct FP-offset arguments.",
+  "case_id": "case-020",
+  "category": "Verifier Limit",
+  "difficulty": "hard",
+  "expected_explanation": "The program creates an enormous number of distinct bpf2bpf call paths and frame-pointer-derived argument patterns. Liveness analysis exceeds its complexity limit while recomputing subprogram liveness across those paths.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-020-diagnostic.txt",
+    "case_id": "case-020",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 4110,
+    "prompt_path": "public/case-020/prompt_diagnostic.md",
+    "prompt_sha256": "cb7344658f86bd080c64c73a9c8ee3095a7de5b045356c00872dce60afb5bfb8",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-020-diagnostic.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "3c247f91-cb2e-4c5f-afea-5dff3c765e0d",
+    "started_at": "2026-06-05T03:21:10+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "### Problem Analysis\n\nThe provided eBPF program fails verification due to **excessive complexity in liveness analysis** caused by an extremely deep and wide call tree:\n\n- Each `helper_*` function (from `helper_a` down to `helper_g`) makes **50 calls** to the next level.\n- This results in a combinatorial explosion of call paths:\n  - `entry` \u2192 50 \u00d7 `helper_a`\n  - Each `helper_a` \u2192 50 \u00d7 `helper_b`\n  - And so on, down to `helper_g`.\n- By the time we reach `helper_g`, the number of distinct call paths is **50\u2077**, which is astronomically large (~78 billion).\n\nThis causes the **liveness analysis** (which tracks register and stack usage across all possible call paths) to exceed its internal complexity limit (`10001 calls`), leading to the error:\n```\nliveness analysis exceeded complexity limit (10001 calls)\n```\n\n---\n\n### Solution Approach\n\nTo resolve this issue with minimal changes, we must reduce the number of distinct call paths reaching `helper_g`. Since the actual logic inside each helper is irrelevant (they all just return 0), we can **collapse redundant calls** into fewer unique invocations.\n\n#### Key Insight:\nEach macro like `CALLS_50(fn)` expands to 50 nearly identical inline assembly calls to `fn`, differing only in stack offset adjustments. These are treated as **distinct call sites** by the verifier even though they're semantically identical.\n\nBy reducing the number of such calls per function \u2014 say from 50 to 1 \u2014 we dramatically prune the call graph without changing observable behavior.\n\n---\n\n### Proposed Fix\n\nReplace all instances of `CALLS_50(fn)` with `CALLS_1(fn)` in the definitions of `helper_a` through `helper_g`.\n\nThis reduces the depth of the call tree significantly:\n- Instead of 50\u2077 paths, there will now be only **1\u2077 = 1** path.\n- This easily stays within the verifier's limits.\n\nHere\u2019s the patch:\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -4,7 +4,7 @@\n #define CALL_AT(fn, off) \"r1 = r10;\" \"r1 += -\" #off \";\" \"call \" #fn \";\"\n #define CALLS_10(fn) \\\n \tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n-\tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n+\tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n #define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n \n // Add new macro for single call\n+#define CALLS_1(fn) CALL_AT(fn, 8)\n+\n __naked __noinline __used\n static unsigned long helper_g(void)\n {\n \tasm volatile (\n-\t\t\"r0 = 0;\"\n+\t\tCALLS_1(helper_f)\n \t\t\"r0 = 0;\"\n \t\t\"exit;\"\n \t\t::: __clobber_all);\n }\n \n __naked __noinline __used\n static unsigned long helper_f(void)\n {\n \tasm volatile (\n-\t\tCALLS_50(helper_g)\n+\t\tCALLS_1(helper_g)\n \t\t\"r0 = 0;\"\n \t\t\"exit;\"\n \t\t::: __clobber_all);\n }\n \n __naked __noinline __used\n static unsigned long helper_e(void)\n {\n \tasm volatile (\n-\t\tCALLS_50(helper_f)\n+\t\tCALLS_1(helper_f)\n \t\t\"r0 = 0;\"\n \t\t\"exit;\"\n \t\t::: __clobber_all);\n }\n \n __naked __noinline __used\n static unsigned long helper_d(void)\n {\n \tasm volatile (\n-\t\tCALLS_50(helper_e)\n+\t\tCALLS_1(helper_e)\n \t\t\"r0 = 0;\"\n \t\t\"exit;\"\n \t\t::: __clobber_all);\n }\n \n __naked __noinline __used\n static unsigned long helper_c(void)\n {\n \tasm volatile (\n-\t\tCALLS_50(helper_d)\n+\t\tCALLS_1(helper_d)\n \t\t\"r0 = 0;\"\n \t\t\"exit;\"\n \t\t::: __clobber_all);\n }\n \n __naked __noinline __used\n static unsigned long helper_b(void)\n {\n \tasm volatile (\n-\t\tCALLS_50(helper_c)\n+\t\tCALLS_1(helper_c)\n \t\t\"r0 = 0;\"\n \t\t\"exit;\"\n \t\t::: __clobber_all);\n }\n \n __naked __noinline __used\n static unsigned long helper_a(void)\n {\n \tasm volatile (\n-\t\tCALLS_50(helper_b)\n+\t\tCALLS_1(helper_b)\n \t\t\"r0 = 0;\"\n \t\t\"exit;\"\n \t\t::: __clobber_all);\n }\n \n SEC(\"?raw_tp\")\n __naked int entry(void)\n {\n \tasm volatile (\n-\t\tCALLS_50(helper_a)\n+\t\tCALLS_1(helper_a)\n \t\t\"r0 = 0;\"\n \t\t\"exit;\"\n \t\t::: __clobber_all);\n }\n```\n\n> Note: Alternatively, if you want to keep some structure but still stay under limits, you could define `CALLS_2(fn)` or similar intermediate macros instead of going all the way down to 1.\n\n---\n\n### Summary\n\n- **Root Cause**: Exponential growth in call paths due to repeated use of `CALLS_50`.\n- **Fix Strategy**: Collapse multiple identical calls into a single representative one using `CALLS_1(fn)`.\n- **Result**: Drastically reduced complexity allows successful verification.\n\nThis change preserves functional equivalence since all helpers simply return zero and perform no side effects.",
+  "must_mention": [
+    "The failure is verifier liveness complexity, not runtime recursion",
+    "Many call paths or distinct FP offsets drive the limit",
+    "The fix is to simplify the call/argument pattern"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only increases a runtime loop bound",
+    "Adds packet or memory bounds checks",
+    "Suggests releasing a resource"
+  ]
+}

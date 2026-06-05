@@ -1,0 +1,24 @@
+## Explanation
+
+The verifier failure occurs at instruction 10 where `s->x` is dereferenced:
+
+```
+R6 invalid mem access 'mem_or_null'
+```
+
+The pointer `s` has type `mem_or_null(id=1,sz=4)`, meaning the verifier considers it **might be NULL**. When a pointer is passed to a BPF global subprogram (`__noinline`), the verifier cannot propagate the caller's knowledge that the pointer is non-NULL across the function boundary. It conservatively marks the parameter as `mem_or_null`, and refuses to allow dereferencing it without an explicit NULL check.
+
+## Fix
+
+Add a NULL check in `helper_a` before dereferencing `s`:
+
+```c
+__noinline int helper_a(const struct Item *s)
+{
+	if (!s)
+		return 0;
+	return bpf_get_prandom_u32() < s->x;
+}
+```
+
+After the `if (!s) return 0;` check, the verifier knows the pointer is non-NULL in the fall-through path, promoting it from `mem_or_null` to `mem`, and the subsequent dereference of `s->x` is allowed.

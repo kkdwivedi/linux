@@ -1,0 +1,50 @@
+The verifier failure is a real lifetime leak.
+
+`bpf_cpumask_create()` returns an owned/refcounted `struct bpf_cpumask *`:
+
+```text
+0: call bpf_cpumask_create
+   R0=trusted_ptr_or_null_bpf_cpumask(id=2)
+```
+
+`make_object()` correctly releases the object on its failure path:
+
+```c
+if (!bpf_cpumask_empty(cast(cpumask))) {
+	bpf_cpumask_release(cpumask);
+	return NULL;
+}
+```
+
+But on the success path it returns the owned cpumask to the caller. In `entry()` the returned pointer is only passed to `__sink(cpumask)`, which does not transfer ownership or release the reference. In the log, that becomes only a stack store:
+
+```text
+19: *(u64 *)(r10 -8) = r6
+20: w0 = 0
+21: exit
+Unreleased reference id=2 alloc_insn=0
+```
+
+So the verifier sees an owned cpumask acquired at instruction 0 and still live at program exit.
+
+The smallest source-level fix is to release the returned cpumask in `entry()` when it is non-NULL.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -31,6 +31,8 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ 
+ 	cpumask = make_object();
+ 	__sink(cpumask);
++	if (cpumask)
++		bpf_cpumask_release(cpumask);
+ 
+ 	return 0;
+ }
+```
+
+This satisfies the verifier because every path that receives an owned `bpf_cpumask` from `bpf_cpumask_create()` either releases it inside `make_object()` or releases it in `entry()` before exit. The NULL check is needed because `make_object()` can return `NULL`, and `bpf_cpumask_release()` must only be called with a valid owned cpumask pointer.

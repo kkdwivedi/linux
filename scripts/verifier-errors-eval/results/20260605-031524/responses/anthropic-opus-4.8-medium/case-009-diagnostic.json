@@ -1,0 +1,92 @@
+{
+  "answer_text": "## What the verifier is complaining about\n\nAt the end, `entry()` does:\n\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\n`value->task` is a kptr field. When the verifier loads it:\n\n```\n3: (79) r1 = *(u64 *)(r0 +0)   ; R1=rcu_ptr_or_null_task_struct(id=10)\n```\n\nthe result type is **`rcu_ptr_or_null_task_struct`** \u2014 i.e. it may be NULL. `bpf_task_acquire()` is a kfunc whose first argument must be a *non-NULL* trusted pointer (`KF_TRUSTED_ARGS`). Passing a possibly-NULL pointer violates that contract, so the verifier rejects the call:\n\n```\nPossibly NULL pointer passed to trusted R1\n```\n\nThe kptr loaded from the map is legitimately allowed to be NULL (nothing guaranteed `value->task` was set), and the code never tests it before passing it to the acquire kfunc.\n\n## The fix\n\nLoad the kptr into a local variable, NULL-check it, and only call `bpf_task_acquire()` on the non-NULL path. This is exactly the verifier's suggestion (\"Add a NULL check and call the kfunc only on the non-NULL path\").\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired, *kptr;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n\tkptr = value->task;\n\tif (!kptr)\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(kptr);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\nAfter `if (!kptr) return 0;`, the verifier narrows `kptr` from `rcu_ptr_or_null_task_struct` to a non-NULL `rcu_ptr_task_struct`, which satisfies the trusted/non-NULL requirement of `bpf_task_acquire()`, and verification proceeds.\n\n(Equivalently, you could inline the test as `if (!value->task) return 0;` then `bpf_task_acquire(value->task);`, but storing into a local and checking that is the clearest minimal change.)",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-009-diagnostic.txt",
+    "case_id": "case-009",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 9539,
+    "prompt_path": "public/case-009/prompt_diagnostic.md",
+    "prompt_sha256": "b18a80e715b0997c1feba2b4b098abd71869a9fb867ace1b91abe52c1a1cab07",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-009-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "3db297fe-8489-4980-9a71-1651c2579f7d",
+    "started_at": "2026-06-05T03:17:18+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.02396,
+    "output_cost_usd": 0.0291,
+    "total_cost_usd": 0.053059999999999996
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 4792,
+    "output_tokens": 1164,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 4792,
+      "output_tokens": 1164,
+      "output_tokens_details": {
+        "thinking_tokens": 377
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 5956
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EtoICmMIDhgCKkCtTWeAGH6yrdN7+HylplRnyMGw7ZoUVuyyRmlwR/gn5mnsC61at+bSvlV6LetLpmctn/gZ7FWk81nA53CiUdz6Mg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDC2PYqrPGLF1mfYdBxoMiB1dxDEN246mjYoyIjAznosw3SdPq3LqayI+qVGODpC58rqNdFXmdbF7KE8Oqiz87oOnqN9/5EvimVJy49IqpAdIHhQ1Fxayia5TxohQ9JiK4Mdew22xTlsjZwSn82rAW5EQPU0EnfksvvIjdulFp1JKd8MjlGC4pFybspdecPa2urHlQy8YOq9mB7j1ucW8cO/vjx2/yCNMwbQnxPkl61vfxgmFM8AnzsBxH2RWtt3kD6qZVXsbB5gwfIPYXLuz/iNkbBgNwzqU5PNnIpxckJGMyuhP1WuY1F5rl9QxGzqgoKgghstiazgQZTNeNCQYG9LXPLYt4xH5wAp4lUzwPicA9fUpW86GkS3Ao/zRs1DVaL1bfpy4Azkl4SCwB83HSCU06CqhNH8eNY8e30aSioVbFUdI2j4EpxitfwswdXSIw7/dIc9/aLhWZAnJNmhAx7a0hQnkzlNXeqi8168MyFHYBWKnyOD57E3mqMrjaCjrwFFFr1jqbH3wDpFmEj/IIrKTDX38hr3h0QJg56FoMdCySapKFMKAPZWvgHzlB44cE0XNhHvs3RGKGQS1jpBoa4sUndyAiK/2hHqIgeW5GK/D3Oh1tUVp6+5yEsmVuOR9lneqfo5z8HN33U8zDb5Jj+mArK83yHr1ZUuppeJGL4x9jr2OnHS0XDVNv6wIoCrxTZtR9mtW12mvngSSps5Qi2umlkNP/nt9F8z/sHdra2tgw/sovfMsuQkY96dXbPces0GD/Ca3vQTZ+nh741cRGSjx5/ZHMAD0tDTlXQYRRmXcfAm5CWndBuDKD0uDsmTlOffX0ijZXlANdd650J8izRYLC27G+5Vi4tXBMzeCENDfu2qbLGcaJQ1aU0e1/LYiDTwxeMrWSQUh31QTbFJnXpnrqzaAxiLrgES2lBSfkASK2CES4IxNOr6rasXYV0Ak0sVWVPKuk7taboXlnbBEXu4pQinPWzxKSuDEw0mDXA5DGIcdPKegJsAJT4mviRupPr+6mCtERoQCY9fq6nuswucIY/dbdzx+C3TfhNiBezxqPH3T3juI8wgnfjcVrzaccH3BzxrXrH7AYuUIKAsBtI+E+D6nnNlUq17hWBy8ISb4BrLMcEYZaips7AZ0Wy5o1VROXD+YONed8Y2DZOjIGhJMuVNffvmbFfDUZTtmZo6OZ4QzKtSwuXJep9sc5k8d9pB2BjNVQG6N4CGwQ6+voEBcNHaGZ/ulyTXiKqRP6SIdDjPNkowqbXS7VLeNf+6eRIOUpy7+radQmxQMLgGtxeSKaxq2xkcK6Ec6gm+PsCrz7bkrBkyqwr/ijYvpNyv/fekizBgB",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## What the verifier is complaining about\n\nAt the end, `entry()` does:\n\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\n`value->task` is a kptr field. When the verifier loads it:\n\n```\n3: (79) r1 = *(u64 *)(r0 +0)   ; R1=rcu_ptr_or_null_task_struct(id=10)\n```\n\nthe result type is **`rcu_ptr_or_null_task_struct`** \u2014 i.e. it may be NULL. `bpf_task_acquire()` is a kfunc whose first argument must be a *non-NULL* trusted pointer (`KF_TRUSTED_ARGS`). Passing a possibly-NULL pointer violates that contract, so the verifier rejects the call:\n\n```\nPossibly NULL pointer passed to trusted R1\n```\n\nThe kptr loaded from the map is legitimately allowed to be NULL (nothing guaranteed `value->task` was set), and the code never tests it before passing it to the acquire kfunc.\n\n## The fix\n\nLoad the kptr into a local variable, NULL-check it, and only call `bpf_task_acquire()` on the non-NULL path. This is exactly the verifier's suggestion (\"Add a NULL check and call the kfunc only on the non-NULL path\").\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired, *kptr;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n\tkptr = value->task;\n\tif (!kptr)\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(kptr);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\nAfter `if (!kptr) return 0;`, the verifier narrows `kptr` from `rcu_ptr_or_null_task_struct` to a non-NULL `rcu_ptr_task_struct`, which satisfies the trusted/non-NULL requirement of `bpf_task_acquire()`, and verification proceeds.\n\n(Equivalently, you could inline the test as `if (!value->task) return 0;` then `bpf_task_acquire(value->task);`, but storing into a local and checking that is the clearest minimal change.)",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01GAwVxNvJzBwDSFiWvgvBeh",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 4792,
+      "output_tokens": 1164,
+      "output_tokens_details": {
+        "thinking_tokens": 377
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Lower MAX_STACK enough that the nested helper frames fit within 512 bytes.",
+    "Move large buffers out of nested helpers or reuse a smaller/shared buffer in a verifier-accepted way.",
+    "Restructure calls so helper_b and helper_c are not simultaneously on the stack with large local buffers."
+  ],
+  "canonical_fix": "Reduce stack use along the nested call chain or shorten the call chain so the combined stack depth is at or below the verifier limit.",
+  "case_id": "case-013",
+  "category": "Verifier Limit",
+  "difficulty": "medium",
+  "expected_explanation": "The call chain entry -> helper_c -> helper_b uses more than the verifier's combined call-stack depth limit. The large per-function stack buffers accumulate across nested bpf2bpf calls.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-013-legacy.txt",
+    "case_id": "case-013",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 1649,
+    "prompt_path": "public/case-013/prompt_legacy.md",
+    "prompt_sha256": "4d1d466cfe05bcf610e895dd892a6a1aa50e76dc1045f63dfca8de2da264bd35",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-013-legacy.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "de9a53ff-2156-4da5-96cb-dbc6a28e689f",
+    "started_at": "2026-06-05T04:22:39+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Analysis\n\nThe verifier failure is clear: **stack size overflow**.\n\nThe error message states: `combined stack size of 3 calls is 544. Too large`\n\nLet me trace the stack usage:\n- `helper_a`: minimal (only `asm volatile(\"\")`)\n- `helper_b`: allocates `MAX_STACK` (260 bytes) + calls `helper_a` (minimal)\n- `helper_c`: allocates `MAX_STACK` (260 bytes) + calls `helper_b` (260 bytes) + calls `helper_d` (260 bytes)\n- `helper_d`: allocates `MAX_STACK` (260 bytes)\n\nThe problematic call chain is in `helper_c`:\n- `helper_c` stack: 260 bytes\n- calls `helper_b` which has stack: 260 bytes  \n- calls `helper_d` which has stack: 260 bytes\n- Total: 260 + 260 + 260 = 780 bytes in the worst case, but the verifier is reporting 544\n\nThe combined stack size limit in the BPF verifier is typically 512 bytes. The issue is that multiple functions with large stack frames are called in sequence within nested function calls.\n\n## Solution\n\nThe smallest fix is to **reduce `MAX_STACK`** from 260 to a smaller value that allows the nested calls to fit within the 512-byte limit.\n\nWith 3 sequential stack allocations of 260 bytes each (in the call chain), we need:\n- 260 \u00d7 3 = 780 bytes (current, fails)\n- We need < 512 bytes total\n- Each function should be \u2264 ~170 bytes to be safe with the nesting\n\nChange `MAX_STACK` from 260 to **128**:\n\n```c\n#define MAX_STACK 128\n```\n\nThis gives us: 128 \u00d7 3 = 384 bytes, which is under the 512-byte limit.\n\n**Patch:**\n```diff\n-#define MAX_STACK 260\n+#define MAX_STACK 128\n```\n\nThis minimal change reduces each function's stack allocation while maintaining the test's intent (using stack space and calling `__sink()` to prevent optimization).",
+  "must_mention": [
+    "Combined call-chain stack depth exceeds the verifier limit",
+    "Large local buffers in nested helpers are the cause",
+    "Fix must reduce stack usage or call depth"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds bounds checks around skb fields",
+    "Changes helper return arithmetic only",
+    "Reduces stack in a helper not on the reported call chain while leaving the chain over limit"
+  ]
+}

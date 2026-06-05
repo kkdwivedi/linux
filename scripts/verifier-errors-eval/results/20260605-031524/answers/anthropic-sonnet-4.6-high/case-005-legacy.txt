@@ -1,0 +1,34 @@
+## Explanation of Verifier Failure
+
+The verifier rejects the program with:
+```
+sleepable helper bpf_copy_from_user#148 in non-preemptible region
+```
+
+`bpf_copy_from_user` is a **sleepable** helper (it may sleep while reading from user memory). The BPF verifier tracks preemption state: once `bpf_preempt_disable()` is called, the program enters a non-preemptible region, and calling any sleepable helper within that region is forbidden.
+
+In the original code, `bpf_copy_from_user` is called *between* `bpf_preempt_disable()` and `bpf_preempt_enable()`, which is exactly the non-preemptible window the verifier rejects.
+
+## Fix
+
+Move `bpf_copy_from_user` **before** `bpf_preempt_disable()` so it executes outside the non-preemptible region:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("?fentry.s/sys_getpgid")
+int entry(void *ctx)
+{
+	u32 data;
+
+	bpf_copy_from_user(&data, sizeof(data), NULL);
+	bpf_preempt_disable();
+	bpf_preempt_enable();
+	return 0;
+}
+```
+
+By placing the sleepable `bpf_copy_from_user` call before `bpf_preempt_disable()`, it runs in a preemptible context (the program is sleepable via the `.s` suffix), satisfying the verifier's constraint that sleepable helpers must not be called in non-preemptible regions.

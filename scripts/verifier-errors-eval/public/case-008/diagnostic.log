@@ -1,0 +1,51 @@
+0: R1=ctx() R10=fp0
+; int entry(struct __sk_buff *skb) @ case.c:1998
+0: (b7) r2 = 0                        ; R2=0
+; char buffer[8] = {}; @ case.c:2001
+1: (7b) *(u64 *)(r10 -24) = r2        ; R2=0 R10=fp0 fp-24=0
+2: (bf) r3 = r10                      ; R3=fp0 R10=fp0
+3: (07) r3 += -16                     ; R3=fp-16
+; if (bpf_dynptr_from_skb(skb, 0, &ptr)) { @ case.c:2004
+4: (85) call bpf_dynptr_from_skb#61956        ; R0=scalar() fp-16=dynptr_skb(id=1)
+5: (16) if w0 == 0x0 goto pc+5 11: R10=fp0 fp-16=dynptr_skb(id=1) fp-24=0
+; return 1; @ case.c:2006
+11: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+12: (07) r1 += -16                    ; R1=fp-16
+13: (bf) r3 = r10                     ; R3=fp0 R10=fp0
+14: (07) r3 += -24                    ; R3=fp-24
+; data = bpf_dynptr_slice(&ptr, 0, buffer, 9); @ case.c:2010
+15: (b7) r2 = 0                       ; R2=0
+16: (b7) r4 = 9                       ; R4=9
+17: (85) call bpf_dynptr_slice#61969
+invalid read from stack R3 off -24+8 size 9
+R3 and R4 memory, len pair leads to invalid memory access
+
+Verification failed: Call Type Safety: Invalid call argument
+
+Reason:
+  The third argument (R3) to bpf_dynptr_slice does not satisfy the verifier contract: it is the memory pointer in a
+  memory/length pair with R4, but it is a stack pointer and does not point to verifier-readable memory for the
+  requested length.
+
+At:
+  entry @ case.c:2010:9
+      2008 | ...                                                                                 15 | (b7) r2 = 0
+      2009 | ...                                                                                 16 | (b7) r4 = 9
+  >>> 2010 |         data = bpf_dynptr_slice(&ptr, 0, buffer, 9);                            >>> 17 | (85) call bpf_dynptr_slice#61969
+           |         ^-- error: invalid third argument (R3) for bpf_dynptr_slice
+      2011 | ...                                                                                 18 | (bf) r1 = r0
+      2012 |         return !!data;                                                              19 | (b4) w0 = 1
+
+Causal path:
+  entry @ case.c:2006:3
+      2004 |         if (bpf_dynptr_from_skb(skb, 0, &ptr)) {                                    12 | (07) r1 += -16
+      2005 |                 err = 1;                                                            13 | (bf) r3 = r10
+  >>> 2006 |                 return 1;                                                       >>> 14 | (07) r3 += -24
+           |                 ^-- update: R3 changed from stack pointer at offset 0 to stack pointer at offset -24
+      2007 | ...                                                                                 15 | (b7) r2 = 0
+      2008 | ...                                                                                 16 | (b7) r4 = 9
+
+Suggestion:
+  Pass a stack, map, context, or other verifier-known memory pointer, and keep the paired length within that object.
+
+processed 18 insns (limit 1000000) max_states_per_insn 0 total_states 1 peak_states 1 mark_read 0

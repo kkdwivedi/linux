@@ -1,0 +1,91 @@
+The verifier rejects the call:
+
+```c
+hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
+```
+
+because `bpf_dynptr_slice()` takes a memory/length pair for its third and fourth arguments:
+
+```c
+void *buffer, __u32 buffer__sz
+```
+
+Here `buffer` is a stack object of size:
+
+```c
+sizeof(struct ethhdr)
+```
+
+but the length passed to the helper is:
+
+```c
+slice_len
+```
+
+`slice_len` is a global variable:
+
+```c
+__u32 slice_len = sizeof(struct ethhdr);
+```
+
+The verifier does not treat this as a compile-time constant. In the log, it is loaded from `.data`:
+
+```text
+9:  r1 = map_value(map=case.data,ks=4,vs=4)
+11: r4 = *(u32 *)(r1 +0)
+```
+
+After the load, `R4` is considered an unconstrained scalar:
+
+```text
+R4=scalar(smin=0,smax=umax=0xffffffff)
+```
+
+So from the verifier’s point of view, the helper call may write up to `0xffffffff` bytes into a stack buffer that is only `sizeof(struct ethhdr)` bytes. That is why it reports:
+
+```text
+R4 unbounded memory access, use 'var &= const' or 'if (var < const)'
+R3 and R4 memory, len pair leads to invalid memory access
+```
+
+The smallest fix is to make the length argument verifier-bounded to the size of `buffer`.
+
+Since the intended value is just `sizeof(struct ethhdr)`, the simplest source-level fix is to pass the constant directly instead of the mutable global:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -7,8 +7,6 @@ struct {
+ 	__uint(max_entries, 4096);
+ } ringbuf SEC(".maps");
+ 
+-__u32 slice_len = sizeof(struct ethhdr);
+-
+ SEC("?tc")
+ int entry(struct __sk_buff *skb)
+ {
+@@ -19,7 +17,7 @@ int entry(struct __sk_buff *skb)
+ 
+ 	bpf_dynptr_from_skb(skb, 0, &ptr);
+ 
+-	hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
++	hdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+ 	if (!hdr)
+ 		return SK_DROP;
+ 
+```
+
+This should satisfy the verifier because the fourth argument becomes a known constant equal to the stack buffer size. The verifier can then prove that the memory/length pair `(buffer, sizeof(buffer))` is valid.
+
+If the test specifically needs to keep `slice_len` as a global variable, then add an explicit bounds check before the helper call:
+
+```c
+if (slice_len > sizeof(buffer))
+	return SK_DROP;
+
+hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
+```
+
+But the smallest and most direct fix for this program is to use `sizeof(buffer)` in the helper call.

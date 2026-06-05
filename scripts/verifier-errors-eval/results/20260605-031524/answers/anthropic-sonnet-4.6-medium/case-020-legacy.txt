@@ -1,0 +1,50 @@
+## Explanation of the Failure
+
+The verifier error is:
+```
+liveness analysis exceeded complexity limit (10001 calls)
+```
+
+The call graph has **8 levels deep** (entry → helper_a → helper_b → … → helper_g), with **50 calls per level**. The BPF verifier's liveness analysis does not effectively memoize across distinct call-site contexts — because each `CALL_AT` sets `r1` to a different stack offset, every call site represents a distinct register state, so the verifier re-analyses the callee for each unique calling context. This results in near-exponential growth: liveness analysis for `helper_g` is triggered once per unique call path from the root, easily exceeding the 10 001-call limit.
+
+Removing one level of helper functions (dropping `helper_g` and making `helper_f` a leaf) reduces the maximum depth from 8 to 7 frames and eliminates an entire tier of repeated re-analyses, keeping the total liveness work within the verifier's budget.
+
+## Fix
+
+Remove `helper_g` entirely and replace `helper_f`'s body with a simple leaf (no sub-calls):
+
+```c
+__naked __noinline __used
+static unsigned long helper_f(void)
+{
+	asm volatile (
+		"r0 = 0;"
+		"exit;"
+		::: __clobber_all);
+}
+```
+
+**Patch:**
+
+```diff
+-__naked __noinline __used
+-static unsigned long helper_g(void)
+-{
+-	asm volatile (
+-		"r0 = 0;"
+-		"exit;"
+-		::: __clobber_all);
+-}
+-
+ __naked __noinline __used
+ static unsigned long helper_f(void)
+ {
+ 	asm volatile (
+-		CALLS_50(helper_g)
+ 		"r0 = 0;"
+ 		"exit;"
+ 		::: __clobber_all);
+ }
+```
+
+This shrinks the call depth from 8 (entry + a + b + c + d + e + f + g) to 7 (entry + a + b + c + d + e + f), and removes the innermost 50-call fan-out that was causing the liveness analysis to exceed the 10 001-call complexity limit.

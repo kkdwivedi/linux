@@ -1,0 +1,41 @@
+## Verifier Failure Analysis
+
+The failure occurs at instruction 13 (`call bpf_probe_read_kernel`). Here's the chain of events:
+
+1. **Instruction 9**: `r3 = *(u32 *)(r0 + 0)` — reads a 32-bit `offset` field from the map value. The verifier correctly infers `r3` is a scalar in range `[0, 0xFFFFFFFF]` (unbounded).
+
+2. **Instruction 10**: `r1 += r3` — adds this unbounded scalar to the map value pointer `r1`. The resulting pointer could point anywhere in memory.
+
+3. **Instruction 13**: `call bpf_probe_read_kernel` — the verifier rejects the call because `r1` is an **unbounded memory access** — the pointer could be anywhere, not provably within the map value.
+
+The core issue: the `offset` field read from the map value is not bounds-checked before being used as a pointer offset, so the verifier cannot prove the resulting pointer stays within the 48-byte map value.
+
+## Fix
+
+Add a bounds check on `r3` before adding it to `r1`. Since the map value is 48 bytes (`struct value` = 4-byte offset + 44-byte data), the offset must be `< 48` to stay in-bounds:
+
+```c
+asm volatile ("					\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = 0;						\
+	*(u64*)(r2 + 0) = r1;				\
+	r1 = %[map_a] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l0_%=;				\
+	r1 = r0;					\
+	r3 = *(u32*)(r0 + 0);				\
+	if r3 > 47 goto l0_%=;				\
+	r1 += r3;					\
+	r2 = 1;						\
+	r3 = 0;						\
+	call %[bpf_probe_read_kernel];			\
+l0_%=:	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm(bpf_probe_read_kernel),
+	  __imm_addr(map_a)
+	: __clobber_all);
+```
+
+The single added line `if r3 > 47 goto l0_%=;` constrains `r3` to `[0, 47]`, so `r1 = map_value + r3` is provably within the 48-byte map value. The verifier will then track `r1` as a bounded map value pointer allow the `bpf_probe_read_kernel` call. If the offset is out of bounds, we skip the read and exit cleanly.

@@ -1,0 +1,87 @@
+{
+  "answer_text": "The verifier does not allow recursive BPF-to-BPF subprogram calls. `helper_a` calls itself, which forms a cycle. The fix is to rewrite the recursion as a loop.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"tracepoint\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tr1 = 0;\t\t\t\t\t\t\\\n\tcall helper_a;\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n\nstatic __naked __noinline __attribute__((used))\nvoid helper_a(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\nloop_%=:\t\t\t\t\t\t\\\n\tr1 += 1;\t\t\t\t\t\\\n\tr0 = r1;\t\t\t\t\t\\\n\tif r1 < 4 goto loop_%=;\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\n**Explanation:** The original `helper_a` recursively called itself when `r1 < 4`, which the verifier rejects because it cannot bound stack depth with cyclic call graphs. The fix replaces the tail-recursive call with a backward branch (a loop), achieving the same behavior \u2014 incrementing `r1` until it reaches 4 \u2014 without any subprogram call cycle.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-medium/case-019-diagnostic.txt",
+    "case_id": "case-019",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-medium",
+    "prompt_bytes": 2020,
+    "prompt_path": "public/case-019/prompt_diagnostic.md",
+    "prompt_sha256": "bc762d4843d61b1404dac4a4f4cffddeb5a6c6e29d1ad0933b5631140c8504bd",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-medium/case-019-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "2cbdce4c-befb-48e0-865b-c70def57a03e",
+    "started_at": "2026-06-05T03:17:55+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.002184,
+    "output_cost_usd": 0.00498,
+    "total_cost_usd": 0.007164
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 728,
+    "output_tokens": 332,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 728,
+      "output_tokens": 332,
+      "output_tokens_details": {
+        "thinking_tokens": 0
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1060
+  },
+  "raw_response": {
+    "content": [
+      {
+        "text": "The verifier does not allow recursive BPF-to-BPF subprogram calls. `helper_a` calls itself, which forms a cycle. The fix is to rewrite the recursion as a loop.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"tracepoint\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tr1 = 0;\t\t\t\t\t\t\\\n\tcall helper_a;\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n\nstatic __naked __noinline __attribute__((used))\nvoid helper_a(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\nloop_%=:\t\t\t\t\t\t\\\n\tr1 += 1;\t\t\t\t\t\\\n\tr0 = r1;\t\t\t\t\t\\\n\tif r1 < 4 goto loop_%=;\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\n**Explanation:** The original `helper_a` recursively called itself when `r1 < 4`, which the verifier rejects because it cannot bound stack depth with cyclic call graphs. The fix replaces the tail-recursive call with a backward branch (a loop), achieving the same behavior \u2014 incrementing `r1` until it reaches 4 \u2014 without any subprogram call cycle.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01UX37Bk5NMRF7ZrbXEic4yC",
+    "model": "claude-sonnet-4-6",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 728,
+      "output_tokens": 332,
+      "output_tokens_details": {
+        "thinking_tokens": 0
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

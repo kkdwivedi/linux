@@ -1,0 +1,77 @@
+The failure is not because `entry()` actually passes a NULL pointer. It passes `&s`, a stack object, so at runtime that argument is non-NULL.
+
+The issue is verifier-side function validation. Because `helper_a()` has global/non-static linkage:
+
+```c
+__noinline int helper_a(const struct Item *s)
+```
+
+the verifier validates it as a separately callable BPF subprogram. For such functions, pointer arguments are treated conservatively as possibly NULL. Thus at the start of `helper_a()` the verifier has:
+
+```text
+R1=mem_or_null(id=1,sz=4)
+```
+
+Then the program does:
+
+```c
+s->x
+```
+
+which becomes:
+
+```text
+r2 = *(u32 *)(r6 +0)
+```
+
+but `r6` still has type `mem_or_null`, so the verifier rejects the dereference.
+
+Smallest likely fix: make `helper_a()` a static BPF subprogram so the verifier can analyze it in the context of its actual call site, where `&s` is known to be non-NULL.
+
+Patch:
+
+```diff
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+
+ struct Item {
+ 	int x;
+ };
+
+-__noinline int helper_a(const struct Item *s)
++static __noinline int helper_a(const struct Item *s)
+ {
+ 	return bpf_get_prandom_u32() < s->x;
+ }
+
+ SEC("cgroup_skb/ingress")
+ int entry(struct __sk_buff *skb)
+ {
+ 	const struct Item s = {.x = skb->len};
+
+ 	helper_a(&s);
+
+ 	return 1;
+ }
+```
+
+Why this should satisfy the verifier:
+
+- With `static`, `helper_a()` is no longer treated as an independently callable global BPF function.
+- The verifier can propagate the caller’s argument state into the callee.
+- The argument is `&s`, a stack address, so it is known non-NULL.
+- Therefore the load from `s->x` is safe.
+
+If preserving global linkage is required, the alternative fix is to add an explicit NULL check:
+
+```c
+__noinline int helper_a(const struct Item *s)
+{
+	if (!s)
+		return 0;
+
+	return bpf_get_prandom_u32() < s->x;
+}
+```
+
+But for this specific program, adding `static` is the smallest source-level fix.

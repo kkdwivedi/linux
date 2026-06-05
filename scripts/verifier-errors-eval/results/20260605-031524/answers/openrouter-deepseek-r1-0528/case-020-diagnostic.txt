@@ -1,0 +1,25 @@
+The verifier failure occurs because the liveness analysis complexity limit is exceeded. The verifier recomputes subprogram liveness too many times due to the high number of distinct call paths to `helper_g`. Each call site uses a different stack offset argument, making call paths appear unique even though the helper functions don't actually use these arguments.
+
+The fix replaces the stack offset setup with a constant value (0) for the unused argument register (R1). This makes all call sites to the same helper function identical, allowing the verifier to reuse liveness analysis results rather than recomputing for each call site.
+
+Patch:
+```patch
+--- a/case.c
++++ b/case.c
+@@ -1,7 +1,7 @@
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ 
+-#define CALL_AT(fn, off) "r1 = r10;" "r1 += -" #off ";" "call " #fn ";"
++#define CALL_AT(fn, off) "r1 = 0;" "call " #fn ";"
+ #define CALLS_10(fn) \
+ 	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \
+ 	CALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)
+```
+
+This change:
+1. Sets R1 to 0 (safe since helpers don't use it)
+2. Removes stack offset variations
+3. Makes call sites identical
+4. Allows verifier to cache liveness analysis
+5. Reduces distinct call paths below the limit

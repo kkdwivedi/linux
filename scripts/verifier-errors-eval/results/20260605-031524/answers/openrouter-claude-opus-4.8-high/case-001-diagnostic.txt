@@ -1,0 +1,67 @@
+## Explanation
+
+The verifier rejects the call because of its *type-safety contract* on kfunc arguments. The first parameter of `bpf_cpumask_populate()` is
+
+```c
+int bpf_cpumask_populate(struct cpumask *cpumask, void *src, size_t src__sz);
+```
+
+and the verifier requires that the `struct cpumask *` argument point to **verifier-known memory of the right type/size** (a real, tracked cpumask object — 16 bytes). In the program, `invalid` is just an integer literal cast to a pointer:
+
+```c
+struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+```
+
+When the program loads `r1 = 1193046` (0x123456) and calls the kfunc, R1 is a plain scalar, not a pointer to known memory. Hence:
+
+```
+R1 type=scalar expected=fp
+Call Type Safety: Invalid call argument
+```
+
+There is no way to make a `0x123456`-style fabricated pointer satisfy this contract; you must pass a genuinely allocated/tracked cpumask.
+
+## Fix
+
+Allocate a real cpumask with `bpf_cpumask_create()` (which returns verifier-tracked, trusted memory), use it as the destination, and release it. This is the smallest change that yields a pointer of the expected type for R1.
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+/* kfunc prototypes */
+struct bpf_cpumask *bpf_cpumask_create(void) __ksym;
+void bpf_cpumask_release(struct bpf_cpumask *cpumask) __ksym;
+int bpf_cpumask_populate(struct cpumask *cpumask, void *src, size_t src__sz) __ksym;
+
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *mask;
+	u64 bits;
+	int ret;
+
+	mask = bpf_cpumask_create();
+	if (!mask)
+		return 0;
+
+	ret = bpf_cpumask_populate((struct cpumask *)mask, &bits, sizeof(bits));
+
+	bpf_cpumask_release(mask);
+
+	if (!ret)
+		return 2;
+
+	return 0;
+}
+```
+
+### Why this satisfies the verifier
+- `bpf_cpumask_create()` returns a pointer to a verifier-tracked allocated object of the proper type (a `struct bpf_cpumask`/`cpumask`), so R1 is now "verifier-known memory" of the expected size, not a scalar.
+- The null check after `create` is mandatory (the helper may return NULL).
+- `bpf_cpumask_release()` is required so the acquired reference is not leaked (otherwise the verifier would complain about an unreleased reference).
+
+(If the prototypes are already provided by a shared selftest header such as `cpumask_common.h`, just include that instead of redeclaring them.)

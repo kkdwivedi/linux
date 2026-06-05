@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Reduce CALLS_50 fan-out or the number of helper layers.",
+    "Pass a stable non-FP-derived argument pattern when possible.",
+    "Replace the generated call tree with a simpler bounded loop or less duplicated call structure."
+  ],
+  "canonical_fix": "Reduce the number of distinct call paths or argument patterns reaching the subprograms, for example by reducing fan-out/depth, consolidating calls, or avoiding many distinct FP-offset arguments.",
+  "case_id": "case-020",
+  "category": "Verifier Limit",
+  "difficulty": "hard",
+  "expected_explanation": "The program creates an enormous number of distinct bpf2bpf call paths and frame-pointer-derived argument patterns. Liveness analysis exceeds its complexity limit while recomputing subprogram liveness across those paths.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-020-legacy.txt",
+    "case_id": "case-020",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 6158,
+    "prompt_path": "public/case-020/prompt_legacy.md",
+    "prompt_sha256": "cecfa6936349490d4b7bd2b0131df3ba133333894cfcdcc4438f6f6f0196b689",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-020-legacy.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "bae3c87e-ff75-4cdc-b81b-315074bc84de",
+    "started_at": "2026-06-05T03:21:10+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "Looking at this eBPF program, I can see the issue clearly:\n\n## Problem Analysis\n\nThe program creates an extremely deep call stack through nested function calls:\n- `entry` calls `helper_a` 50 times\n- `helper_a` calls `helper_b` 50 times  \n- `helper_b` calls `helper_c` 50 times\n- And so on down to `helper_g`\n\nThis creates a call depth of 7 levels, with each level making 50 calls, resulting in an enormous number of total function calls (50^7 = 78 billion calls). The verifier log shows it's hitting a \"liveness analysis exceeded complexity limit (10001 calls)\" error.\n\n## Solution\n\nThe simplest fix is to reduce the number of calls to stay within verifier limits. The `CALLS_50` macro is clearly too aggressive. I'll change it to `CALLS_1` to make just one call at each level instead of 50.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\n#define CALL_AT(fn, off) \"r1 = r10;\" \"r1 += -\" #off \";\" \"call \" #fn \";\"\n#define CALLS_10(fn) \\\n\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n\tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n#define CALLS_1(fn) CALL_AT(fn, 8)\n\n__naked __noinline __used\nstatic unsigned long helper_g(void)\n{\n\tasm volatile (\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_f(void)\n{\n\tasm volatile (\n\t\tCALLS_1(helper_g)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_e(void)\n{\n\tasm volatile (\n\t\tCALLS_1(helper_f)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_d(void)\n{\n\tasm volatile (\n\t\tCALLS_1(helper_e)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_c(void)\n{\n\tasm volatile (\n\t\tCALLS_1(helper_d)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_b(void)\n{\n\tasm volatile (\n\t\tCALLS_1(helper_c)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\n__naked __noinline __used\nstatic unsigned long helper_a(void)\n{\n\tasm volatile (\n\t\tCALLS_1(helper_b)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n\nSEC(\"?raw_tp\")\n__naked int entry(void)\n{\n\tasm volatile (\n\t\tCALLS_1(helper_a)\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n```\n\nThis change reduces the total call count from 50^7 (78 billion) to just 7 calls, which will easily stay within the verifier's complexity limits while preserving the basic structure and intent of the test.",
+  "must_mention": [
+    "The failure is verifier liveness complexity, not runtime recursion",
+    "Many call paths or distinct FP offsets drive the limit",
+    "The fix is to simplify the call/argument pattern"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only increases a runtime loop bound",
+    "Adds packet or memory bounds checks",
+    "Suggests releasing a resource"
+  ]
+}

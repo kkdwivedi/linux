@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nIn `helper_b`, the call `helper_c(val, skb + 1)` passes a **pointer-arithmetic-modified** context pointer (`skb + 1`, which the compiler turns into `skb + 192` since `sizeof(struct __sk_buff) == 192`). The BPF verifier tracks this as `ctx(imm=192)` and refuses to let `helper_c` dereference it because dereferencing an offset/modified `ctx` pointer is not allowed \u2014 you must always pass the original, unmodified context pointer.\n\nThe verifier message confirms this:\n```\n21: (07) r6 += 192                    ; R6=ctx(imm=192)\n...\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\n## Fix\n\nChange `skb + 1` to `skb` in `helper_b`:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n```\n\nThis passes the unmodified context pointer to `helper_c`, which the verifier will accept.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-medium/case-010-legacy.txt",
+    "case_id": "case-010",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-medium",
+    "prompt_bytes": 2233,
+    "prompt_path": "public/case-010/prompt_legacy.md",
+    "prompt_sha256": "42cb94c19ecff9212d01b745ca76ad135db7dce4e6c15eefc8d6cb8a521dd385",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-medium/case-010-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "18d9f484-d6af-4933-9888-57752663ab47",
+    "started_at": "2026-06-05T04:04:11+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.002988,
+    "output_cost_usd": 0.006045,
+    "total_cost_usd": 0.009033
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 996,
+    "output_tokens": 403,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 996,
+      "output_tokens": 403,
+      "output_tokens_details": {
+        "thinking_tokens": 109
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 300,
+    "reasoning_tokens": 0,
+    "total_tokens": 1399
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EvQDCmUIDhgCKkBF6og0KE9tlOZZF6uAaofp9NMSsw+y8T9Pr8F7SP86CLnjOUmRhr70ZjE6fDHHF6cKHlv8cn+ezx6dsvIiiWYTMhFjbGF1ZGUtc29ubmV0LTQtNjgAQgh0aGlua2luZxIMURugpqqDcLxo2iUgGgzJngkWfMqGjXX5b98iMNFPkvntS+nYPzmKwssU9D7R13D/hD2b2rfxxs3Mc7azspKEB0vXmhrk5IxexWJWGiq8AuNBpB85JkfHHVeGG1QRKjrBktjG/l04+7VAgwm08rYlqSlT8mIo8NdxDTKybh+bTQg+sMeDXXzCWUYl6NHLgMIQPkIPN/HboDNadYsnJm0QjqlqH4sc38fxN/YrFl+CeefJ/ZEpAKJ5BJKWBd4RXHJM2yo7NKreAbl607bbtDDyuu2kILc/X49a9r12+VoN6MZlM3zav6FJAhdUsTfdWMQzykUdHdiOHfDqIWtUe+tWhvpgAC2HIBlB7hVOsSRE87yPepRX25Q12zeRLwTQTUA1gsUlEc2R2QM9IsA6AlSG43wkQcoC9hGfk5UjOSfqvgs4ruw4iTXlUDDAem6VmtbGsJhbwDf9c5hy0dQsMAKsSgXiXRZmWmvrTCbKGkN73C/vqvwkcHSP15OJs4z6ZVun7MOliDwmpLlY4X8YAQ==",
+        "thinking": "The issue is in `helper_b`: `skb + 1` passes a modified context pointer (skb + 192 bytes, since sizeof(struct __sk_buff) = 192) to `helper_c`, which tries to dereference it. The verifier doesn't allow dereferencing a modified ctx pointer.\n\nThe fix is to pass `skb` instead of `skb + 1` to `helper_c`.",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nIn `helper_b`, the call `helper_c(val, skb + 1)` passes a **pointer-arithmetic-modified** context pointer (`skb + 1`, which the compiler turns into `skb + 192` since `sizeof(struct __sk_buff) == 192`). The BPF verifier tracks this as `ctx(imm=192)` and refuses to let `helper_c` dereference it because dereferencing an offset/modified `ctx` pointer is not allowed \u2014 you must always pass the original, unmodified context pointer.\n\nThe verifier message confirms this:\n```\n21: (07) r6 += 192                    ; R6=ctx(imm=192)\n...\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\n## Fix\n\nChange `skb + 1` to `skb` in `helper_b`:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n```\n\nThis passes the unmodified context pointer to `helper_c`, which the verifier will accept.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01Fyn4pvGkSoCtkL1wQ9tQrS",
+    "model": "claude-sonnet-4-6",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 996,
+      "output_tokens": 403,
+      "output_tokens_details": {
+        "thinking_tokens": 109
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": "The issue is in `helper_b`: `skb + 1` passes a modified context pointer (skb + 192 bytes, since sizeof(struct __sk_buff) = 192) to `helper_c`, which tries to dereference it. The verifier doesn't allow dereferencing a modified ctx pointer.\n\nThe fix is to pass `skb` instead of `skb + 1` to `helper_c`."
+}

@@ -1,0 +1,57 @@
+The verifier failure is due to the eBPF per-call-chain stack limit.
+
+Each BPF subprogram gets its own stack frame, but the verifier also enforces a maximum combined stack depth of 512 bytes across nested calls. In this program, both `helper_b()` and `helper_c()` allocate:
+
+```c
+volatile char buf[MAX_STACK] = {};
+```
+
+with:
+
+```c
+#define MAX_STACK 260
+```
+
+That array, plus compiler-generated spills/alignment, makes each of those frames about 272 bytes. The failing call chain is:
+
+```text
+entry -> helper_c -> helper_b
+```
+
+So the combined stack usage is approximately:
+
+```text
+helper_c frame: 272 bytes
+helper_b frame: 272 bytes
+total:          544 bytes
+```
+
+which exceeds the verifier’s 512-byte combined stack limit.
+
+The smallest likely source-level fix is to reduce the local buffer size so that each of those frames fits within 256 bytes after compiler spill/alignment overhead. Since there appears to be roughly 8 bytes of extra frame usage, reducing `MAX_STACK` from `260` to `248` should bring each frame down to about 256 bytes, making the worst nested chain:
+
+```text
+256 + 256 = 512
+```
+
+which should satisfy the verifier.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -2,7 +2,7 @@
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ 
+-#define MAX_STACK 260
++#define MAX_STACK 248
+ 
+ static __attribute__((noinline))
+ int helper_a(int val, struct __sk_buff *skb)
+```
+
+Why this should pass: it reduces the stack frame size of `helper_b()`, `helper_c()`, and `helper_d()` enough that the deepest relevant nested call chain no longer exceeds the verifier’s 512-byte combined stack depth limit.

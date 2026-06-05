@@ -1,0 +1,26 @@
+The verifier failure occurs because storing a byte at `r10 - 7` overwrites part of the context pointer stored at `r10 - 8`, causing the verifier to mark the stack slot as an invalid scalar type. When later loading from this slot and dereferencing it (`*(u64*)(r0 + 8)`), the verifier rejects because `r0` is no longer a valid pointer.
+
+### Fix
+Move the byte store to a separate stack location (`r10 - 16`) to avoid corrupting the context pointer:
+
+```patch
+--- a.c
++++ b.c
+@@ -5,7 +5,7 @@
+ {
+ 	asm volatile ("					\
+ 	*(u64*)(r10 - 8) = r1;				\
+ 	r0 = 0x23;					\
+-	*(u8*)(r10 - 7) = r0;				\
++	*(u8*)(r10 - 16) = r0;				\
+ 	r0 = *(u64*)(r10 - 8);				\
+ 	r0 = *(u64*)(r0 + 8);				\
+ 	exit;						\
+```
+
+### Explanation
+- **Original issue**: Storing a byte at `r10 - 7` partially overwrites the 8-byte context pointer at `r10 - 8`, making the pointer invalid.
+- **Fix**: Storing the byte at `r10 - 16` uses a new stack slot, preserving the context pointer's integrity.
+- **Why it works**: The context pointer remains unmodified at `r10 - 8`, so when reloaded, the verifier still recognizes it as a valid pointer for dereferencing.
+
+This change maintains the program's functionality while satisfying the verifier's type safety requirements.

@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Explanation of the Verifier Failure\n\nThe verifier rejects this program because of an invalid pointer arithmetic operation on a context (`ctx`) pointer.\n\n**Root cause:** In `helper_b()`, the code performs `skb + 1` when calling `helper_c()`:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\nThis translates to pointer arithmetic: `R6 += 192` (since `sizeof(struct __sk_buff)` is 192 bytes). The verifier log shows:\n\n```\n21: (07) r6 += 192                    ; R6=ctx(imm=192)\n22: (bc) w1 = w7\n23: (bf) r2 = r6                      ; R2=ctx(imm=192)\n24: (85) call pc+2\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\nThe verifier explicitly forbids dereferencing a context pointer that has been modified via arithmetic. Context pointers must be passed unmodified to functions. The offset `imm=192` indicates the pointer has been adjusted, which is not allowed.\n\n## Fix\n\nThe simplest fix is to pass `skb` directly instead of `skb + 1`:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n```\n\n**Why this works:** By removing the pointer arithmetic (`skb + 1`), the context pointer remains unmodified and can be safely passed to `helper_c()`. The verifier will then accept the call since the pointer is in its original form.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-010-legacy.txt",
+    "case_id": "case-010",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 2233,
+    "prompt_path": "public/case-010/prompt_legacy.md",
+    "prompt_sha256": "42cb94c19ecff9212d01b745ca76ad135db7dce4e6c15eefc8d6cb8a521dd385",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-010-legacy.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "65cb458d-3543-490a-a75f-377ec2e7a230",
+    "started_at": "2026-06-05T03:19:01+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000995,
+    "output_cost_usd": 0.002075,
+    "total_cost_usd": 0.00307
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 995,
+    "output_tokens": 415,
+    "raw_usage": {
+      "completion_tokens": 415,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.00307,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002075,
+        "upstream_inference_cost": 0.00307,
+        "upstream_inference_prompt_cost": 0.000995
+      },
+      "is_byok": false,
+      "prompt_tokens": 995,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1410
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1410
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation of the Verifier Failure\n\nThe verifier rejects this program because of an invalid pointer arithmetic operation on a context (`ctx`) pointer.\n\n**Root cause:** In `helper_b()`, the code performs `skb + 1` when calling `helper_c()`:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\nThis translates to pointer arithmetic: `R6 += 192` (since `sizeof(struct __sk_buff)` is 192 bytes). The verifier log shows:\n\n```\n21: (07) r6 += 192                    ; R6=ctx(imm=192)\n22: (bc) w1 = w7\n23: (bf) r2 = r6                      ; R2=ctx(imm=192)\n24: (85) call pc+2\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\nThe verifier explicitly forbids dereferencing a context pointer that has been modified via arithmetic. Context pointers must be passed unmodified to functions. The offset `imm=192` indicates the pointer has been adjusted, which is not allowed.\n\n## Fix\n\nThe simplest fix is to pass `skb` directly instead of `skb + 1`:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n```\n\n**Why this works:** By removing the pointer arithmetic (`skb + 1`), the context pointer remains unmodified and can be safely passed to `helper_c()`. The verifier will then accept the call since the pointer is in its original form.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629541,
+    "id": "gen-1780629541-XFJyeCxIkEQmAnRIaqA2",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 415,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.00307,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002075,
+        "upstream_inference_cost": 0.00307,
+        "upstream_inference_prompt_cost": 0.000995
+      },
+      "is_byok": false,
+      "prompt_tokens": 995,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1410
+    }
+  },
+  "reasoning_content": ""
+}

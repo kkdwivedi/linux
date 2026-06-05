@@ -1,0 +1,50 @@
+The verifier is rejecting the program because `bpf_copy_from_user()` is a sleepable helper. Even though the program section is sleepable (`fentry.s`), the code calls it while inside a non-preemptible region created by:
+
+```c
+bpf_preempt_disable();
+...
+bpf_preempt_enable();
+```
+
+The verifier tracks that state and rejects instruction 5:
+
+```text
+sleepable helper bpf_copy_from_user#148 in non-preemptible region
+```
+
+`bpf_preempt_enable()` is after the helper call, so it is too late.
+
+Smallest fix: do not call `bpf_copy_from_user()` while preemption is disabled. Move the enable before the helper, or remove the preempt disable/enable pair entirely if it is not needed.
+
+A minimal patch preserving both preempt calls is:
+
+```diff
+ SEC("?fentry.s/sys_getpgid")
+ int entry(void *ctx)
+ {
+ 	u32 data;
+ 
+ 	bpf_preempt_disable();
+-	bpf_copy_from_user(&data, sizeof(data), NULL);
+ 	bpf_preempt_enable();
++	bpf_copy_from_user(&data, sizeof(data), NULL);
+ 	return 0;
+ }
+```
+
+Alternatively, if the preempt-disabled region is unnecessary, the cleaner fix is:
+
+```diff
+ SEC("?fentry.s/sys_getpgid")
+ int entry(void *ctx)
+ {
+ 	u32 data;
+ 
+-	bpf_preempt_disable();
+ 	bpf_copy_from_user(&data, sizeof(data), NULL);
+-	bpf_preempt_enable();
+ 	return 0;
+ }
+```
+
+Either way, the key requirement is that the sleepable helper must be called only when the verifier state is preemptible.

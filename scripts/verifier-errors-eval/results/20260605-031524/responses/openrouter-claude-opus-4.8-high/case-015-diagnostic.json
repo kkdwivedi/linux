@@ -1,0 +1,118 @@
+{
+  "answer_text": "## Explanation\n\nThe verifier failure is a packet-pointer invalidation problem.\n\nIn `entry()` you:\n1. Load `p` from `sk->data` (a packet pointer, `R7=pkt`).\n2. Bounds-check it against `sk->data_end` \u2014 this marks `R7` as a valid, readable packet pointer.\n3. Call `helper_a(sk, 0)`.\n4. Dereference `*p = 42`.\n\nThe key fact is what `helper_a` eventually does: it calls `bpf_skb_pull_data()`. That helper can **reallocate / move the skb's linear data**, so any previously obtained `sk->data` pointer becomes stale. The verifier knows this and, after the call, invalidates all packet pointers held in registers \u2014 turning `R7` from `pkt(r=4)` into a plain scalar:\n\n```\n8: (85) call pc+4\n   ... invalidated: R7: packet data may have moved ...\n10: (63) *(u32 *)(r7 +0) = r1\nR7 invalid mem access 'scalar'\n```\n\nSo at line `*p = 42;`, `R7` is no longer a pointer and the store is rejected.\n\n(Even though `helper_a`/`helper_b` are global functions assumed valid, the verifier still conservatively assumes anything that can touch the skb may have moved the packet data.)\n\n## Fix\n\nReload and re-validate the packet pointer **after** the helper call, before dereferencing it. The smallest source change is to reorder so the load + bounds check happen after `helper_a()`:\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p;\n\n\thelper_a(sk, 0);\n\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nNow `p` is derived from `sk->data` and bounds-checked *after* the call that could move packet data, so `R7` is a fresh, validated packet pointer when `*p = 42` executes, and the verifier accepts the store.\n\nIf the original ordering (check before the call) must be preserved for logic reasons, the equivalent fix is to simply re-read `sk->data`/`sk->data_end` and re-run the bounds check after `helper_a()`; you cannot rely on the pre-call validation surviving across a call that may pull skb data.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-opus-4.8-high/case-015-diagnostic.txt",
+    "case_id": "case-015",
+    "model": "anthropic/claude-opus-4.8",
+    "profile": "openrouter-claude-opus-4.8-high",
+    "prompt_bytes": 3663,
+    "prompt_path": "public/case-015/prompt_diagnostic.md",
+    "prompt_sha256": "f4ee93633090707b3340ee048a1cd9c29849370062dafdfa25c31c23d9df8821",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-opus-4.8-high/case-015-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "d4792b8b-8ca2-4b79-8b46-24903d8cc58b",
+    "started_at": "2026-06-05T03:18:30+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00851,
+    "output_cost_usd": 0.02855,
+    "total_cost_usd": 0.037059999999999996
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1702,
+    "output_tokens": 1142,
+    "raw_usage": {
+      "completion_tokens": 1142,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 80
+      },
+      "cost": 0.03706,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.02855,
+        "upstream_inference_cost": 0.03706,
+        "upstream_inference_prompt_cost": 0.00851
+      },
+      "is_byok": false,
+      "prompt_tokens": 1702,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 2844
+    },
+    "reasoning_content_chars": 318,
+    "reasoning_tokens": 80,
+    "total_tokens": 2844
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation\n\nThe verifier failure is a packet-pointer invalidation problem.\n\nIn `entry()` you:\n1. Load `p` from `sk->data` (a packet pointer, `R7=pkt`).\n2. Bounds-check it against `sk->data_end` \u2014 this marks `R7` as a valid, readable packet pointer.\n3. Call `helper_a(sk, 0)`.\n4. Dereference `*p = 42`.\n\nThe key fact is what `helper_a` eventually does: it calls `bpf_skb_pull_data()`. That helper can **reallocate / move the skb's linear data**, so any previously obtained `sk->data` pointer becomes stale. The verifier knows this and, after the call, invalidates all packet pointers held in registers \u2014 turning `R7` from `pkt(r=4)` into a plain scalar:\n\n```\n8: (85) call pc+4\n   ... invalidated: R7: packet data may have moved ...\n10: (63) *(u32 *)(r7 +0) = r1\nR7 invalid mem access 'scalar'\n```\n\nSo at line `*p = 42;`, `R7` is no longer a pointer and the store is rejected.\n\n(Even though `helper_a`/`helper_b` are global functions assumed valid, the verifier still conservatively assumes anything that can touch the skb may have moved the packet data.)\n\n## Fix\n\nReload and re-validate the packet pointer **after** the helper call, before dereferencing it. The smallest source change is to reorder so the load + bounds check happen after `helper_a()`:\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p;\n\n\thelper_a(sk, 0);\n\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nNow `p` is derived from `sk->data` and bounds-checked *after* the call that could move packet data, so `R7` is a fresh, validated packet pointer when `*p = 42` executes, and the verifier accepts the store.\n\nIf the original ordering (check before the call) must be preserved for logic reasons, the equivalent fix is to simply re-read `sk->data`/`sk->data_end` and re-run the bounds check after `helper_a()`; you cannot rely on the pre-call validation surviving across a call that may pull skb data.",
+          "reasoning": " The problem is that calling a global function like helper_a can invalidate packet pointers if it eventually calls something like bpf_skb_pull_data that modifies packet data, so the previously validated pointer becomes stale. The solution is to reload and revalidate the packet pointer after the helper call completes.",
+          "reasoning_details": [
+            {
+              "format": "anthropic-claude-v1",
+              "index": 0,
+              "signature": "EooICmMIDhgCKkBIiwFDQiIs8Jcas6TXf2FRfaMvF6eER54GitYDB8JShy5FKSRDULkYfbzkzvDBTyyoZvtk8CJ6B0rplQf6hMS7Mg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDELAUgmASNqSDGXpnhoMapqvOgoXfb/DdcVdIjBrUVqXFE2oTQTKNrTLObaWtOXdf3n29POL7qKDgvd+o/lBQ2pp/oVTs+IEUsvQqrYq1AYpBdfJD8PJH7qVFePxN+g3NjBGigpRXO9VXPA9ULpl2K7Fzm4uw0PPU/mRnwcNVv29C9Pxgop9+sbi0bkCeU4NZseRpkjHQyLWuJT60Ulq00u2naTzWeczy/teLrXPeAVvHd8rZAd7cWQg+C58gBrdLWDDBFaNQp4MJI8GNcMarzT8w8Y2ATKW2Zs7nf447gGyk6+0NT5rOpwutEyoK4/T7vwEVHdrd+y+/HwTKMFiD/ekq8aIAA7zBGaasL9PUa66h8idjs7iXYsmDRX98AaZZTu2T5QufeMg/YuWvxi5BvtpL9CdnypttBTJY1M2XM8wIKeePLT6G1267euzu/tWYZJXNj4NfqOfIxAs2ER4CM8VLG8YpFigptg4iD8nDR4P95g3Q2TutXzetVqifoH1ADI7i+R6T4/5V9UWb7yxfnXZ8Ak8i0GJs1HelQJXpMC2BduyCZHOSZO+tPBXMMZQ5pA6VeOuzOwZi9wPhNCVzLu19DBcUUbZKAi69dYrVoBrp75rwI0CAXQpuMJX19I7EbCzG+prPU5wMWeLk3CMd3tbVLUUjjCBoANyWILIu9u20bdgXiI+V+Ihj5p4/NTf4qveU2y1yPPOet08G5VdXqSJmLA1I+W5ThhwdehDEMXFtvuHs2b0e1LSZXE4FYrZ0lBVESl1HWDVkQOiEDQ6iWwpbdI2i3Vh0AOc7jM8Td8/ECwqkzDPPmEMs39de8ImpR5MkS8E/s/ChJP7sjXtmO26cCj0DGm1Bxi5+8wAD/lt2YxkMu4IlhQFzeKKWWiNVLAqO4tnGgAJ/AD9ABH6r1aPp6Qzo+ZT73t2xyowBP9QOpeDqHNzseUvdxuEsiveK7VD0lnFjZFku1YLu5DUXDctTziGDgL7kff91P5/OOEbXxuIJ0SXZfKApPOAeU7ZyHXX3AxD+2/mwpQmmjak2mFSfv0dib46xg7ybgtKZvTkL9OABmaXk8NgsCrhJbZi8R9mp2jZLto3xgMhFnD9f0HkbTU3NAaH+iOZC/wYc0duE5oHaIlot9NA95cDNTqZ0S1XucF7nt0G1XWGwg8Xlgn5mo+D+K4JjFky6k6H2tAMT580NsOskbKl2KcKpM4FmHO14QCDw1nTvPdWn1U0hgY+jFMYAQ==",
+              "text": " The problem is that calling a global function like helper_a can invalidate packet pointers if it eventually calls something like bpf_skb_pull_data that modifies packet data, so the previously validated pointer becomes stale. The solution is to reload and revalidate the packet pointer after the helper call completes.",
+              "type": "reasoning.text"
+            }
+          ],
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629510,
+    "id": "gen-1780629510-IpISlLehSwaUDrgPWwC8",
+    "model": "anthropic/claude-4.8-opus-20260528",
+    "object": "chat.completion",
+    "provider": "Anthropic",
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1142,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 80
+      },
+      "cost": 0.03706,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.02855,
+        "upstream_inference_cost": 0.03706,
+        "upstream_inference_prompt_cost": 0.00851
+      },
+      "is_byok": false,
+      "prompt_tokens": 1702,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 2844
+    }
+  },
+  "reasoning_content": " The problem is that calling a global function like helper_a can invalidate packet pointers if it eventually calls something like bpf_skb_pull_data that modifies packet data, so the previously validated pointer becomes stale. The solution is to reload and revalidate the packet pointer after the helper call completes."
+}

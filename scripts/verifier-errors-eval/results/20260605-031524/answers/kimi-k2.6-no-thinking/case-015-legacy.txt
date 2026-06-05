@@ -1,0 +1,71 @@
+Looking at this verifier failure, I need to understand what's happening with the packet pointer tracking across function calls.
+
+## Analysis of the Verifier Failure
+
+The key issue is in the verifier log at instruction 10:
+```
+10: (63) *(u32 *)(r7 +0) = r1
+R7 invalid mem access 'scalar'
+```
+
+Let's trace through what's happening:
+
+1. At instruction 2: `r7 = *(u32 *)(r1 +76)` - R7 gets `sk->data`, which is typed as `pkt(r=0)` (packet pointer with read size 0)
+2. At instructions 3-5: Bounds check `if r3 > r2 goto pc+5` - this checks `p + 1 <= data_end`, and when we fall through, R3 becomes `pkt(r=4,imm=4)` (packet pointer with 4 bytes readable)
+3. However, **R7 still remains `pkt(r=0)`** - the bounds check was done on R3, not R7!
+
+Wait, let me re-check. Actually looking more carefully at instruction 5: `R3=pkt(r=4,imm=4)` and R7 was `R7=pkt(r=0)` at instruction 3, but after the branch, R7 should still be tracked. 
+
+Actually, the real issue is: after instruction 5, R6=0 means we passed the check. But R7's type is still `pkt(r=0)` - it didn't get updated to `pkt(r=4)`. The verifier tracks packet pointers precisely, and the arithmetic was done on R3 (a copy), not R7.
+
+But wait - there's another critical issue. At instruction 8, we call `helper_a(sk, 0)`. This is a **non-inlined helper call** that eventually calls `bpf_skb_pull_data`. 
+
+The problem: **`bpf_skb_pull_data` can invalidate packet pointers** because it may reallocate the packet buffer. After calling `helper_a` → `helper_b` → `bpf_skb_pull_data`, the verifier **must assume that all packet pointers (like `sk->data`) are invalidated** because the packet buffer could have been reallocated.
+
+The verifier marks R7 as `scalar` (untrusted integer) after the helper call because:
+- `bpf_skb_pull_data` is a packet data helper that can change `sk->data` and `sk->data_end`
+- The verifier cannot track that `p` still points to valid packet memory after this potential reallocation
+
+## The Fix
+
+The fix is to **re-read `sk->data` and re-do the bounds check AFTER the helper call**, not before. The pointer `p` obtained before `bpf_skb_pull_data` is potentially stale.
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+__noinline long helper_b(struct __sk_buff *sk, __u32 len)
+{
+	return bpf_skb_pull_data(sk, len);
+}
+
+__noinline long helper_a(struct __sk_buff *sk, __u32 len)
+{
+	return helper_b(sk, len);
+}
+
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	helper_a(sk, 0);
+
+	int *p = (void *)(long)sk->data;
+
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+## Why This Fix Works
+
+By moving the `helper_a(sk, 0)` call **before** reading `sk->data`, we ensure that:
+
+1. Any potential packet reallocation by `bpf_skb_pull_data` happens first
+2. We then read the fresh, valid `sk->data` pointer after the helper returns
+3. The bounds check is performed on the current, valid pointer
+4. The verifier can track that `p` is a valid packet pointer with proper bounds at the time of dereference
+
+The original code had a classic bug: using a packet pointer across a call to `bpf_skb_pull_data`, which is explicitly documented as potentially invalidating such pointers.

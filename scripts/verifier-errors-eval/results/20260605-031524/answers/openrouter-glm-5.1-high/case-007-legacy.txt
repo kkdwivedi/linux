@@ -1,0 +1,38 @@
+## Verifier Failure Explanation
+
+The verifier rejects the program because `slice_len` is a global variable (`__u32 slice_len = sizeof(struct ethhdr)`), which the verifier reads from a BPF map value. This makes `R4` an **unbounded scalar** (`smin=0, smax=umax=0xffffffff, var_off=(0x0; 0xffffffff)`). The `bpf_dynptr_slice` helper requires that the length argument (R4) be bounded so the verifier can validate the `R3/R4 memory/len pair`. Since the verifier cannot prove `slice_len` fits within the provided buffer, it rejects the call with:
+
+> "R4 unbounded memory access, use 'var &= const' or 'if (var < const)'"
+
+## Proposed Fix
+
+Add a bounds check on `slice_len` before passing it to `bpf_dynptr_slice`. This constrains the scalar to a range the verifier can validate against the buffer size:
+
+```c
+SEC("?tc")
+int entry(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+	struct ethhdr *hdr;
+	char buffer[sizeof(*hdr)] = {};
+
+	bpf_dynptr_from_skb(skb, 0, &ptr);
+
+	if (slice_len > sizeof(buffer))
+		return SK_DROP;
+
+	hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
+	if (!hdr)
+		return SK_DROP;
+
+	return SK_PASS;
+}
+```
+
+The `if (slice_len > sizeof(buffer)) return SK_DROP;` check tells the verifier that on the path reaching `bpf_dynptr_slice`, `slice_len` is at most `sizeof(buffer)` (14 bytes), which is within the stack buffer's allocation. This satisfies the verifier's requirement for a bounded length argument.
+
+**Alternative (even simpler):** Replace `slice_len` with the compile-time constant `sizeof(*hdr)` directly in the call:
+```c
+hdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(*hdr));
+```
+This eliminates the unbounded scalar entirely, but loses the ability to configure the slice length via the global variable.

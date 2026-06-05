@@ -1,0 +1,58 @@
+## Explanation of the Verifier Failure
+
+The verifier is detecting a **resource leak** of the second dynptr (`ptr2`). Here's what happens:
+
+1. **Line 100**: `ptr1` is reserved (resource id=2)
+2. **Line 101**: `ptr2` is reserved (resource id=3)
+3. **Line 103**: `bpf_dynptr_data(&ptr1, ...)` is called
+4. **Line 104**: If `sample` is NULL, both `ptr1` and `ptr2` are discarded in the error path
+5. **Line 110**: `ptr1` is submitted in the success path
+6. **Problem**: `ptr2` is never released in the success path (lines 110-111)
+
+The verifier tracks that `ptr2` (id=3) was acquired at instruction 14 but is never released before the program exits at instruction 34. The success path only submits `ptr1` but leaves `ptr2` unreleased.
+
+## Fix
+
+The smallest fix is to discard `ptr2` in the success path before returning:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+struct sample {
+	__u64 value;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 4096);
+} ringbuf SEC(".maps");
+
+SEC("?raw_tp")
+int entry(void *ctx)
+{
+	struct bpf_dynptr ptr1, ptr2;
+	struct sample *sample;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);
+
+	sample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));
+	if (!sample) {
+		bpf_ringbuf_discard_dynptr(&ptr1, 0);
+		bpf_ringbuf_discard_dynptr(&ptr2, 0);
+		return 0;
+	}
+
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+
+	return 0;
+}
+```
+
+**Change**: Add `bpf_ringbuf_discard_dynptr(&ptr2, 0);` after the `bpf_ringbuf_submit_dynptr(&ptr1, 0);` call (line 110).
+
+**Why this works**: Every code path now properly releases both dynptrs:
+- Error path: both discarded
+- Success path: `ptr1` submitted, `ptr2` discarded

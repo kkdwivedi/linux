@@ -1,0 +1,48 @@
+## Explanation
+
+`bpf_res_spin_lock`/`unlock` require **LIFO** (last-in, first-out) release order. In your code the locks are taken in the order `lock_a` then `lock_b`, so they must be released `lock_b` then `lock_a`.
+
+But the success path does the opposite:
+
+```c
+bpf_res_spin_unlock(&lock_a);   /* wrong: a is the *outer* lock */
+bpf_res_spin_unlock(&lock_b);
+```
+
+Because both the error-branch `unlock(lock_a)` and this `unlock(lock_a)` release the same lock, the compiler hoisted/merged the `lock_a` unlock to before the `w6` check (insn 10). On the path where `lock_b` was successfully acquired (`w0 == 0`), the verifier sees `unlock(lock_a)` executed while `lock_b` is still the top of the lock stack — hence:
+
+```
+bpf_res_spin_unlock cannot be out of order
+```
+
+The root cause is simply that the final unlock order is not LIFO.
+
+## Fix
+
+Swap the two final unlocks so the inner lock (`lock_b`) is released first:
+
+```c
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+```
+
+Full corrected function:
+
+```c
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```
+
+Now every release path matches LIFO order: the failure branch only holds `lock_a` and releases it, and the success path releases `lock_b` then `lock_a`, satisfying the verifier's resource-lifetime check.

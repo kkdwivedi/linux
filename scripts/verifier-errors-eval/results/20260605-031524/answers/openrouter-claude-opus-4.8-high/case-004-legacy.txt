@@ -1,0 +1,33 @@
+## Explanation
+
+`helper_a()` is a global (non-static) function, so the verifier validates it **in isolation**, without knowing anything about its callers. When it sees a pointer argument to a fixed-size struct, it types that argument as `PTR_TO_MEM_OR_NULL` (`mem_or_null` in the log):
+
+```
+7: R1=mem_or_null(id=1,sz=4) R10=fp0
+```
+
+The `_OR_NULL` part means the verifier must assume the pointer *could* be NULL. Before any such pointer can be dereferenced, the program must prove it is non-NULL with an explicit comparison. Here the code dereferences it directly:
+
+```
+10: (61) r2 = *(u32 *)(r6 +0)
+R6 invalid mem access 'mem_or_null'
+```
+
+Since `r6` (a copy of the argument `s`) still has the `_OR_NULL` flag, the load is rejected.
+
+## Fix
+
+Add an explicit NULL check before dereferencing `s`. This clears the `_OR_NULL` flag on the verified path.
+
+```c
+__noinline int helper_a(const struct Item *s)
+{
+	if (!s)
+		return 0;
+	return bpf_get_prandom_u32() < s->x;
+}
+```
+
+After `if (!s) return 0;`, on the fall-through path the verifier knows `s` is a plain `PTR_TO_MEM` (no NULL), so `*(u32 *)(s + 0)` becomes a valid access.
+
+(Alternatively, making the function `static` so it is inlined would also work, because then the verifier sees the concrete stack pointer `&s` passed from `entry()`, which is known non-NULL. But the minimal, robust source-level fix is the explicit NULL check above, which is also what global-function semantics expect.)

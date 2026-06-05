@@ -1,0 +1,92 @@
+{
+  "answer_text": "## What the log is telling you\n\nThe verifier dies here:\n\n```\nliveness analysis exceeded complexity limit (10001 calls)\nprocessed 0 insns ...\n```\n\nThis is **not** a \"bad instruction / invalid access\" failure. The program is logically fine. The problem is pure *complexity*: the test builds a fan-out call tree that is both very wide and fairly deep.\n\nEach `CALLS_50()` emits 50 `call` instructions to the next helper, and the helpers are chained:\n\n```\nentry \u2192 helper_a \u2192 helper_b \u2192 helper_c \u2192 helper_d \u2192 helper_e \u2192 helper_f \u2192 helper_g\n```\n\nwith **50 call sites at every level**. Because BPF subprogs are verified per call-state, the number of distinct call paths grows like `50^7`, and the register/stack **liveness propagation** that walks back up the parent-frame chain blows past the hard `10000`-call liveness limit (`propagate_liveness()` recursion). The loop you see in the log \u2014 `subprog#7 helper_g \u2026 analyzing (depth 7)` repeated thousands of times \u2014 is exactly this liveness walk hitting the ceiling.\n\nSo the verifier never even gets to \"process\" insns (`processed 0 insns`); it aborts during liveness bookkeeping.\n\n## Smallest source-level fix\n\nYou have to bring the total work below the liveness limit. Two equivalent levers exist: **breadth** (how many calls per level) and **depth** (how many nested helper levels). The cheapest single edit is to cut the breadth, since it appears at every level and dominates the `width^depth` product.\n\nReduce the fan-out macro, e.g. from 50 to 10 calls per level:\n\n```c\n/* before */\n#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n\n/* after: keep the same name/uses, just shrink the body */\n#define CALLS_50(fn) CALLS_10(fn)\n```\n\n(or define a new `CALLS_10`-based macro and use it everywhere). This keeps the structure identical but collapses the path explosion from `50^7` to `10^7`, and more importantly slashes the liveness-propagation call count below `10001`.\n\nIf 10 still trips the limit on your kernel, drop the **depth** as well \u2014 remove one or two of the intermediate helpers (e.g. let `entry` call `helper_c` directly, deleting `helper_a`/`helper_b`), since each removed level divides the work by the fan-out factor.\n\n### Why this satisfies the verifier\nThe failure is solely the liveness-analysis complexity guard, not a correctness rule. Lowering the multiplicative number of distinct call paths (fewer calls per level and/or fewer nesting levels) keeps the cumulative `propagate_liveness` call count under the 10000 hard limit, so verification proceeds and the trivially-correct `r0 = 0; exit;` bodies pass.\n\nIf the *intent* of the test is actually to demonstrate hitting this limit, then the \"fix\" is instead to mark it as an expected-failure case (e.g. add the `__failure __msg(\"liveness analysis exceeded complexity limit\")` annotation) rather than expecting it to load \u2014 but given the task says \"make it pass verification,\" shrinking the fan-out as above is the minimal change.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-020-legacy.txt",
+    "case_id": "case-020",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 6158,
+    "prompt_path": "public/case-020/prompt_legacy.md",
+    "prompt_sha256": "cecfa6936349490d4b7bd2b0131df3ba133333894cfcdcc4438f6f6f0196b689",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-020-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "6fcd37a6-35fe-4b0a-81bd-12ec00b25c92",
+    "started_at": "2026-06-05T03:17:27+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.018275,
+    "output_cost_usd": 0.065,
+    "total_cost_usd": 0.083275
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 3655,
+    "output_tokens": 2600,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 3655,
+      "output_tokens": 2600,
+      "output_tokens_details": {
+        "thinking_tokens": 1493
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 6255
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "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",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## What the log is telling you\n\nThe verifier dies here:\n\n```\nliveness analysis exceeded complexity limit (10001 calls)\nprocessed 0 insns ...\n```\n\nThis is **not** a \"bad instruction / invalid access\" failure. The program is logically fine. The problem is pure *complexity*: the test builds a fan-out call tree that is both very wide and fairly deep.\n\nEach `CALLS_50()` emits 50 `call` instructions to the next helper, and the helpers are chained:\n\n```\nentry \u2192 helper_a \u2192 helper_b \u2192 helper_c \u2192 helper_d \u2192 helper_e \u2192 helper_f \u2192 helper_g\n```\n\nwith **50 call sites at every level**. Because BPF subprogs are verified per call-state, the number of distinct call paths grows like `50^7`, and the register/stack **liveness propagation** that walks back up the parent-frame chain blows past the hard `10000`-call liveness limit (`propagate_liveness()` recursion). The loop you see in the log \u2014 `subprog#7 helper_g \u2026 analyzing (depth 7)` repeated thousands of times \u2014 is exactly this liveness walk hitting the ceiling.\n\nSo the verifier never even gets to \"process\" insns (`processed 0 insns`); it aborts during liveness bookkeeping.\n\n## Smallest source-level fix\n\nYou have to bring the total work below the liveness limit. Two equivalent levers exist: **breadth** (how many calls per level) and **depth** (how many nested helper levels). The cheapest single edit is to cut the breadth, since it appears at every level and dominates the `width^depth` product.\n\nReduce the fan-out macro, e.g. from 50 to 10 calls per level:\n\n```c\n/* before */\n#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n\n/* after: keep the same name/uses, just shrink the body */\n#define CALLS_50(fn) CALLS_10(fn)\n```\n\n(or define a new `CALLS_10`-based macro and use it everywhere). This keeps the structure identical but collapses the path explosion from `50^7` to `10^7`, and more importantly slashes the liveness-propagation call count below `10001`.\n\nIf 10 still trips the limit on your kernel, drop the **depth** as well \u2014 remove one or two of the intermediate helpers (e.g. let `entry` call `helper_c` directly, deleting `helper_a`/`helper_b`), since each removed level divides the work by the fan-out factor.\n\n### Why this satisfies the verifier\nThe failure is solely the liveness-analysis complexity guard, not a correctness rule. Lowering the multiplicative number of distinct call paths (fewer calls per level and/or fewer nesting levels) keeps the cumulative `propagate_liveness` call count under the 10000 hard limit, so verification proceeds and the trivially-correct `r0 = 0; exit;` bodies pass.\n\nIf the *intent* of the test is actually to demonstrate hitting this limit, then the \"fix\" is instead to mark it as an expected-failure case (e.g. add the `__failure __msg(\"liveness analysis exceeded complexity limit\")` annotation) rather than expecting it to load \u2014 but given the task says \"make it pass verification,\" shrinking the fan-out as above is the minimal change.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01T1M1AAJRvu11zeVvQWf4qb",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 3655,
+      "output_tokens": 2600,
+      "output_tokens_details": {
+        "thinking_tokens": 1493
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

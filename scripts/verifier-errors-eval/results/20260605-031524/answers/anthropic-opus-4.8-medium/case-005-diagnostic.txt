@@ -1,0 +1,45 @@
+## Explanation
+
+`bpf_copy_from_user()` is a **sleepable** helper — it may page-fault and sleep while copying from user memory. The program brackets the call with `bpf_preempt_disable()` / `bpf_preempt_enable()`, which creates a **non-preemptible critical section**. Sleeping inside a non-preemptible region is illegal, so the verifier rejects the call:
+
+```
+sleepable helper bpf_copy_from_user#148 in non-preemptible region
+```
+
+(The earlier `arg#0 reference type ... size cannot be determined` line is just BTF-noise from the `void *ctx` and is not the cause of the rejection.)
+
+## Fix
+
+Move the sleepable helper out of the preempt-disabled critical section (or drop the preempt bracketing entirely, since nothing here actually needs it). The smallest functional fix is to call the helper before disabling preemption (or after re-enabling it).
+
+```c
+SEC("?fentry.s/sys_getpgid")
+int entry(void *ctx)
+{
+	u32 data;
+
+	bpf_copy_from_user(&data, sizeof(data), NULL);
+
+	bpf_preempt_disable();
+	/* ... non-sleepable work only ... */
+	bpf_preempt_enable();
+	return 0;
+}
+```
+
+If the preempt section is irrelevant to the test's intent, you can simply remove the `bpf_preempt_disable()`/`bpf_preempt_enable()` pair:
+
+```c
+SEC("?fentry.s/sys_getpgid")
+int entry(void *ctx)
+{
+	u32 data;
+
+	bpf_copy_from_user(&data, sizeof(data), NULL);
+	return 0;
+}
+```
+
+Either way the sleepable `bpf_copy_from_user()` is no longer executed inside a non-preemptible region, satisfying the verifier's execution-context safety check.
+
+(Alternatively, if you must read user data inside the critical section, use a non-sleepable variant such as `bpf_probe_read_user()`, per the verifier's own suggestion.)

@@ -1,0 +1,36 @@
+Looking at the verifier log, the issue is clear:
+
+**Verifier Failure Explanation:**
+The problem occurs in the `helper_a` function when trying to access `s->x`. The verifier shows that register `R6` (which holds the pointer to the `struct Item`) has the type `mem_or_null(id=1,sz=4)`. The error "R6 invalid mem access 'mem_or_null'" indicates that the verifier cannot safely dereference this pointer because it might be NULL.
+
+The root cause is that the `__noinline` function `helper_a` receives a pointer parameter, but the verifier cannot guarantee that this pointer is valid when the function is called with a stack-allocated structure that's passed by reference.
+
+**Smallest Fix:**
+Remove the `__noinline` attribute. This will allow the compiler to inline the function, making the pointer access pattern visible to the verifier and eliminating the `mem_or_null` uncertainty.
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+struct Item {
+	int x;
+};
+
+int helper_a(const struct Item *s)
+{
+	return bpf_get_prandom_u32() < s->x;
+}
+
+SEC("cgroup_skb/ingress")
+int entry(struct __sk_buff *skb)
+{
+	const struct Item s = {.x = skb->len};
+
+	helper_a(&s);
+
+	return 1;
+}
+```
+
+**Why this works:**
+When the function is inlined, the verifier can see that `&s` is a valid stack pointer to a properly initialized structure, rather than an opaque pointer that might be null. The inlining eliminates the separate function context where the verifier loses track of the pointer's validity.

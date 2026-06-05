@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Lower MAX_STACK enough that the nested helper frames fit within 512 bytes.",
+    "Move large buffers out of nested helpers or reuse a smaller/shared buffer in a verifier-accepted way.",
+    "Restructure calls so helper_b and helper_c are not simultaneously on the stack with large local buffers."
+  ],
+  "canonical_fix": "Reduce stack use along the nested call chain or shorten the call chain so the combined stack depth is at or below the verifier limit.",
+  "case_id": "case-013",
+  "category": "Verifier Limit",
+  "difficulty": "medium",
+  "expected_explanation": "The call chain entry -> helper_c -> helper_b uses more than the verifier's combined call-stack depth limit. The large per-function stack buffers accumulate across nested bpf2bpf calls.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-013-legacy.txt",
+    "case_id": "case-013",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 1649,
+    "prompt_path": "public/case-013/prompt_legacy.md",
+    "prompt_sha256": "4d1d466cfe05bcf610e895dd892a6a1aa50e76dc1045f63dfca8de2da264bd35",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-013-legacy.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "4d41db73-c45f-4d41-b144-de97ee03494a",
+    "started_at": "2026-06-05T03:21:02+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "Looking at the verifier log, the issue is a \"combined stack size of 3 calls is 544. Too large\" error. This indicates that the verifier is rejecting the program due to excessive stack usage across the call chain.\n\nLet me analyze the stack usage:\n\n1. Each helper function allocates `volatile char buf[MAX_STACK]` where `MAX_STACK = 260` bytes\n2. The call chain in `entry()` function leads to nested calls that accumulate stack usage\n3. Looking at the call flow:\n   - `entry()` calls `helper_a()`, `helper_b()`, `helper_c()`, and `helper_d()`\n   - `helper_c()` calls `helper_b()` and `helper_d()`\n   - `helper_b()` calls `helper_a()`\n\nThe verifier is calculating the worst-case stack usage across the call graph and finding it exceeds limits.\n\nThe simplest fix is to reduce the stack allocation size in each function. Since the functions only actually use one byte (`buf[MAX_STACK - 1]`), we can significantly reduce the buffer size.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\n#define MAX_STACK 64\n\nstatic __attribute__((noinline))\nint helper_a(int val, struct __sk_buff *skb)\n{\n\tasm volatile (\"\");\n\treturn skb->len;\n}\n\n__attribute__((noinline))\nint helper_b(struct __sk_buff *skb)\n{\n\tvolatile char buf[MAX_STACK] = {};\n\t__sink(buf[MAX_STACK - 1]);\n\treturn helper_a(0, skb) + skb->len;\n}\n\nint helper_d(int val, struct __sk_buff *skb, int arg);\n\n__attribute__((noinline))\nint helper_c(int val, struct __sk_buff *skb)\n{\n\tvolatile char buf[MAX_STACK] = {};\n\t__sink(buf[MAX_STACK - 1]);\n\treturn helper_b(skb) + helper_d(val, skb, 1);\n}\n\n__attribute__((noinline))\nint helper_d(int val, struct __sk_buff *skb, int arg)\n{\n\tvolatile char buf[MAX_STACK] = {};\n\t__sink(buf[MAX_STACK - 1]);\n\treturn skb->ifindex * val * arg;\n}\n\nSEC(\"tc\")\nint entry(struct __sk_buff *skb)\n{\n\treturn helper_a(1, skb) + helper_b(skb) + helper_c(2, skb) + helper_d(3, skb, 4);\n}\n```\n\nThe fix reduces `MAX_STACK` from 260 to 64. This will reduce the total combined stack size from 544 bytes (3 \u00d7 260 + smaller amounts) to approximately 192 bytes (3 \u00d7 64 + smaller amounts), which should be within the verifier's limits while maintaining the same functionality since only one byte is actually used from each buffer.",
+  "must_mention": [
+    "Combined call-chain stack depth exceeds the verifier limit",
+    "Large local buffers in nested helpers are the cause",
+    "Fix must reduce stack usage or call depth"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds bounds checks around skb fields",
+    "Changes helper return arithmetic only",
+    "Reduces stack in a helper not on the reported call chain while leaving the chain over limit"
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Swap the two bpf_local_irq_restore calls.",
+    "Avoid nesting IRQ saves, if only one IRQ-disabled region is needed."
+  ],
+  "canonical_fix": "Restore flags2 first, then restore flags1.",
+  "case_id": "case-017",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program saves two nested IRQ flag states, then restores flags1 before flags2. IRQ-disabled regions must be restored in last-in, first-out order with the matching saved flag variable.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-glm-5.1-high/case-017-diagnostic.txt",
+    "case_id": "case-017",
+    "model": "z-ai/glm-5.1",
+    "profile": "openrouter-glm-5.1-high",
+    "prompt_bytes": 2781,
+    "prompt_path": "public/case-017/prompt_diagnostic.md",
+    "prompt_sha256": "675d45e8a367c50d949964d5e150f18c1e043733cbcf9e98094409311c602ad9",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-glm-5.1-high/case-017-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "6f1767ed-ff67-488d-8895-bdded756300e",
+    "started_at": "2026-06-05T03:21:40+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation\n\nThe verifier enforces that `bpf_local_irq_save`/`bpf_local_irq_restore` must follow strict LIFO (last-in, first-out) ordering \u2014 essentially a stack discipline for IRQ flag states.\n\nThe code saves in this order:\n1. `bpf_local_irq_save(&flags1)` \u2192 id=1\n2. `bpf_local_irq_save(&flags2)` \u2192 id=2\n\nBut then restores in the wrong order:\n1. `bpf_local_irq_restore(&flags1)` \u2192 expects id=2 (the most recently saved), but gets id=1 \u2192 **error**\n\nThe verifier expected the restore of id=2 (the last save) first, but instead got a restore of id=1.\n\n## Fix\n\nSwap the restore order so the most recently saved flags are restored first:\n\n```c\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);   // restore flags2 first (LIFO)\n\tbpf_local_irq_restore(&flags1);   // then flags1\n```\n\nThis is the minimal change \u2014 just swap lines 248 and 249. The save order remains the same, but the restores now follow the required reverse order, matching the verifier's LIFO expectation.",
+  "must_mention": [
+    "IRQ flags are nested",
+    "Restore order must be LIFO",
+    "flags2 is the currently active/latest save"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Restores flags1 twice",
+    "Deletes the second restore and leaves IRQ state active",
+    "Treats this as a spin-lock unlock order failure instead of IRQ flag restore order"
+  ]
+}

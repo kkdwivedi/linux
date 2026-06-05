@@ -1,0 +1,59 @@
+The verifier failure is a reference leak from `bpf_sk_lookup_tcp()`.
+
+`bpf_sk_lookup_tcp()` returns a referenced socket pointer in `r0`:
+
+```text
+19: call bpf_sk_lookup_tcp#84    ; R0=sock_or_null(id=2) refs=2
+```
+
+After that, the program branches on `r6`:
+
+```asm
+if r6 == 0 goto l1_%=;
+exit;
+```
+
+On the `r6 != 0` path, the program exits immediately without checking/releasing `r0`. Since `r0` may contain a referenced socket, the verifier rejects the program:
+
+```text
+Unreleased reference id=2 alloc_insn=19
+BPF_EXIT instruction in main prog would lead to reference leak
+```
+
+The existing release logic only runs on the `r6 == 0` path:
+
+```asm
+l1_%=: if r0 == 0 goto l2_%=;
+       r1 = r0;
+       call bpf_sk_release;
+l2_%=: exit;
+```
+
+So the smallest fix is to ensure the socket is released before every exit after `bpf_sk_lookup_tcp()`.
+
+A minimal source-level fix is to make the `r6 != 0` path release `r0` if it is non-NULL before exiting.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..1111111 100644
+--- a/case.c
++++ b/case.c
+@@ -25,8 +25,11 @@ __naked void entry(void)
+ 	r4 = 0;						\
+ 	r5 = 0;						\
+ 	call %[bpf_sk_lookup_tcp];			\
+-	if r6 == 0 goto l1_%=;				\
+-	exit;						\
++	if r6 == 0 goto l1_%=;				\
++	if r0 == 0 goto l2_%=;				\
++	r1 = r0;					\
++	call %[bpf_sk_release];				\
++	exit;						\
+ l1_%=:	if r0 == 0 goto l2_%=;				\
+ 	r1 = r0;					\
+ 	call %[bpf_sk_release];				\
+```
+
+With this change, both paths after `bpf_sk_lookup_tcp()` either see `r0 == 0` or call `bpf_sk_release(r0)` before exiting, satisfying the verifier’s reference-tracking rules.

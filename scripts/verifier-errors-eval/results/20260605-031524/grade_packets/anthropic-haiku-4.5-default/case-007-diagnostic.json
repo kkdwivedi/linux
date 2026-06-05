@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Replace slice_len with sizeof(buffer) or sizeof(*hdr) at the call site.",
+    "Add if (slice_len > sizeof(buffer)) return ...; before bpf_dynptr_slice.",
+    "Clamp or mask slice_len so the verifier proves it cannot exceed the stack buffer."
+  ],
+  "canonical_fix": "Make the slice length verifier-bounded to the fallback buffer size before the call, or pass a compile-time constant size that is no larger than the buffer.",
+  "case_id": "case-007",
+  "category": "Memory Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The dynptr slice fallback buffer is stack memory, but the length comes from a variable global value with no verifier-proven upper bound. The verifier cannot prove the memory/length pair stays within the fallback buffer.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-007-diagnostic.txt",
+    "case_id": "case-007",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 4340,
+    "prompt_path": "public/case-007/prompt_diagnostic.md",
+    "prompt_sha256": "d1d8d7dccaad3f83ecae6c603310091500168180bae26b21eb757e9dd3d1640d",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-007-diagnostic.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "ada42819-9561-46ca-951b-a9093eea8db1",
+    "started_at": "2026-06-05T04:21:45+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "# Analysis of the Verifier Failure\n\n## Root Cause\n\nThe verifier is rejecting the call to `bpf_dynptr_slice()` because:\n\n1. **Unbounded length (R4)**: The fourth argument `slice_len` is loaded from a global variable (`__u32 slice_len`), making it a `scalar` with unbounded value from the verifier's perspective. The verifier cannot verify that this length is safe.\n\n2. **Stack memory access concern**: The third argument (R3) is a stack pointer (`fp-32`), and when paired with an unbounded length in R4, the verifier cannot guarantee the access is within the buffer's bounds.\n\n3. **Contract violation**: The `bpf_dynptr_slice()` function requires either:\n   - A bounded length constant, or\n   - A verifiable constraint on the length (e.g., `if (len < MAX_LEN)`)\n\n## The Problem\n\n```c\n__u32 slice_len = sizeof(struct ethhdr);  // Global variable\n...\nhdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);  // slice_len is unbounded\n```\n\nThe global variable `slice_len` is loaded at runtime, and the verifier cannot prove it won't be larger than the buffer size (`sizeof(struct ethhdr)` = 14 bytes).\n\n## Solution\n\nReplace the global variable with a compile-time constant so the length is bounded:\n\n```c\n#define SLICE_LEN sizeof(struct ethhdr)\n```\n\nThen use it directly:\n\n```c\nhdr = bpf_dynptr_slice(&ptr, 0, buffer, SLICE_LEN);\n```\n\n## Patch\n\n```diff\n@@ -9,8 +9,6 @@ char _license[] SEC(\"license\") = \"GPL\";\n } ringbuf SEC(\".maps\");\n \n-__u32 slice_len = sizeof(struct ethhdr);\n+#define SLICE_LEN sizeof(struct ethhdr)\n \n SEC(\"?tc\")\n int entry(struct __sk_buff *skb)\n@@ -19,7 +17,7 @@ int entry(struct __sk_buff *skb)\n \tstruct ethhdr *hdr;\n \tchar buffer[sizeof(*hdr)] = {};\n \n \tbpf_dynptr_from_skb(skb, 0, &ptr);\n \n-\thdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);\n+\thdr = bpf_dynptr_slice(&ptr, 0, buffer, SLICE_LEN);\n \tif (!hdr)\n \t\treturn SK_DROP;\n```\n\nThis ensures the length is a compile-time constant that the verifier can reason about, satisfying the memory safety constraints.",
+  "must_mention": [
+    "R4/length is variable or unbounded",
+    "The fallback buffer has fixed stack size",
+    "Verifier needs a length upper bound before the call"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks the returned hdr pointer",
+    "Increases unrelated ringbuf size",
+    "Changes the dynptr source but leaves variable length unbounded"
+  ]
+}

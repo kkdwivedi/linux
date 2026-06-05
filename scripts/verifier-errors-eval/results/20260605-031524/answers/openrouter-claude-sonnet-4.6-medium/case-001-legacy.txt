@@ -1,0 +1,42 @@
+## Verifier Failure Explanation
+
+The verifier error is:
+```
+R1 type=scalar expected=fp
+```
+
+The `bpf_cpumask_populate` helper requires its first argument (`struct cpumask *`) to be a **frame-pointer–based address** (i.e., a pointer to stack-allocated memory). The original code initializes `invalid` from the literal `0x123456`:
+
+```c
+struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+```
+
+The compiler places this literal directly into R1 as a scalar constant, which the verifier rejects because it is not a stack address.
+
+## Fix
+
+Declare the cpumask on the stack so its address is a proper frame-pointer–relative reference:
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -9,9 +9,9 @@ char _license[] SEC("license") = "GPL";
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+-	u64 bits;
++	struct cpumask invalid = {};
++	u64 bits = 0;
+ 	int ret;
+ 
+-	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
++	ret = bpf_cpumask_populate(&invalid, &bits, sizeof(bits));
+ 	if (!ret)
+ 		return 2;
+```
+
+**Why this works:**  
+- `struct cpumask invalid` lives on the BPF stack, so `&invalid` produces an `fp`-relative pointer — exactly the type the verifier requires for R1.  
+- Initializing `bits = 0` avoids a potential "uninitialized stack read" rejection when the helper reads the bitmap buffer.  
+- No other semantic change is needed; the return-value logic and helper arguments (pointer to cpumask, bitmap buffer, buffer size) remain the same.

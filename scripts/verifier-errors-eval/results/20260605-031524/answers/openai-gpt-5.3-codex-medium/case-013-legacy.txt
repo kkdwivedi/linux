@@ -1,0 +1,44 @@
+The verifier error is about **call-chain stack depth**, not unsafe memory access:
+
+- `helper_b`, `helper_c`, and `helper_d` each allocate `volatile char buf[MAX_STACK]`.
+- With `MAX_STACK = 260`, each function frame gets rounded/aligned and ends up effectively around **272 bytes**.
+- In the nested call path (`entry -> helper_c -> helper_b`), the verifier sums active frames and gets:
+
+`~272 + ~272 = 544` bytes
+
+which exceeds the eBPF max combined stack of **512 bytes**.
+
+That matches:
+
+> `combined stack size of 3 calls is 544. Too large`
+
+### Smallest likely fix
+
+Reduce `MAX_STACK` so each frame is 256 bytes (after alignment/spills), making worst nested total `256 + 256 = 512`, which should pass.
+
+A one-line change is likely enough:
+
+```diff
+-#define MAX_STACK 260
++#define MAX_STACK 248
+```
+
+### Complete patch
+
+```diff
+diff --git a/prog.c b/prog.c
+index 1111111..2222222 100644
+--- a/prog.c
++++ b/prog.c
+@@ -2,7 +2,7 @@
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ 
+-#define MAX_STACK 260
++#define MAX_STACK 248
+ 
+ static __attribute__((noinline))
+ int helper_a(int val, struct __sk_buff *skb)
+```
+
+This is the minimal source-level edit that directly addresses the verifier complaint.

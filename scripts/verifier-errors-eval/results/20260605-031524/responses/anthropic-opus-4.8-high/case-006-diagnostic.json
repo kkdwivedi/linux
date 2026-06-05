@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nThe failure has nothing to do with register state or memory safety. It is a **helper-allowlist (policy) rejection**:\n\n```\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\n`bpf_ktime_get_coarse_ns()` is deliberately **not** exposed to tracing program types such as `kprobe` (also kretprobe, tracepoint, perf_event, raw_tp). The kernel restricts it (and the `bpf_timer_*` helpers) for tracing programs because these can fire from NMI/arbitrary contexts and the coarse-time read path uses a seqlock that could deadlock. So `get_func_proto` for the kprobe program type simply doesn\u2019t return a proto for this helper, and the verifier rejects the `call` at insn 0.\n\nThis is not a bug in the verifier logic you can satisfy with extra checks \u2014 the helper is fundamentally disallowed for `SEC(\"kprobe\")`.\n\n## Fix\n\nRun the program under a program type that *is* allowed to call `bpf_ktime_get_coarse_ns()` (e.g. networking program types like `tc`/`socket`, or `syscall`). The smallest source change is the section name:\n\n```c\nSEC(\"tc\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_coarse_ns];\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_coarse_ns)\n\t: __clobber_all);\n}\n```\n\n(Equivalently `SEC(\"socket\")` or `SEC(\"syscall\")`.) These program types include `bpf_ktime_get_coarse_ns` in their helper set, so the policy check passes and the trivial body (`r0 = 0; exit;`) verifies cleanly.\n\nIf the intent of the test is specifically to verify behavior *under a tracing program*, then the correct expectation is that this helper is rejected \u2014 in that case the test harness should mark it as an expected-failure rather than changing the code. But to make the program **pass verification**, switch it to a compatible program type as shown.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-006-diagnostic.txt",
+    "case_id": "case-006",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 1849,
+    "prompt_path": "public/case-006/prompt_diagnostic.md",
+    "prompt_sha256": "0c351f7275500308d5dd7e77f65459b6d00560f51ba8d1d768a521650bb1de73",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-006-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "e398493c-4f10-40cb-a6e4-ef6f52a93e36",
+    "started_at": "2026-06-05T03:17:31+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.004365,
+    "output_cost_usd": 0.03405,
+    "total_cost_usd": 0.038415
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 873,
+    "output_tokens": 1362,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 873,
+      "output_tokens": 1362,
+      "output_tokens_details": {
+        "thinking_tokens": 652
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 2235
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "Eo0NCmMIDhgCKkDgnVivo0JmxdO6pg6AfQyasTiGi4ytGgjWdLf2qALwBB034dY6Y+9h4creMh/unAq12fjkMut7Z4vYKmZPF8FGMg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDIPrvelQOSwYIzjd9xoMM8TRWmjrFD5lus27IjDAC6rvyLPHwKR2ihGwsJ0Akvi63AWbqzxqXg+KZr970sxQy8FepuKwjEZM7q50yZ4q1wtEXPUm7m9+NCb9ckUYKT8/Mxxz2kOwjpdy1i9OPUFboAaj+7b5ZfDuf9Vd2xaZdygkh6on8T/AE+4pe8xVfmTJmb2pXM/pH+xu7OaoUaT0jcVrOKNqDPMkQHxYx2Lkkj4QRUo2bbcS5qz0hU/cvynnqYZlmd26KZ4qpHKOqUzqxuLBgxFDerOO3p6GwWI2KMvxCwl9mP9WSXpjnrNHyP9dSeC1Fe6rKBuiSyUFRzu9b2XA+WTVwwZpG0R0aEp1+ngQTBqMmCx+eAunIoSp7qvZLyUPkhzz0OyoRKdM1uDB/13U6MUk+Wt4pdyOREk6KA7rErnhvh5iCTAwEeA/67jOG9VjUe9LL3G53nuCfmG+thW07ploppKuRdIPXSfFaWSq0eNpXDPouqkl/DyNytBntN1HmWteyphdz00aNOOKO0iaycTMjz50fLsRf7NY1vuIYHThL8JSbEKU/zlVsX6/soeojnRCtvv6c3o+3Wx8tShN0iOG7+ctyoCf7zH3XypmgOkrArfTl2YARQD2FTmfqRme0VqcOM/YNBeIGoSBzdwCYnlJbtE4irbN+L7F7ELLSU8+QBO5Ofl5xnT3Cacxtcd/TLxfhLXDnsUeB9MFAGVztG65Eq55v1JBx6CNX3bkd3PO3rQGUlaWs77ZeWP02jscK4SX5DihQZE89NgQ7qixVVgOVhx0SckXebA9g6kkz/8WIAxzkeXP9PXoAVhFdGF6zNF5Extdlf2iJ/lpszR/pWuqwxJ5NpxuleO90tySoj2A2LAdKiESrqqo95E4rAciqas26wnAU88qtXdHlDtvP4uD3RcvAKIq+f4xPBPSC/r4IFCdfFKZsx6dijwqrJamhW+S/0yQB0OrhSWSmQLeamZHwnwt4p9PEt/jmnnX4Sv9hJ8IYle6h97nLzn1BG/+eiTFWjrKsdEuWjmKtASIl7Gwru+skMEMyi/fRYKhfCwuJB1tHB/KFLGIOQwKwXDYWypj763vyW9pV3Lxn5LfYtEPev2Q/8ojHQFoT+pX7XoJ/6IfpnL4ti16LWZ6Mat0nMdoi8C0jIgsYk/SmJmKYXFTuwwN9wCWw9ip74obH3MUM0LYaU3D6figKtCcgPCikOo8FYv1qFraLyQHS5Y0R8eRxfTZJwSE7nZqNCTfXuTWX+3DWnEJInthYWNCC3ZP9egPAOmHESFoGEb14LeL1tISDDEIEbkvil63hpBBstYKiTqYIaXdx9Tr1Pz4i+3GENQKlqBsOAvoBHYUCBYV+JYllP1wRvh8akS3BiCRgMGnWwV7FYH1azwcBolSjOS91xawfr2oP5l2Bx6p9QBZufvUVKfhUEq18wk+VvIApsUqdKKXvByl7fhwB7HC7c1l7WXqewfAmk91vKNbu891F+cfVUY7VbIoxR1dmEwmhpH4daOBEp5C/8g8/lb+X/6ByftikKWtKO90jFC619USB5F1309eJvBgItMKAjs5XCfjZ7/JzkrfPEY6BA6I5lK0uG627pOJ+1ST457SO7MxOW4pghcYA0QVbi3SVgr0pHJKjcmDYCAgmg2q8s/Cf4szgIr9zMLCKvI6VKOfPld3r4vKUbadfTSIemCrMhV2qjWdyRKHOfOH5lur1WCyEjsEmCybIiCG5/Va9y8UOLrDb2qpgrLYZ0m+dQhGbjtKZYwvCwJkFdJYSkjc/eGWGxKAdgynuLO/gvHRf5HSPUwY0yBtICRHx0mlO4n/ofF2m0nBZmjwWHOR33KXdLuYdi9qGxLZbY6jEiZLIZsGcofwf9pbdwHhjnpQgKK8IBQ4ZheMmqdh712GoH1ypytSlxuuilmWlYNFtLrfGOXKCd+sr0CqvHMkKmQiUl5N0bxYFiG+UhYNwdHgbchWzisZZuqHPUY2kqMod971b5BUzr0hqnYcQrqAk8Pgq87IBH1G++/MNuBqMzcNT0TauoavjmOb+DiHg850NYMj2BHb/FL9Id9sTO0LveiVtA92Df074sA4PgFRGAE=",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nThe failure has nothing to do with register state or memory safety. It is a **helper-allowlist (policy) rejection**:\n\n```\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\n`bpf_ktime_get_coarse_ns()` is deliberately **not** exposed to tracing program types such as `kprobe` (also kretprobe, tracepoint, perf_event, raw_tp). The kernel restricts it (and the `bpf_timer_*` helpers) for tracing programs because these can fire from NMI/arbitrary contexts and the coarse-time read path uses a seqlock that could deadlock. So `get_func_proto` for the kprobe program type simply doesn\u2019t return a proto for this helper, and the verifier rejects the `call` at insn 0.\n\nThis is not a bug in the verifier logic you can satisfy with extra checks \u2014 the helper is fundamentally disallowed for `SEC(\"kprobe\")`.\n\n## Fix\n\nRun the program under a program type that *is* allowed to call `bpf_ktime_get_coarse_ns()` (e.g. networking program types like `tc`/`socket`, or `syscall`). The smallest source change is the section name:\n\n```c\nSEC(\"tc\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_coarse_ns];\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_coarse_ns)\n\t: __clobber_all);\n}\n```\n\n(Equivalently `SEC(\"socket\")` or `SEC(\"syscall\")`.) These program types include `bpf_ktime_get_coarse_ns` in their helper set, so the policy check passes and the trivial body (`r0 = 0; exit;`) verifies cleanly.\n\nIf the intent of the test is specifically to verify behavior *under a tracing program*, then the correct expectation is that this helper is rejected \u2014 in that case the test harness should mark it as an expected-failure rather than changing the code. But to make the program **pass verification**, switch it to a compatible program type as shown.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01UvESQgLe2gdsXmzrS4GfsN",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 873,
+      "output_tokens": 1362,
+      "output_tokens_details": {
+        "thinking_tokens": 652
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

@@ -1,0 +1,130 @@
+{
+  "answer_text": "`bpf_cpumask_create()` returns a **refcounted kptr**.  \nIn your program, `make_object()` returns that live reference on the success path, and `entry()` exits without releasing it.\n\nVerifier log confirms exactly that:\n\n- insn 0: `bpf_cpumask_create` => `trusted_ptr_or_null_bpf_cpumask ... refs=2`\n- success path reaches exit with `R6=trusted_ptr_bpf_cpumask(id=2) refs=2`\n- error: `Unreleased reference id=2 ... BPF_EXIT ... reference leak`\n\n`__sink(cpumask)` does not consume/release the reference; it only keeps the value \u201cused\u201d.\n\n## Smallest fix\n\nRelease in `entry()` when non-NULL:\n\n```diff\n SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n \tstruct bpf_cpumask *cpumask;\n\n \tcpumask = make_object();\n \t__sink(cpumask);\n+\tif (cpumask)\n+\t\tbpf_cpumask_release(cpumask);\n\n \treturn 0;\n }\n```\n\nThis balances the reference acquired by `bpf_cpumask_create()` on the successful return path from `make_object()`.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-002-legacy.txt",
+    "case_id": "case-002",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 2521,
+    "prompt_path": "public/case-002/prompt_legacy.md",
+    "prompt_sha256": "b1009b27b63c85152af26046b06f483efc378f604fa60de5cb0fdda6b91ed858",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-002-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "58ac9b14-181c-49e8-82d5-2894915e4acd",
+    "started_at": "2026-06-05T03:16:41+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00168,
+    "output_cost_usd": 0.01344,
+    "total_cost_usd": 0.015120000000000001
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 960,
+    "output_tokens": 960,
+    "raw_usage": {
+      "input_tokens": 960,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 960,
+      "output_tokens_details": {
+        "reasoning_tokens": 682
+      },
+      "total_tokens": 1920
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 682,
+    "total_tokens": 1920
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629415,
+    "created_at": 1780629402,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_03c9a7e0f3647b27006a223f9a13d481a0af3a2f05ff3fc96b",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_03c9a7e0f3647b27006a223f9a726081a09463a0bfdbc1e317",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "`bpf_cpumask_create()` returns a **refcounted kptr**.  \nIn your program, `make_object()` returns that live reference on the success path, and `entry()` exits without releasing it.\n\nVerifier log confirms exactly that:\n\n- insn 0: `bpf_cpumask_create` => `trusted_ptr_or_null_bpf_cpumask ... refs=2`\n- success path reaches exit with `R6=trusted_ptr_bpf_cpumask(id=2) refs=2`\n- error: `Unreleased reference id=2 ... BPF_EXIT ... reference leak`\n\n`__sink(cpumask)` does not consume/release the reference; it only keeps the value \u201cused\u201d.\n\n## Smallest fix\n\nRelease in `entry()` when non-NULL:\n\n```diff\n SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n \tstruct bpf_cpumask *cpumask;\n\n \tcpumask = make_object();\n \t__sink(cpumask);\n+\tif (cpumask)\n+\t\tbpf_cpumask_release(cpumask);\n\n \treturn 0;\n }\n```\n\nThis balances the reference acquired by `bpf_cpumask_create()` on the successful return path from `make_object()`.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_03c9a7e0f3647b27006a223fa456ac81a098bfb79de7bad69b",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 960,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 960,
+      "output_tokens_details": {
+        "reasoning_tokens": 682
+      },
+      "total_tokens": 1920
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

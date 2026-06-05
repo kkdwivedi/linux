@@ -1,0 +1,31 @@
+The verifier is failing on the helper call’s **first argument**:
+
+- At insn 2, `r1 = 0x123456` (a plain scalar constant).
+- `bpf_cpumask_populate()` expects arg1 to be a **memory pointer tracked by verifier** (shown as `expected=fp`, i.e., frame-pointer-based stack memory).
+- So `R1 type=scalar expected=fp` is a hard reject.
+
+### Smallest likely fix
+Don’t pass a fabricated integer address. Pass a real stack pointer instead.
+
+A minimal safe edit is to use stack locals for both buffers (initialized so either read/write expectations are satisfied):
+
+```diff
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+-	u64 bits;
++	u64 mask = 0;
++	u64 bits = 0;
+ 	int ret;
+ 
+-	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
++	ret = bpf_cpumask_populate((struct cpumask *)&mask, &bits, sizeof(bits));
+ 	if (!ret)
+ 		return 2;
+ 
+ 	return 0;
+ }
+```
+
+Why this should pass: arg1 becomes `fp-offsetof(mask)` instead of an untrusted scalar constant, matching verifier’s required pointer class.

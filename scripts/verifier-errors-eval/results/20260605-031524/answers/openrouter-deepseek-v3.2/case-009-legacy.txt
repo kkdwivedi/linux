@@ -1,0 +1,41 @@
+The verifier error occurs because the program tries to call `bpf_task_acquire(value->task)` without first verifying that `value->task` is non-NULL. The verifier sees that `value->task` could be NULL (it's marked as `rcu_ptr_or_null_task_struct`) and rejects passing a potentially NULL pointer to `bpf_task_acquire`.
+
+Looking at the code flow:
+1. `helper_a` inserts a map entry with `local.task = NULL`
+2. It then exchanges `value->task` with an acquired task pointer via `bpf_kptr_xchg`
+3. `helper_a` returns the map value pointer
+4. In `entry`, we try to acquire `value->task` without checking if it's NULL
+
+The issue is that even though `map_insert` sets the task pointer via `bpf_kptr_xchg`, the verifier cannot guarantee that `value->task` is non-NULL when we read it later. We need to add a NULL check before calling `bpf_task_acquire`.
+
+Here's the minimal fix:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct task_struct *acquired;
+	struct map_value *value;
+
+	value = helper_a(task);
+	if (!value)
+		return 0;
+
+	if (!value->task)
+		return 0;
+
+	acquired = bpf_task_acquire(value->task);
+	if (!acquired)
+		return 0;
+
+	bpf_task_release(acquired);
+	return 0;
+}
+```
+
+The patch adds a NULL check `if (!value->task) return 0;` before calling `bpf_task_acquire`. This ensures we only pass non-NULL pointers to `bpf_task_acquire`, which satisfies the verifier's requirement.
+
+The fix is minimal because:
+1. It doesn't change the program logic significantly
+2. It handles the case where `value->task` might be NULL (though in practice, after `map_insert` succeeds, it shouldn't be)
+3. It follows the verifier's requirement to check pointers before passing them to kfuncs that expect non-NULL arguments

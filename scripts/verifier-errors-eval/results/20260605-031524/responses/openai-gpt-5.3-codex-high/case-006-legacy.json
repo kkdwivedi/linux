@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier error is straightforward:\n\n- Program type is **kprobe** (`SEC(\"kprobe\")`).\n- First instruction calls helper **`bpf_ktime_get_coarse_ns`** (helper id 160).\n- For this prog type, that helper is not in the allowed helper set, so verifier rejects immediately.\n\nSince your program ignores the helper return value anyway (`r0 = 0; exit;`), the smallest safe fix is to call a helper that is allowed for kprobe (or remove the call entirely).\n\n### Minimal patch (keep structure, use allowed helper)\n```diff\n@@\n SEC(\"kprobe\")\n __naked void entry(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n-\tcall %[bpf_ktime_get_coarse_ns];\t\t\\\n+\tcall %[bpf_ktime_get_ns];\t\t\t\\\n \tr0 = 0;\t\t\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t:\n-\t: __imm(bpf_ktime_get_coarse_ns)\n+\t: __imm(bpf_ktime_get_ns)\n \t: __clobber_all);\n }\n```\n\nThis should satisfy the verifier because `bpf_ktime_get_ns` is commonly allowed for kprobe programs.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-006-legacy.txt",
+    "case_id": "case-006",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 1056,
+    "prompt_path": "public/case-006/prompt_legacy.md",
+    "prompt_sha256": "120f6abe2c1570fcf1f340a5df8b99d8138acdc6e56cef9bda9d3f882cdbea64",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-006-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "3f5cc3d7-9b87-4665-9428-373e026d66e4",
+    "started_at": "2026-06-05T03:16:46+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000707,
+    "output_cost_usd": 0.021378,
+    "total_cost_usd": 0.022085
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 404,
+    "output_tokens": 1527,
+    "raw_usage": {
+      "input_tokens": 404,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1527,
+      "output_tokens_details": {
+        "reasoning_tokens": 1269
+      },
+      "total_tokens": 1931
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 1269,
+    "total_tokens": 1931
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629427,
+    "created_at": 1780629406,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0253e8de512d6a50006a223f9ecf80819fb7b8e30ad431efe6",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0253e8de512d6a50006a223f9f238c819fb39bf590d7461985",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier error is straightforward:\n\n- Program type is **kprobe** (`SEC(\"kprobe\")`).\n- First instruction calls helper **`bpf_ktime_get_coarse_ns`** (helper id 160).\n- For this prog type, that helper is not in the allowed helper set, so verifier rejects immediately.\n\nSince your program ignores the helper return value anyway (`r0 = 0; exit;`), the smallest safe fix is to call a helper that is allowed for kprobe (or remove the call entirely).\n\n### Minimal patch (keep structure, use allowed helper)\n```diff\n@@\n SEC(\"kprobe\")\n __naked void entry(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n-\tcall %[bpf_ktime_get_coarse_ns];\t\t\\\n+\tcall %[bpf_ktime_get_ns];\t\t\t\\\n \tr0 = 0;\t\t\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t:\n-\t: __imm(bpf_ktime_get_coarse_ns)\n+\t: __imm(bpf_ktime_get_ns)\n \t: __clobber_all);\n }\n```\n\nThis should satisfy the verifier because `bpf_ktime_get_ns` is commonly allowed for kprobe programs.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0253e8de512d6a50006a223fb08708819f9ae5b730a1bc980a",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 404,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1527,
+      "output_tokens_details": {
+        "reasoning_tokens": 1269
+      },
+      "total_tokens": 1931
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

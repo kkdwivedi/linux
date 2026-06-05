@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Explanation of the Verifier Failure\n\nThe verifier is rejecting this program because of a **type safety violation**. Here's what happens:\n\n1. **Instruction 0**: `r1` (the context pointer) is stored at `fp-8`\n2. **Instruction 1-2**: `r0` is set to 35 (a scalar), then a byte is written to `fp-7`\n3. **Instruction 3**: `r0 = *(u64 *)(r10 - 8)` loads from `fp-8`\n   - The verifier **loses track** that this location contains a pointer because instruction 2 wrote a scalar byte to `fp-7`, which overlaps with the 8-byte value at `fp-8`\n   - The write at `fp-7` (1 byte) corrupts the verifier's knowledge of the 8-byte pointer at `fp-8`, causing it to be marked as `scalar()` (unknown integer)\n4. **Instruction 4**: `r0 = *(u64 *)(r0 + 8)` attempts to dereference `r0`\n   - Since `r0` is now a scalar (not a pointer), this is invalid and the verifier rejects it\n\n## Root Cause\n\nWriting to `fp-7` (a 1-byte write) overlaps with the 8-byte value stored at `fp-8`, causing the verifier to lose confidence that `fp-8` contains a valid pointer.\n\n## Fix\n\nAvoid the overlapping write. Instead of writing to `fp-7`, write to a location that doesn't overlap with `fp-8`. Since we're using 8 bytes at `fp-8`, we should write to `fp-6` or lower (further from `fp0`):\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"socket\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n\tr0 = 0x23;\t\t\t\t\t\\\n\t*(u8*)(r10 - 16) = r0;\t\t\t\t\\\n\tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n\tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\n**Change**: `*(u8*)(r10 - 7)` \u2192 `*(u8*)(r10 - 16)`\n\nThis ensures the byte write at `fp-16` doesn't overlap with the 8-byte pointer stored at `fp-8`, allowing the verifier to maintain type safety and successfully load and dereference the pointer.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-003-diagnostic.txt",
+    "case_id": "case-003",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 2939,
+    "prompt_path": "public/case-003/prompt_diagnostic.md",
+    "prompt_sha256": "f0ae7f2740c6566909dcad09724c1c4e67495167ac5f9dff858044543f91e0e9",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-003-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "d1103148-a4ae-49d2-acb8-3d02a4a326d7",
+    "started_at": "2026-06-05T03:18:56+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.001098,
+    "output_cost_usd": 0.00333,
+    "total_cost_usd": 0.004428
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1098,
+    "output_tokens": 666,
+    "raw_usage": {
+      "completion_tokens": 666,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.004428,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.00333,
+        "upstream_inference_cost": 0.004428,
+        "upstream_inference_prompt_cost": 0.001098
+      },
+      "is_byok": false,
+      "prompt_tokens": 1098,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1764
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1764
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation of the Verifier Failure\n\nThe verifier is rejecting this program because of a **type safety violation**. Here's what happens:\n\n1. **Instruction 0**: `r1` (the context pointer) is stored at `fp-8`\n2. **Instruction 1-2**: `r0` is set to 35 (a scalar), then a byte is written to `fp-7`\n3. **Instruction 3**: `r0 = *(u64 *)(r10 - 8)` loads from `fp-8`\n   - The verifier **loses track** that this location contains a pointer because instruction 2 wrote a scalar byte to `fp-7`, which overlaps with the 8-byte value at `fp-8`\n   - The write at `fp-7` (1 byte) corrupts the verifier's knowledge of the 8-byte pointer at `fp-8`, causing it to be marked as `scalar()` (unknown integer)\n4. **Instruction 4**: `r0 = *(u64 *)(r0 + 8)` attempts to dereference `r0`\n   - Since `r0` is now a scalar (not a pointer), this is invalid and the verifier rejects it\n\n## Root Cause\n\nWriting to `fp-7` (a 1-byte write) overlaps with the 8-byte value stored at `fp-8`, causing the verifier to lose confidence that `fp-8` contains a valid pointer.\n\n## Fix\n\nAvoid the overlapping write. Instead of writing to `fp-7`, write to a location that doesn't overlap with `fp-8`. Since we're using 8 bytes at `fp-8`, we should write to `fp-6` or lower (further from `fp0`):\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"socket\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n\tr0 = 0x23;\t\t\t\t\t\\\n\t*(u8*)(r10 - 16) = r0;\t\t\t\t\\\n\tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n\tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\n**Change**: `*(u8*)(r10 - 7)` \u2192 `*(u8*)(r10 - 16)`\n\nThis ensures the byte write at `fp-16` doesn't overlap with the 8-byte pointer stored at `fp-8`, allowing the verifier to maintain type safety and successfully load and dereference the pointer.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629536,
+    "id": "gen-1780629536-bND7KrjAYFymd1optYZO",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 666,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.004428,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.00333,
+        "upstream_inference_cost": 0.004428,
+        "upstream_inference_prompt_cost": 0.001098
+      },
+      "is_byok": false,
+      "prompt_tokens": 1098,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1764
+    }
+  },
+  "reasoning_content": ""
+}

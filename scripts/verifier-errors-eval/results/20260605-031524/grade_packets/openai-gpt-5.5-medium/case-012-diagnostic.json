@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Move helper_a(0) after bpf_local_irq_restore(&flags).",
+    "Split helper_a so the IRQ-disabled path calls only a non-sleepable helper.",
+    "Avoid disabling IRQs around the call if the critical section is not needed."
+  ],
+  "canonical_fix": "Restore IRQ state before calling the sleepable subprogram, or remove/replace the sleepable helper from the subprogram used in the IRQ-disabled region.",
+  "case_id": "case-012",
+  "category": "Execution Context Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The entry program disables IRQs and then calls a global subprogram that can call a sleepable helper. The verifier treats the sleepable call through the subprogram as occurring inside the IRQ-disabled region.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-medium/case-012-diagnostic.txt",
+    "case_id": "case-012",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-medium",
+    "prompt_bytes": 3392,
+    "prompt_path": "public/case-012/prompt_diagnostic.md",
+    "prompt_sha256": "cb0bb7bae71f637618353d539dc3320ce61e3ed2b36b833f42dc45015a35e430",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-medium/case-012-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "24ca8855-6802-472b-a83f-40aef8773028",
+    "started_at": "2026-06-05T03:15:39+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier rejects the program because `entry()` disables local IRQs and then calls `helper_a()` while still inside that IRQ-disabled critical section:\n\n```c\nbpf_local_irq_save(&flags);\nhelper_a(0);\nbpf_local_irq_restore(&flags);\n```\n\n`helper_a()` is classified by the verifier as a sleepable global function because it can call:\n\n```c\nbpf_copy_from_user(data, sizeof(data), NULL);\n```\n\n`bpf_copy_from_user()` may sleep, and sleeping is not allowed while IRQs are disabled. Even though `helper_a()` is called with a constant `0`, the verifier still treats the global subprogram as sleepable because the function contains a path that calls a sleepable helper.\n\nThe smallest likely fix is to move the `helper_a(0)` call outside the IRQ-disabled region.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..1111111 100644\n--- a/case.c\n+++ b/case.c\n@@ -17,8 +17,8 @@ int entry(void *ctx)\n \tunsigned long flags;\n \n \tbpf_local_irq_save(&flags);\n-\thelper_a(0);\n \tbpf_local_irq_restore(&flags);\n+\thelper_a(0);\n \treturn 0;\n }\n```\n\nAfter this change, the IRQ-disabled region only contains the save/restore pair, and the potentially sleepable `helper_a()` call happens after IRQs have been restored. That should satisfy the verifier\u2019s execution-context safety check.",
+  "must_mention": [
+    "A sleepable operation is reached through a global subprogram",
+    "IRQs are disabled at that point",
+    "The call must be outside the IRQ-disabled region"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes helper_a's argument value",
+    "Moves bpf_local_irq_restore after the return",
+    "Adds a NULL check for the local buffer"
+  ]
+}

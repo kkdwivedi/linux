@@ -1,0 +1,49 @@
+## Explanation of the Failure
+
+The problem is a **stack-slot overlap** between the two stack writes:
+
+1. `*(u64*)(r10 - 8) = r1` — stores the `ctx()` pointer at fp-8, occupying **8 bytes** spanning addresses `fp-8` through `fp-1`.
+2. `*(u8*)(r10 - 7) = r0` — writes one byte at `fp-7`, which falls **inside** that 8-byte range.
+
+After the byte write the verifier marks the entire fp-8 slot as `mmmmmmmm` (8 mixed/corrupt bytes), because one byte of the pointer spill was overwritten with an ordinary scalar. When the program then reloads:
+
+```
+3: (79) r0 = *(u64 *)(r10 -8)   ; R0=scalar()   ← no longer ctx()!
+4: (79) r0 = *(u64 *)(r0 +8)
+   R0 invalid mem access 'scalar'
+```
+
+R0 is now an unknown integer, and the verifier rejects the memory dereference.
+
+## Fix
+
+Move the byte write to `fp-9` — one slot **below** the 8-byte range `[fp-8, fp-1]` — so it no longer overlaps the stored pointer:
+
+```diff
+-	*(u8*)(r10 - 7) = r0;				\
++	*(u8*)(r10 - 9) = r0;				\
+```
+
+With `fp-9` the ctx pointer spill at `fp-8 … fp-1` is untouched, the reload at instruction 3 yields `R0=ctx()`, and the dereference at instruction 4 is valid.
+
+### Full fixed source
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	*(u64*)(r10 - 8) = r1;				\
+	r0 = 0x23;					\
+	*(u8*)(r10 - 9) = r0;				\
+	r0 = *(u64*)(r10 - 8);				\
+	r0 = *(u64*)(r0 + 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+> **Note:** If the verifier subsequently rejects the `*(u64*)(r0 + 8)` ctx access because `__sk_buff.mark` (at offset 8) is a `u32` field, change that load to `*(u32*)(r0 + 8)` as well. But the root cause of the logged failure is solely the overlap at `fp-7`.

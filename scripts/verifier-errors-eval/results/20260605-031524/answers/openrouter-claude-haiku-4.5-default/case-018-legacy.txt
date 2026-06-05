@@ -1,0 +1,51 @@
+## Verifier Failure Analysis
+
+The verifier is rejecting this program with the error: **"bpf_res_spin_unlock cannot be out of order"**
+
+This error occurs because the BPF verifier enforces a strict lock ordering requirement for `bpf_res_spin_lock` and `bpf_res_spin_unlock` calls. Specifically:
+
+1. **Lock A is acquired** at instruction 0
+2. **Lock B is acquired** at instruction 4
+3. **Lock A is unlocked** at instruction 10
+
+The problem: **Lock A is being unlocked before Lock B is unlocked.** This violates the LIFO (Last-In-First-Out) requirement for nested locks. Locks must be released in the reverse order they were acquired.
+
+The correct order should be:
+- Acquire Lock A
+- Acquire Lock B
+- **Unlock Lock B** (acquired last, must release first)
+- **Unlock Lock A** (acquired first, must release last)
+
+## Fix
+
+Swap the order of the two `bpf_res_spin_unlock` calls:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+struct bpf_res_spin_lock lock_a __hidden SEC(".data.A");
+struct bpf_res_spin_lock lock_b __hidden SEC(".data.B");
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```
+
+**Change:** Line 16-17 should be:
+```c
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+```
+
+This ensures locks are released in LIFO order, satisfying the verifier's lock ordering constraint.

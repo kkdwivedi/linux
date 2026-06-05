@@ -1,0 +1,54 @@
+Looking at this verifier failure, I need to understand what's happening with the lock ordering.
+
+## Verifier Failure Explanation
+
+The verifier is enforcing **strict LIFO (last-in, first-out) ordering** for resource spin locks. This means locks must be released in the exact reverse order they were acquired.
+
+Let me trace through the code:
+
+```
+lock_a acquired  →  lock_b acquired  →  lock_a unlocked  →  lock_b unlocked
+     [1]               [2]                [1] unlocked      [2] unlocked
+```
+
+The problem occurs in the error path. When `bpf_res_spin_lock(&lock_b)` fails (returns non-zero), the code tries to unlock `lock_a` before `lock_b`. But wait - `lock_b` failed to acquire, so it was never locked!
+
+Actually, looking more carefully at the verifier log: The verifier is analyzing all possible paths. The issue is that **after** `lock_b` is successfully acquired (the `bpf_res_spin_lock(&lock_b)` returns 0), the code at instruction 10 calls `bpf_res_spin_unlock(&lock_a)` while `lock_b` is still held.
+
+Looking at the actual execution flow when both locks succeed:
+1. `lock_a` acquired (success)
+2. `lock_b` acquired (success)
+3. `bpf_res_spin_unlock(&lock_a)` ← **ERROR**: trying to unlock `lock_a` while `lock_b` is still held!
+
+The code unlocks `lock_a` before `lock_b`, violating LIFO ordering. The correct order should be: unlock `lock_b` first, then `lock_a`.
+
+## The Bug in the Source
+
+At lines 186-187:
+```c
+bpf_res_spin_unlock(&lock_a);  // Wrong! lock_b is still held
+bpf_res_spin_unlock(&lock_b);
+```
+
+## The Fix
+
+Swap the unlock order to be LIFO:
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -183,8 +183,8 @@ int entry(struct __sk_buff *ctx)
+ 	if (bpf_res_spin_lock(&lock_b)) {
+ 		bpf_res_spin_unlock(&lock_a);
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+ 	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+This ensures:
+- Normal path: `lock_a` → `lock_b` → unlock `lock_b` → unlock `lock_a` ✓ (LIFO)
+- Error path (lock_b fails): `lock_a` → (lock_b fails) → unlock `lock_a` ✓ (only lock_a was held)

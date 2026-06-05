@@ -1,0 +1,47 @@
+# Explanation of the Verifier Failure
+
+The verifier rejects this program because:
+
+1. **R7 holds packet data pointer**: After `r7 = *(u32 *)(r1 +76)` (instruction 2), R7 is marked as `pkt(r=0)` - a pointer to packet data at offset 0.
+
+2. **Helper call invalidates the pointer**: The call to `helper_a(sk, 0)` at instruction 8 is a helper function that may modify packet data. Since `helper_a` calls `helper_b` which calls `bpf_skb_pull_data`, the verifier conservatively invalidates R7's packet pointer validity, treating it as a scalar.
+
+3. **Invalid memory dereference**: After the helper call returns, attempting to write to `*p` (instruction 10: `*(u32 *)(r7 +0) = r1`) fails because R7 is no longer known to be a valid packet pointer - it's now treated as a scalar, and you cannot dereference a scalar.
+
+The issue is that **packet pointers become invalid after certain helper calls** because helpers like `bpf_skb_pull_data` can change packet boundaries and offsets. The verifier tracks this and prevents use of stale pointers.
+
+# Solution
+
+The smallest fix is to **reload the packet data pointer after the helper call**:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+__noinline long helper_b(struct __sk_buff *sk, __u32 len)
+{
+	return bpf_skb_pull_data(sk, len);
+}
+
+__noinline long helper_a(struct __sk_buff *sk, __u32 len)
+{
+	return helper_b(sk, len);
+}
+
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	int *p = (void *)(long)sk->data;
+
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	helper_a(sk, 0);
+	p = (void *)(long)sk->data;  // Reload pointer after helper call
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+**Why this works**: After reloading `p` from `sk->data` and re-validating the bounds check, the verifier re-establishes that `p` is a valid packet pointer with sufficient data available, allowing the dereference at `*p = 42` to pass verification.

@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier is rejecting this because of **context pointer arithmetic**:\n\n```c\nhelper_c(val, skb + 1)\n```\n\n`skb` is a `PTR_TO_CTX` (`struct __sk_buff *`).  \nFor this pointer type, you can\u2019t shift it (`+ 1`, which becomes `+192` bytes here) and then pass it to a function that dereferences it as a context object (`helper_c` reads `skb->ifindex`).\n\nFrom log:\n\n- `r6 += 192` \u2192 modified ctx pointer\n- passed as arg to `helper_c`\n- inside `helper_c`, dereference would be on modified ctx ptr\n- verifier error: `dereference of modified ctx ptr ... disallowed`\n\nSo the smallest fix is to pass the **original ctx pointer** unchanged.\n\n### Minimal patch\n\n```diff\ndiff --git a/case.c b/case.c\nindex 1111111..2222222 100644\n--- a/case.c\n+++ b/case.c\n@@ -16,7 +16,7 @@ int helper_c(int val, struct __sk_buff *skb);\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n```\n\nThat should satisfy verifier type rules for context pointers.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-medium/case-010-diagnostic.txt",
+    "case_id": "case-010",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-medium",
+    "prompt_bytes": 3922,
+    "prompt_path": "public/case-010/prompt_diagnostic.md",
+    "prompt_sha256": "c9975b0bd7d86b4edddce6166024784483798109ab83deeb5185dbddd366cae7",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-medium/case-010-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "332033a6-7b24-4822-b866-71def09c7a1a",
+    "started_at": "2026-06-05T03:16:29+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00203175,
+    "output_cost_usd": 0.006566,
+    "total_cost_usd": 0.00859775
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1161,
+    "output_tokens": 469,
+    "raw_usage": {
+      "input_tokens": 1161,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 469,
+      "output_tokens_details": {
+        "reasoning_tokens": 166
+      },
+      "total_tokens": 1630
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 166,
+    "total_tokens": 1630
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629397,
+    "created_at": 1780629389,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0dedce101a14016a006a223f8dd1788191af2f02202383e3bf",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0dedce101a14016a006a223f8e5bc481919bf6cf3b2f94b0ca",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier is rejecting this because of **context pointer arithmetic**:\n\n```c\nhelper_c(val, skb + 1)\n```\n\n`skb` is a `PTR_TO_CTX` (`struct __sk_buff *`).  \nFor this pointer type, you can\u2019t shift it (`+ 1`, which becomes `+192` bytes here) and then pass it to a function that dereferences it as a context object (`helper_c` reads `skb->ifindex`).\n\nFrom log:\n\n- `r6 += 192` \u2192 modified ctx pointer\n- passed as arg to `helper_c`\n- inside `helper_c`, dereference would be on modified ctx ptr\n- verifier error: `dereference of modified ctx ptr ... disallowed`\n\nSo the smallest fix is to pass the **original ctx pointer** unchanged.\n\n### Minimal patch\n\n```diff\ndiff --git a/case.c b/case.c\nindex 1111111..2222222 100644\n--- a/case.c\n+++ b/case.c\n@@ -16,7 +16,7 @@ int helper_c(int val, struct __sk_buff *skb);\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n```\n\nThat should satisfy verifier type rules for context pointers.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0dedce101a14016a006a223f90d7008191a30362da76473456",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1161,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 469,
+      "output_tokens_details": {
+        "reasoning_tokens": 166
+      },
+      "total_tokens": 1630
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

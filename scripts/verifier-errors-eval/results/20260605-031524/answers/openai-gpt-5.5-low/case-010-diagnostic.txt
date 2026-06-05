@@ -1,0 +1,51 @@
+The verifier failure is caused by this call in `helper_b()`:
+
+```c
+helper_c(val, skb + 1)
+```
+
+`skb` is a context pointer: `struct __sk_buff *`. In C, `skb + 1` means “advance by one whole `struct __sk_buff`”, not by one byte. The verifier log shows that this becomes:
+
+```text
+21: (07) r6 += 192                    ; R6=ctx(imm=192)
+...
+23: (bf) r2 = r6                      ; R2=ctx(imm=192)
+24: (85) call pc+2
+dereference of modified ctx ptr R2 off=192 disallowed
+```
+
+So `helper_b()` passes a modified context pointer, offset by 192 bytes, into `helper_c()`. Then `helper_c()` does:
+
+```c
+return skb->ifindex * val;
+```
+
+That dereferences the modified context pointer. The verifier only allows dereferencing the original context pointer in the expected form. A context pointer with an arbitrary struct-sized offset is not valid.
+
+The smallest source-level fix is to pass the original `skb` pointer to `helper_c()` instead of `skb + 1`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -16,7 +16,7 @@ int helper_c(int val, struct __sk_buff *skb);
+ __attribute__((noinline))
+ int helper_b(int val, struct __sk_buff *skb)
+ {
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+ }
+ 
+ __attribute__((noinline))
+```
+
+Why this should satisfy the verifier:
+
+- `helper_a(skb)` receives the original context pointer and reads `skb->len`, which is allowed.
+- `helper_c(val, skb)` receives the original context pointer and reads `skb->ifindex`, which is allowed.
+- No modified context pointer is passed into a subprogram that dereferences it.
+
+So the invalid `ctx(imm=192)` argument disappears, and `helper_c()` should be called with a valid `ctx()` argument.

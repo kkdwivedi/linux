@@ -1,0 +1,19 @@
+The verifier error occurs because `bpf_local_irq_save` and `bpf_local_irq_restore` must follow a strict LIFO (last-in, first-out) order. The program saves `flags1`, then `flags2`, but attempts to restore `flags1` before `flags2`, violating the expected order.
+
+**Fix:** Swap the two `bpf_local_irq_restore` calls to restore `flags2` first, then `flags1`.
+
+```diff
+--- original.c
++++ fixed.c
+@@ -7,7 +7,7 @@
+ 	unsigned long flags1, flags2;
+ 
+ 	bpf_local_irq_save(&flags1);
+ 	bpf_local_irq_save(&flags2);
+-	bpf_local_irq_restore(&flags1);
+-	bpf_local_irq_restore(&flags2);
++	bpf_local_irq_restore(&flags2);
++	bpf_local_irq_restore(&flags1);
+ 	return 0;
+ }
+```

@@ -1,0 +1,62 @@
+## What the verifier is complaining about
+
+`bpf_sk_lookup_tcp()` returns a *referenced* socket (`R0=sock_or_null(id=2) refs=2`). The verifier tracks that acquired reference and requires it to be released (via `bpf_sk_release`) on **every** path that reaches `exit`.
+
+Look at the control flow right after the call:
+
+```
+call bpf_sk_lookup_tcp
+if r6 == 0 goto l1_%=     ; insn 20
+exit                      ; insn 21  <-- leak path
+l1_%=:
+    if r0 == 0 goto l2_%=
+    r1 = r0
+    call bpf_sk_release
+l2_%=:
+    exit
+```
+
+When `r6 != 0` the program falls through to the `exit` at insn 21 **without ever calling `bpf_sk_release`**. The reference acquired at insn 19 is still held, so:
+
+```
+Unreleased reference id=2 alloc_insn=19
+BPF_EXIT instruction in main prog would lead to reference leak
+```
+
+(The `l1_%=`/`l2_%=` path is fine: it null-checks `r0` and releases the socket. It's only the `r6 != 0` early-exit that leaks.)
+
+## Smallest fix
+
+Make the `r6 != 0` path go through the same release logic instead of exiting immediately. The early `exit` simply needs to fall into the existing release block, so both branches of the `r6` test converge on the null-check + `bpf_sk_release` code.
+
+```c
+@@
+-	if r6 == 0 goto l1_%=;				\
+-	exit;						\
+-l1_%=:	if r0 == 0 goto l2_%=;				\
++	if r6 == 0 goto l1_%=;				\
++	goto l1_%=;					\
++l1_%=:	if r0 == 0 goto l2_%=;				\
+ 	r1 = r0;					\
+ 	call %[bpf_sk_release];				\
+ l2_%=:	exit;						\
+```
+
+Now, regardless of `r6`, execution reaches `l1_%=`, which:
+- jumps to `l2_%=` (and exits) when `r0 == 0` (no reference held — `sk_lookup` returned NULL), or
+- moves the socket into `r1` and calls `bpf_sk_release` before the final `exit`.
+
+Every path that reaches `exit` has released the reference, so the leak diagnostic disappears.
+
+## Note
+
+If the `r6` test was meant to be a real branch (not just dead-equivalent code), the proper fix is to release the socket on *both* outcomes. For example:
+
+```c
+	if r0 == 0 goto l2_%=;   /* nothing to release */
+	r1 = r0;
+	call %[bpf_sk_release];
+l2_%=:	exit;
+```
+
+i.e. drop the `r6`-based early `exit` entirely and always run the null-check/release sequence before exiting. Either way, the essential requirement is the same: no `exit` may be reachable while the `sk_lookup_tcp` reference is still held.

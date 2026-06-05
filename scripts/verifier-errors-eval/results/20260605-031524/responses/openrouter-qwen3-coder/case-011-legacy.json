@@ -1,0 +1,109 @@
+{
+  "answer_text": "Looking at the verifier log, the issue is a reference leak. The verifier is tracking two dynamic pointer references:\n\n1. `ptr1` (reference id=2, allocated at instruction 7)\n2. `ptr2` (reference id=4, allocated at instruction 14)\n\nThe code properly handles `ptr1` - it either submits it (instruction 32) or discards it (instruction 24). However, `ptr2` is only discarded in the error path but never submitted in the success path.\n\nIn the success path, after submitting `ptr1`, the function returns without ever calling `bpf_ringbuf_submit_dynptr()` or `bpf_ringbuf_discard_dynptr()` on `ptr2`, leaving reference id=3 (corresponding to `ptr2`) unreleased.\n\nThe fix is to submit or discard `ptr2` before returning in the success path.\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nstruct sample {\n\t__u64 value;\n};\n\nstruct {\n\t__uint(type, BPF_MAP_TYPE_RINGBUF);\n\t__uint(max_entries, 4096);\n} ringbuf SEC(\".maps\");\n\nSEC(\"?raw_tp\")\nint entry(void *ctx)\n{\n\tstruct bpf_dynptr ptr1, ptr2;\n\tstruct sample *sample;\n\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n\n\tsample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));\n\tif (!sample) {\n\t\tbpf_ringbuf_discard_dynptr(&ptr1, 0);\n\t\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\t\treturn 0;\n\t}\n\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\n\treturn 0;\n}\n```\n\nThe key change is adding `bpf_ringbuf_discard_dynptr(&ptr2, 0);` at line 27, right after submitting `ptr1`. This ensures that both dynamic pointers are properly released before the function returns, eliminating the reference leak.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-011-legacy.txt",
+    "case_id": "case-011",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 3372,
+    "prompt_path": "public/case-011/prompt_legacy.md",
+    "prompt_sha256": "762b0c608dbde5c1090172be3b10e7e17988b9698301148bebea627aedc1c8f8",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-011-legacy.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "e02ae6c2-3d6e-4105-b061-40af5dc158e7",
+    "started_at": "2026-06-05T03:21:02+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00031284,
+    "output_cost_usd": 0.000855,
+    "total_cost_usd": 0.0011678399999999999
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1422,
+    "output_tokens": 475,
+    "raw_usage": {
+      "completion_tokens": 475,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.00116784,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.000855,
+        "upstream_inference_cost": 0.00116784,
+        "upstream_inference_prompt_cost": 0.00031284
+      },
+      "is_byok": false,
+      "prompt_tokens": 1422,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 214,
+        "video_tokens": 0
+      },
+      "total_tokens": 1897
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1897
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Looking at the verifier log, the issue is a reference leak. The verifier is tracking two dynamic pointer references:\n\n1. `ptr1` (reference id=2, allocated at instruction 7)\n2. `ptr2` (reference id=4, allocated at instruction 14)\n\nThe code properly handles `ptr1` - it either submits it (instruction 32) or discards it (instruction 24). However, `ptr2` is only discarded in the error path but never submitted in the success path.\n\nIn the success path, after submitting `ptr1`, the function returns without ever calling `bpf_ringbuf_submit_dynptr()` or `bpf_ringbuf_discard_dynptr()` on `ptr2`, leaving reference id=3 (corresponding to `ptr2`) unreleased.\n\nThe fix is to submit or discard `ptr2` before returning in the success path.\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nstruct sample {\n\t__u64 value;\n};\n\nstruct {\n\t__uint(type, BPF_MAP_TYPE_RINGBUF);\n\t__uint(max_entries, 4096);\n} ringbuf SEC(\".maps\");\n\nSEC(\"?raw_tp\")\nint entry(void *ctx)\n{\n\tstruct bpf_dynptr ptr1, ptr2;\n\tstruct sample *sample;\n\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\n\tbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n\n\tsample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));\n\tif (!sample) {\n\t\tbpf_ringbuf_discard_dynptr(&ptr1, 0);\n\t\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\t\treturn 0;\n\t}\n\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\n\treturn 0;\n}\n```\n\nThe key change is adding `bpf_ringbuf_discard_dynptr(&ptr2, 0);` at line 27, right after submitting `ptr1`. This ensures that both dynamic pointers are properly released before the function returns, eliminating the reference leak.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "stop"
+      }
+    ],
+    "created": 1780629662,
+    "id": "gen-1780629662-Yri6dTdl5oXimP5gjxoS",
+    "model": "qwen/qwen3-coder-480b-a35b-07-25",
+    "object": "chat.completion",
+    "provider": "Google",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 475,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.00116784,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.000855,
+        "upstream_inference_cost": 0.00116784,
+        "upstream_inference_prompt_cost": 0.00031284
+      },
+      "is_byok": false,
+      "prompt_tokens": 1422,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 214,
+        "video_tokens": 0
+      },
+      "total_tokens": 1897
+    }
+  },
+  "reasoning_content": ""
+}

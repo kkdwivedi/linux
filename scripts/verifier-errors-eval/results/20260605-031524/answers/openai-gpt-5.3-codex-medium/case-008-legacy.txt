@@ -1,0 +1,42 @@
+The verifier is rejecting this because of a **stack buffer size mismatch** in the `bpf_dynptr_slice()` call.
+
+### Why it fails
+
+You declare:
+
+```c
+char buffer[8] = {};
+```
+
+but call:
+
+```c
+data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
+```
+
+For `bpf_dynptr_slice()`, arg3 (`buffer`) + arg4 (`len`) is a memory/length pair that verifier checks strictly.  
+`len=9` means helper may access 9 bytes at `buffer`, but only 8 bytes are valid there.
+
+That matches the log:
+
+- `R3 = fp-24` (buffer start)
+- `R4 = 9`
+- `invalid read from stack R3 off -24+8 size 9`
+
+So the helper could touch past `buffer` into adjacent stack area (where dynptr lives), which verifier forbids.
+
+---
+
+### Smallest likely fix
+
+Pass a length that fits the buffer (or enlarge buffer). Smallest safe edit is to use buffer size directly.
+
+#### Patch
+
+```diff
+@@
+-	data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
++	data = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+```
+
+(Equivalent fix: change `9` to `8`.)

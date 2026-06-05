@@ -1,0 +1,40 @@
+## Explanation of the Verifier Failure
+
+The verifier is rejecting this program because:
+
+1. `bpf_preempt_disable()` is called at line 112, which enters a non-preemptible region (depth 1)
+2. `bpf_copy_from_user()` is a **sleepable helper** that may block/sleep
+3. Sleepable helpers cannot be called within a non-preemptible region because preemption-disabled code cannot call operations that may sleep
+4. `bpf_preempt_enable()` at line 114 would exit the region, but it comes too late
+
+The verifier correctly identifies this as an execution context safety violation.
+
+## Root Cause
+
+The code structure is fundamentally incompatible: you cannot disable preemption and then call a sleepable helper within that disabled region. The `bpf_copy_from_user()` call needs to happen outside the preemption-disabled section.
+
+## Proposed Fix
+
+Move the `bpf_copy_from_user()` call outside the preemption-disabled region:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("?fentry.s/sys_getpgid")
+int entry(void *ctx)
+{
+	u32 data;
+
+	bpf_copy_from_user(&data, sizeof(data), NULL);
+	bpf_preempt_disable();
+	bpf_preempt_enable();
+	return 0;
+}
+```
+
+**Why this works:** By moving `bpf_copy_from_user()` before `bpf_preempt_disable()`, the sleepable helper is called in a preemptible context where it's allowed to sleep. The preemption disable/enable region now only contains non-sleepable operations, which is valid.
+
+**Alternative (if the preemption-disabled region is necessary for other reasons):** Remove the preemption disable/enable calls entirely if they're not needed for the actual logic.

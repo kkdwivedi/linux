@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Lower MAX_STACK enough that the nested helper frames fit within 512 bytes.",
+    "Move large buffers out of nested helpers or reuse a smaller/shared buffer in a verifier-accepted way.",
+    "Restructure calls so helper_b and helper_c are not simultaneously on the stack with large local buffers."
+  ],
+  "canonical_fix": "Reduce stack use along the nested call chain or shorten the call chain so the combined stack depth is at or below the verifier limit.",
+  "case_id": "case-013",
+  "category": "Verifier Limit",
+  "difficulty": "medium",
+  "expected_explanation": "The call chain entry -> helper_c -> helper_b uses more than the verifier's combined call-stack depth limit. The large per-function stack buffers accumulate across nested bpf2bpf calls.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-no-thinking/case-013-legacy.txt",
+    "case_id": "case-013",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-no-thinking",
+    "prompt_bytes": 1649,
+    "prompt_path": "public/case-013/prompt_legacy.md",
+    "prompt_sha256": "4d1d466cfe05bcf610e895dd892a6a1aa50e76dc1045f63dfca8de2da264bd35",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-no-thinking/case-013-legacy.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "disabled"
+    },
+    "run_id": "db662aa6-482e-4a08-becc-f31d6dec861a",
+    "started_at": "2026-06-05T03:18:02+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "Looking at this verifier failure, I need to analyze the stack usage and call chain.\n\n## Verifier Failure Analysis\n\nThe error message is clear: `combined stack size of 3 calls is 544. Too large`\n\nLet me trace through the stack usage:\n\n**Individual function stack frames:**\n- `helper_a`: No local stack variables (just returns `skb->len`)\n- `helper_b`: `volatile char buf[MAX_STACK]` = 260 bytes\n- `helper_c`: `volatile char buf[MAX_STACK]` = 260 bytes\n- `helper_d`: `volatile char buf[MAX_STACK]` = 260 bytes\n\n**Call chain from `entry`:**\n```\nentry()\n\u251c\u2500\u2500 helper_a(1, skb)           [0 bytes stack]\n\u251c\u2500\u2500 helper_b(skb)              [260 bytes stack]\n\u2502   \u2514\u2500\u2500 helper_a(0, skb)       [0 bytes stack, but called from within helper_b]\n\u2514\u2500\u2500 helper_c(2, skb)           [260 bytes stack]\n    \u251c\u2500\u2500 helper_b(skb)          [260 bytes stack]\n    \u2514\u2500\u2500 helper_d(3, skb, 4)    [260 bytes stack]\n```\n\nWait, let me re-read. The verifier is complaining about \"3 calls\" with combined stack 544. Let me check: 260 + 260 + 24 (some overhead?) or perhaps it's `helper_c` \u2192 `helper_b` \u2192 `helper_a` or `helper_c` \u2192 `helper_d` with `helper_b` also on the path.\n\nActually, looking more carefully at the call graph from `entry`:\n- `entry` calls `helper_a`, `helper_b`, `helper_c`, `helper_d` sequentially (not nested)\n\nBut `helper_c` calls both `helper_b` and `helper_d`. So the deepest call chain is:\n- `entry` \u2192 `helper_c` (260 bytes) \u2192 `helper_b` (260 bytes) \u2192 `helper_a` (0 bytes) = 520 bytes\n- Or `entry` \u2192 `helper_c` (260 bytes) \u2192 `helper_d` (260 bytes) = 520 bytes\n\nOr with some alignment: 260 + 260 + 24 padding = 544? The verifier counts combined stack size across the call chain.\n\nThe BPF stack limit is 512 bytes. With 260 + 260 = 520 bytes from just two nested calls with large buffers, we exceed this.\n\n## The Fix\n\nThe smallest fix is to reduce `MAX_STACK` so that two nested calls with large buffers don't exceed 512 bytes.\n\nIf `MAX_STACK = 256`, then 256 + 256 = 512, which should fit (though there might be minor overhead).\n\nActually, let me check: 544 / 2 = 272, so maybe there's some per-function overhead. If we need 3 calls worth: the message says \"3 calls\" - so perhaps `entry` counts too, or there's a different chain.\n\nLooking at `helper_b` \u2192 `helper_a`: that's helper_b (260) + helper_a (0) = 260\nLooking at `helper_c` \u2192 `helper_b` \u2192 `helper_a`: 260 + 260 + 0 = 520, plus alignment = 544?\n\nWith `MAX_STACK = 256`: 256 + 256 = 512. But if there's 24 bytes of overhead/alignment, we might still exceed.\n\nLet me try `MAX_STACK = 240`: 240 + 240 = 480, giving more headroom.\n\nOr we could make it `252` to maximize while staying under: 252 + 252 = 504, plus ~24 = 528? Still might be tight.\n\nActually re-reading: \"combined stack size of 3 calls is 544\". If 3 calls: perhaps `entry` + `helper_c` + `helper_b` = 0 + 260 + 260 + overhead = 544? Or maybe the count includes something else.\n\nTo be safe, I'll reduce `MAX_STACK` to 256 or less. Given 544/2 = 272 per frame with overhead, or 544/3 \u2248 181 if evenly split. \n\nSince two frames of 260 = 520, and we need to get under 512, let's use `MAX_STACK = 256` which gives 512 for two frames, or be safer with `252` or `240`.\n\nActually, the issue might be that `entry` itself has some stack, plus two callees. Let me try `MAX_STACK = 252` to leave room.\n\nBut wait - the smallest change that fixes this: we need to ensure no call chain exceeds 512 bytes. The deepest chain with large frames is `helper_c` \u2192 `helper_b` (both have 260-byte buffers).\n\nIf we reduce `MAX_STACK` to `256`: chain is 256 + 256 = 512. This might pass if no extra overhead is counted, or might fail.\n\nGiven 544 with 260+260, the ratio is 544/520 = 1.046, so overhead factor. Applying to 256: 256 * 2 * 1.046 \u2248 535. Still over 512!\n\nSo we need: `MAX_STACK * 2 * (544/520) <= 512`, thus `MAX_STACK <= 512 * 520 / (2 * 544) = 266240 / 1088 \u2248 244.7`\n\nSo `MAX_STACK = 244` or less to be safe. Or simply `240` for round number.\n\nActually let me just use `MAX_STACK = 252` and see... no, calculation says ~245 max.\n\nLet me use `MAX_STACK = 240` to be comfortably safe.\n\n## Patch\n\n```c\n-#define MAX_STACK 260\n+#define MAX_STACK 240\n```\n\nThis reduces each large stack allocation from 260 to 240 bytes. The deepest call chain (`helper_c` \u2192 `helper_b` or similar two-level nesting with large buffers) will then use at most 480 bytes for the buffers, leaving headroom for any frame overhead while staying under the 512-byte BPF stack limit.",
+  "must_mention": [
+    "Combined call-chain stack depth exceeds the verifier limit",
+    "Large local buffers in nested helpers are the cause",
+    "Fix must reduce stack usage or call depth"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds bounds checks around skb fields",
+    "Changes helper return arithmetic only",
+    "Reduces stack in a helper not on the reported call chain while leaving the chain over limit"
+  ]
+}

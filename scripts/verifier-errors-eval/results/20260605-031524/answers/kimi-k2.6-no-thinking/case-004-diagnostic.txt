@@ -1,0 +1,51 @@
+I'll analyze this verifier failure and propose a fix.
+
+## Verifier Failure Explanation
+
+The problem is that `helper_a` is marked with `__noinline`, which means it becomes a proper BPF-to-BPF function call. When the verifier processes such calls with pointer arguments, it uses a conservative type: `mem_or_null` instead of just `mem`. This happens because the verifier must account for the possibility that the caller could pass NULL.
+
+Looking at the call site in `entry()`:
+```c
+const struct Item s = {.x = skb->len};
+helper_a(&s);
+```
+
+The address `&s` is clearly never NULL (it's a stack address), but because `helper_a` is `__noinline`, the verifier propagates the argument type as `mem_or_null` to the callee. Inside `helper_a`, when trying to dereference `s->x`, the verifier rejects it because `R6` (which holds `s`) has type `mem_or_null` — it could theoretically be NULL.
+
+The verifier's suggestion is correct: we need a NULL check inside `helper_a` to guard the dereference, even though in practice the pointer will never be NULL. This is a common pattern when working with `__noinline` functions in BPF — the verifier requires explicit NULL checks even for pointers that are provably non-NULL at the call site, because the function boundary loses that information.
+
+## Fix
+
+Add a NULL check in `helper_a` before dereferencing `s`:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+struct Item {
+	int x;
+};
+
+__noinline int helper_a(const struct Item *s)
+{
+	if (!s)
+		return 0;
+	return bpf_get_prandom_u32() < s->x;
+}
+
+SEC("cgroup_skb/ingress")
+int entry(struct __sk_buff *skb)
+{
+	const struct Item s = {.x = skb->len};
+
+	helper_a(&s);
+
+	return 1;
+}
+```
+
+The `if (!s) return 0;` check satisfies the verifier because:
+- On the `!s` (NULL) path, we return early without dereferencing
+- On the `s` (non-NULL) path, the verifier refines the type from `mem_or_null` to `mem`, making the subsequent `s->x` dereference safe
+
+This is the smallest source-level fix — just adding a NULL check with an early return. The `return 0` value is arbitrary; any safe return value works since this path is unreachable in practice.

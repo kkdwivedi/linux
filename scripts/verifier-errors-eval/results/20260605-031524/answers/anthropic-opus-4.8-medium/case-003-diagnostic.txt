@@ -1,0 +1,40 @@
+## Explanation
+
+A spilled pointer only stays a pointer in the verifier if the whole 8‑byte stack slot is left untouched. Here the code does:
+
+```
+*(u64*)(r10 - 8) = r1;   // spill ctx pointer into fp-8 .. fp-1
+*(u8*)(r10 - 7) = r0;    // write 1 byte INTO that same 8-byte slot
+```
+
+The byte store at `r10 - 7` lands inside the slot that holds the spilled `ctx` pointer (the slot spans `fp-8 .. fp-1`). Any partial write into a spilled pointer slot makes the verifier mark the whole slot as `misc`/scalar (`fp-8=mmmmmmmm`). So when you reload it:
+
+```
+r0 = *(u64*)(r10 - 8);   // R0=scalar(), no longer ctx()
+r0 = *(u64*)(r0 + 8);    // dereference of a scalar -> rejected
+```
+
+`R0` is now an unknown scalar, not a pointer, hence “R0 invalid mem access 'scalar'”.
+
+## Fix
+
+Don’t let the byte store overlap the spilled pointer. Put the scratch byte in a different stack slot (e.g. `r10 - 16`) so the pointer at `fp-8` survives and reloads as `ctx()`:
+
+```c
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	*(u64*)(r10 - 8) = r1;				\
+	r0 = 0x23;					\
+	*(u8*)(r10 - 16) = r0;				\
+	r0 = *(u64*)(r10 - 8);				\
+	r0 = *(u64*)(r0 + 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+Now `fp-8` keeps the `ctx()` pointer, the reload yields a pointer, and `*(u64*)(r0 + 8)` is a valid (verifier‑converted) context access.
+
+(If the goal was specifically to *exercise* the pointer‑corruption path, then the test is actually an expected‑failure case and should be annotated with the appropriate `__failure __msg("invalid mem access")` rather than expected to pass. But to satisfy verification, moving the byte store out of the pointer’s slot is the minimal change.)

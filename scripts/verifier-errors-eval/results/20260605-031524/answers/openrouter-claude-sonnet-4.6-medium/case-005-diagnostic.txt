@@ -1,0 +1,27 @@
+## Explanation
+
+The verifier rejects the program because `bpf_copy_from_user` is a **sleepable** helper — it may block waiting on a page fault — but it is called inside a **non-preemptible region** created by `bpf_preempt_disable()`. Preemption-disabled code must not call operations that can sleep. The verifier explicitly tracks preemption depth and flags this mismatch.
+
+## Fix
+
+Move `bpf_copy_from_user` **outside** the `bpf_preempt_disable` / `bpf_preempt_enable` critical section:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("?fentry.s/sys_getpgid")
+int entry(void *ctx)
+{
+	u32 data;
+
+	bpf_copy_from_user(&data, sizeof(data), NULL);
+	bpf_preempt_disable();
+	bpf_preempt_enable();
+	return 0;
+}
+```
+
+By calling the sleepable helper *before* entering the non-preemptible region, the verifier's preemption-depth counter is still 0 at that point, so the call is permitted. The critical section itself no longer contains any sleepable operation, resolving the conflict.

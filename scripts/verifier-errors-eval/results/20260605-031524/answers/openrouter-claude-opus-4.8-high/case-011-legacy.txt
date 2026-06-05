@@ -1,0 +1,42 @@
+## Explanation
+
+The verifier tracks the two ringbuf reservations as references that *must* be released on every path before exit:
+
+- `ptr1` → reference id=1/2
+- `ptr2` → reference id=3/4
+
+In the `if (!sample)` (failure) branch you correctly release **both**:
+
+```c
+bpf_ringbuf_discard_dynptr(&ptr1, 0);
+bpf_ringbuf_discard_dynptr(&ptr2, 0);
+```
+
+But in the *success* path (`sample != NULL`, the `goto pc+9` fall-through) you only release `ptr1`:
+
+```c
+bpf_ringbuf_submit_dynptr(&ptr1, 0);
+return 0;
+```
+
+`ptr2` is never submitted or discarded on this path, so the verifier reports:
+
+```
+Unreleased reference id=3 alloc_insn=14
+BPF_EXIT instruction in main prog would lead to reference leak
+```
+
+(The earlier `arg#0 reference type('UNKNOWN ') size cannot be determined: -22` line is unrelated noise about kfunc proto resolution; the real failure is the reference leak.)
+
+## Fix
+
+Release `ptr2` on the success path as well. Smallest change:
+
+```c
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_submit_dynptr(&ptr2, 0);   /* add this */
+
+	return 0;
+```
+
+(or `bpf_ringbuf_discard_dynptr(&ptr2, 0);` — either submit or discard releases the reference). This ensures both ringbuf reservations are released on every path to `exit`, satisfying the verifier.

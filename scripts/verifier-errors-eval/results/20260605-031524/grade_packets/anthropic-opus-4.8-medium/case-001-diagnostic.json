@@ -1,0 +1,67 @@
+{
+  "acceptable_fixes": [
+    "Use bpf_cpumask_create(), check for NULL, call bpf_cpumask_populate on the returned cpumask pointer, and release it before returning.",
+    "Replace the integer-cast pointer with another verifier-known memory object accepted by the kfunc contract."
+  ],
+  "canonical_fix": "Allocate or otherwise use verifier-known cpumask memory and pass that pointer to bpf_cpumask_populate, then release it if ownership was acquired.",
+  "case_id": "case-001",
+  "category": "Call Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The first argument to bpf_cpumask_populate is produced by casting the integer constant 0x123456 to a cpumask pointer. The verifier tracks it as a scalar, not as verifier-known writable memory of the required cpumask size.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-001-diagnostic.txt",
+    "case_id": "case-001",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 3387,
+    "prompt_path": "public/case-001/prompt_diagnostic.md",
+    "prompt_sha256": "70fa73da88be6c0d0c8fc97fe892aca7a31514097f240a7d4ded815530dce3b0",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-001-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "34b6b57a-17ba-4977-9155-25271dc0548c",
+    "started_at": "2026-06-05T03:17:06+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## What the log is telling us\n\nThe verifier didn't hit a \"real\" bug in the BPF instructions \u2014 it rejected the call exactly the way one would expect:\n\n```\n2: (b7) r1 = 1193046        ; R1 = 0x123456   <-- the bogus pointer\n4: (85) call bpf_cpumask_populate#61800\nR1 type=scalar expected=fp\nVerification failed: Call Type Safety: Invalid call argument\n```\n\n`bpf_cpumask_populate()` is a kfunc whose first argument must be **verifier-known memory** (a `struct cpumask` of known type/size \u2014 e.g. a trusted/allocated kptr, stack, map, or context memory). The program casts the integer constant `0x123456` to a pointer and passes that, so R1 is a scalar, not an `fp`/typed pointer. The verifier correctly refuses it.\n\nIn other words, this is a **negative (\"should fail\") test**: it is *meant* to be rejected, and it is being rejected with the message `R1 type=scalar expected=fp`.\n\n## Why the case is \"failing\"\n\nThe source as shown carries **no `__failure`/`__msg` annotation**, so the selftest harness treats it as a program that is expected to *load successfully*. Since the verifier (correctly) rejects it, the test is reported as a failure. Nothing about the instruction stream needs to change \u2014 the program is supposed to be rejected. The missing piece is the expectation annotation.\n\n## Smallest fix\n\nAnnotate the program as an expected failure with the message the verifier prints. Include `bpf_misc.h` for the macros if it isn't already.\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_tracing.h>\n#include <bpf/bpf_helpers.h>\n#include \"bpf_misc.h\"        /* for __failure / __msg */\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"tp_btf/task_newtask\")\n__failure __msg(\"type=scalar expected=fp\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;\n\tu64 bits;\n\tint ret;\n\n\tret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));\n\tif (!ret)\n\t\treturn 2;\n\n\treturn 0;\n}\n```\n\nNow the harness expects rejection and matches the substring `type=scalar expected=fp` that the verifier emits, so the test passes.\n\n## Alternative (if the intent were to make it actually load)\n\nIf instead the goal is to make the program verify *successfully*, you must hand the kfunc a real, typed cpumask instead of a fabricated pointer, e.g. allocate one:\n\n```c\nstruct bpf_cpumask *cpumask = bpf_cpumask_create();\nif (!cpumask)\n\treturn 0;\nbits = 0;                 /* init the source bytes */\nbpf_cpumask_populate((struct cpumask *)cpumask, &bits, sizeof(bits));\nbpf_cpumask_release(cpumask);\n```\n\nBut given the program is clearly written to probe the \"invalid destination\" path, the correct repair is the annotation fix above, not changing the test's intent.",
+  "must_mention": [
+    "R1 is a scalar/integer, not memory",
+    "The destination pointer must be verifier-known memory",
+    "Do not cast a constant integer to a pointer"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes the integer value",
+    "Adds a NULL check around the integer-cast pointer",
+    "Suppresses or ignores the return value without fixing the destination pointer"
+  ]
+}

@@ -1,0 +1,46 @@
+`r1` starts as a `ctx` pointer.  
+You spill it to stack at `fp-8`:
+
+- `*(u64 *)(r10 - 8) = r1`  → verifier tracks `fp-8` as a spilled pointer
+
+Then you do:
+
+- `*(u8 *)(r10 - 7) = r0`
+
+This **overlaps** that same 8-byte spill slot (`-8..-1`), so verifier invalidates pointer type info for the whole slot (`fp-8=mmmmmmmm`).  
+When you reload:
+
+- `r0 = *(u64 *)(r10 - 8)`
+
+`r0` becomes just a scalar, not a pointer. So next dereference fails:
+
+- `*(u64 *)(r0 + 8)` → invalid mem access `'scalar'`.
+
+### Smallest likely fix
+Store that byte in a **non-overlapping** stack byte.
+
+#### Patch
+```diff
+@@
+-       *(u8*)(r10 - 7) = r0;               \
++       *(u8*)(r10 - 9) = r0;               \
+```
+
+Complete snippet:
+
+```c
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	*(u64*)(r10 - 8) = r1;				\
+	r0 = 0x23;					\
+	*(u8*)(r10 - 9) = r0;				\
+	r0 = *(u64*)(r10 - 8);				\
+	r0 = *(u64*)(r0 + 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+This preserves the spilled pointer metadata, so `r0` remains a pointer after reload.

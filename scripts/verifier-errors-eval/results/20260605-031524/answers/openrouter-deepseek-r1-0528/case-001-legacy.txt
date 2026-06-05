@@ -1,0 +1,30 @@
+The verifier error occurs because the first argument to `bpf_cpumask_populate()` is an invalid scalar value (0x123456) instead of a valid stack pointer. The verifier expects a pointer to writable stack memory for the `struct cpumask` argument.
+
+The fix replaces the invalid scalar pointer with a stack-allocated array of `unsigned long` to simulate a `struct cpumask` layout. This provides a valid stack pointer that satisfies the verifier's type check.
+
+Patch:
+```patch
+--- a/original.c
++++ b/fixed.c
+@@ -7,7 +7,7 @@ char _license[] SEC("license") = "GPL";
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
++	unsigned long invalid[1];
+ 	u64 bits;
+ 	int ret;
+ 
+```
+
+Explanation:
+1. Changed `invalid` from a scalar pointer to `unsigned long invalid[1]`
+2. This allocates a 64-bit stack buffer (matching `u64 bits` size)
+3. The cast to `(struct cpumask *)` remains valid since `struct cpumask` contains an `unsigned long[]`
+4. Provides a valid stack pointer (type `fp`) instead of scalar
+5. Maintains identical program logic otherwise
+
+The verifier will now see:
+- R1 = stack pointer (fp-N) instead of scalar 0x123456
+- Satisfies the "expected=fp" requirement
+- Allows helper call verification to proceed

@@ -1,0 +1,33 @@
+## Explanation
+
+The verifier error is caused by this expression in `helper_b`:
+
+```c
+return helper_a(skb) + helper_c(val, skb + 1);
+```
+
+The `skb + 1` performs pointer arithmetic on the context pointer (`struct __sk_buff *`). In C, adding 1 to a pointer of type `struct __sk_buff *` advances the pointer by `sizeof(struct __sk_buff)` bytes (192 bytes, as seen in the log: `r6 += 192`). The BPF verifier tracks this as `ctx(imm=192)` — a context pointer with a non-zero offset.
+
+The verifier **does not allow dereferencing a modified context pointer** (one with a non-zero offset). When this modified pointer is passed to `helper_c`, which then dereferences `skb->ifindex`, the verifier rejects it with:
+
+```
+dereference of modified ctx ptr R2 off=192 disallowed
+```
+
+## Fix
+
+The `+ 1` is clearly a bug. Remove it so that the original (unmodified) context pointer is passed to `helper_c`:
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -16,7 +16,7 @@ int helper_a(struct __sk_buff *skb)
+ __attribute__((noinline))
+ int helper_b(int val, struct __sk_buff *skb)
+ {
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+ }
+```
+
+This ensures `R2` is the original `ctx()` pointer (offset 0) when `helper_c` is called, satisfying the verifier's requirement that context pointers be used in their original, unmodified form.

@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Remove the byte store to fp-7 before reloading the pointer.",
+    "Store the scalar into a different stack slot that does not overlap the pointer spill.",
+    "Reload/use the original context pointer instead of the corrupted spill."
+  ],
+  "canonical_fix": "Do not partially overwrite the stack slot that contains the spilled pointer. Use a separate stack slot/register for the scalar byte, or reload the original pointer from a preserved uncorrupted source before dereferencing.",
+  "case_id": "case-003",
+  "category": "Register Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The program spills a pointer to the stack, partially overwrites one byte of the spill with a scalar, reloads the corrupted stack slot, and then dereferences the result. The verifier no longer treats the reloaded value as a pointer.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-003-diagnostic.txt",
+    "case_id": "case-003",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 2939,
+    "prompt_path": "public/case-003/prompt_diagnostic.md",
+    "prompt_sha256": "f0ae7f2740c6566909dcad09724c1c4e67495167ac5f9dff858044543f91e0e9",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-003-diagnostic.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "6f768254-55ba-4e23-8b31-bbe2cbb8c271",
+    "started_at": "2026-06-05T03:20:53+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "### Verifier Failure Explanation\n\nThe failure occurs because the eBPF verifier enforces **type safety** for memory accesses. Specifically, it requires that any register used in a memory dereference (e.g., `*(u64*)(r0 + 8)`) must be a **valid pointer** to a known memory region.\n\nHere's the breakdown of the relevant instructions:\n\n1. `*(u64*)(r10 - 8) = r1;`  \n   - Stores the context pointer (`r1`) onto the stack at `fp-8`.  \n   - The verifier tracks that `fp-8` now holds a pointer to the context.\n\n2. `r0 = 0x23;`  \n   - Overwrites `r0` with the immediate value `35`.\n\n3. `*(u8*)(r10 - 7) = r0;`  \n   - Stores the value `35` (from `r0`) into `fp-7`.  \n   - This **clobbers part of the context pointer** stored at `fp-8`, because `fp-7` and `fp-8` overlap (writing to `fp-7` modifies the least significant byte of the 64-bit value at `fp-8`).\n\n4. `r0 = *(u64*)(r10 - 8);`  \n   - Reloads the value from `fp-8` into `r0`.  \n   - However, because the value at `fp-8` was partially overwritten in step 3, the verifier **no longer considers it a valid pointer**. Instead, it treats `r0` as a **scalar** (integer with unknown value).\n\n5. `r0 = *(u64*)(r0 + 8);`  \n   - Attempts to dereference `r0` as a pointer.  \n   - The verifier rejects this because `r0` is now a scalar, not a pointer.\n\n### Root Cause\n\nThe issue arises from **partial corruption of the stored pointer** due to overlapping memory accesses:\n- Writing a byte to `fp-7` modifies the least significant byte of the 64-bit value at `fp-8`.\n- This causes the verifier to lose track of the pointer's validity.\n\n### Fix\n\nTo avoid corrupting the stored pointer, we must ensure that:\n1. The context pointer is stored in a location that is **not overlapped** by subsequent writes.\n2. Or, if overlapping is unavoidable, the pointer is **reloaded and revalidated** before use.\n\nThe simplest fix is to **change the offset** of the second write to avoid overlapping with the stored pointer.\n\n#### Patch\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -125,7 +125,7 @@ __naked void entry(void)\n \tasm volatile (\"\t\t\t\t\t\\\n \t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n \tr0 = 0x23;\t\t\t\t\t\\\n-\t*(u8*)(r10 - 7) = r0;\t\t\t\t\\\n+\t*(u8*)(r10 - 16) = r0;\t\t\t\t\\\n \tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n \tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n```\n\n### Why This Works\n\n- The context pointer is stored at `fp-8`.\n- Writing `r0` to `fp-16` (instead of `fp-7`) ensures no overlap with `fp-8`.\n- The verifier can then safely reload the context pointer from `fp-8` and use it for the final dereference.\n\nThis is the **smallest possible change** that avoids corrupting the stored pointer, satisfying the verifier's type safety requirements.",
+  "must_mention": [
+    "The pointer spill is corrupted by a partial write",
+    "The reload becomes scalar/unknown",
+    "Dereferencing the scalar is invalid"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a bounds check after the pointer has already become scalar",
+    "Changes only the final load offset",
+    "Claims the issue is packet or map bounds"
+  ]
+}

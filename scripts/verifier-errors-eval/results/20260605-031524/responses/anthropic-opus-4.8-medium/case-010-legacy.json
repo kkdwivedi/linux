@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nThe verifier rejects this call:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\n`skb` is a context pointer (`ctx()`). The expression `skb + 1` advances it by `sizeof(struct __sk_buff)` (192 bytes), producing `ctx(imm=192)` \u2014 a *modified* context pointer.\n\nWhen `helper_c` is called as a global function, the verifier validates the caller's arguments against `helper_c`'s prototype. Its second parameter is `struct __sk_buff *`, i.e. a context pointer. The verifier requires a context pointer argument to be passed unmodified (offset 0). Passing `skb + 1` (off=192) triggers:\n\n```\ndereference of modified ctx ptr R2 off=192 disallowed\nCaller passes invalid args into func#3 ('helper_c')\n```\n\nThe `+ 1` pointer arithmetic on the ctx pointer is the bug.\n\n## Fix\n\nPass the unmodified `skb`:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n```\n\n### Patch\n\n```diff\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n```\n\nWith this change `R2` is passed as `ctx()` with off=0, which matches `helper_c`'s prototype and the verifier accepts the call.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-010-legacy.txt",
+    "case_id": "case-010",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 2233,
+    "prompt_path": "public/case-010/prompt_legacy.md",
+    "prompt_sha256": "42cb94c19ecff9212d01b745ca76ad135db7dce4e6c15eefc8d6cb8a521dd385",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-010-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "8176a2b4-3778-4318-93ea-d67f865c5ce9",
+    "started_at": "2026-06-05T03:17:19+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.006035,
+    "output_cost_usd": 0.016075,
+    "total_cost_usd": 0.022109999999999998
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1207,
+    "output_tokens": 643,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1207,
+      "output_tokens": 643,
+      "output_tokens_details": {
+        "thinking_tokens": 89
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1850
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EqMDCmMIDhgCKkA27fJ1pJ41/nFmKqDRqxS+1SC4supCcxyH5hy6iw55i44wglQM/yiYMEv/7LbTUnPe8dbNGa1cWU7BsqhCXg3XMg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDK4Kf7cz3nWvh5Q9+xoMdysD0brrtfIrPCO1IjC+qJLPqV4qaLhJj/GQeWcA6Z+hSALcg/8vedQY5ezrrFMqG1WqJrTed/4wTDe32soq7QEk3Ft622ioDHqH7wpyGoa2RtTUWVG0TF9aPWW5B9deJuIRlejtajMt/1zzyQebFxgH+Ead5NR+RihH4uVZAghKg65v3IRcDT3X96nrOgg5Sx4RB4/sr/DIJUI2wQ+Qqsjiad+YwmbBrfSR3pxosCYe72CjdPzMmMVRF35bx009sOnEWYZESnWJvjmM0ehNLpmU1UZhEhmIE0SdRh99wNF2DpyAdDFkMZysrBvlYZsGao11TTfDS7jDonzL0b5r3VwXmzaYMZYxFA6mHO63tBcsro2cXxLtxAfBb/AFhsFq3te/Pn0688M84WFQlwEYAQ==",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nThe verifier rejects this call:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\n`skb` is a context pointer (`ctx()`). The expression `skb + 1` advances it by `sizeof(struct __sk_buff)` (192 bytes), producing `ctx(imm=192)` \u2014 a *modified* context pointer.\n\nWhen `helper_c` is called as a global function, the verifier validates the caller's arguments against `helper_c`'s prototype. Its second parameter is `struct __sk_buff *`, i.e. a context pointer. The verifier requires a context pointer argument to be passed unmodified (offset 0). Passing `skb + 1` (off=192) triggers:\n\n```\ndereference of modified ctx ptr R2 off=192 disallowed\nCaller passes invalid args into func#3 ('helper_c')\n```\n\nThe `+ 1` pointer arithmetic on the ctx pointer is the bug.\n\n## Fix\n\nPass the unmodified `skb`:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n```\n\n### Patch\n\n```diff\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n```\n\nWith this change `R2` is passed as `ctx()` with off=0, which matches `helper_c`'s prototype and the verifier accepts the call.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01A1FkfhtUU9FYkJx9zr6zJA",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1207,
+      "output_tokens": 643,
+      "output_tokens_details": {
+        "thinking_tokens": 89
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

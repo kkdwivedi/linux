@@ -1,0 +1,31 @@
+**Explanation**
+
+The verifier rejects the program because `helper_a()` is a *sleepable* BPF subprogram: it contains a call to `bpf_copy_from_user()`, which may sleep. The verifier tracks regions where IRQs are disabled (entered here by `bpf_local_irq_save()`). Calling any function that might sleep inside such a region is forbidden, because sleeping while IRQs are disabled is unsafe.
+
+The causal path in the log is unambiguous:
+
+1. `bpf_local_irq_save(&flags)` enters an IRQ-disabled region (depth becomes 1).
+2. `helper_a(0)` is called while still inside that region.
+3. The verifier sees that `helper_a()` may call a sleepable helper and aborts with an execution-context safety error.
+
+The smallest fix is to simply move the call to `helper_a()` outside the critical section, which satisfies the rule without changing any other semantics.
+
+*(Note: the line `arg#0 reference type('UNKNOWN ') size cannot be determined: -22` printed at the top of the log is a non-fatal BTF-resolution message; the actual hard failure is the “sleepable global function … called in IRQ-disabled region” error.)*
+
+**Patch**
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -494,9 +494,9 @@ SEC("?syscall")
+ int entry(void *ctx)
+ {
+ 	unsigned long flags;
+ 
++	helper_a(0);
+ 	bpf_local_irq_save(&flags);
+-	helper_a(0);
+ 	bpf_local_irq_restore(&flags);
+ 	return 0;
+ }
+```

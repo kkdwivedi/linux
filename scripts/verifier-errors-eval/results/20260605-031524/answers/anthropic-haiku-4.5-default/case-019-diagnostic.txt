@@ -1,0 +1,53 @@
+## Explanation of the Verifier Failure
+
+The BPF verifier has detected a **recursive function call** in the program. Specifically, the function `helper_a()` calls itself recursively:
+
+```c
+l0_%=:	call helper_a;		// helper_a calls itself
+	exit;
+```
+
+The BPF verifier **prohibits recursive calls** because:
+1. It needs to verify that stack depth is bounded and finite
+2. Recursive calls would create cycles in the call graph, making static analysis of stack usage impossible
+3. BPF programs must be statically analyzable with guaranteed termination
+
+## Proposed Fix
+
+The smallest fix is to **convert the recursion into an explicit loop**. Instead of calling `helper_a()` recursively, use a loop to achieve the same logic.
+
+Here's the patched code:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r1 = 0;						\
+	call helper_a;					\
+	exit;						\
+"	::: __clobber_all);
+}
+
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l0_%=:	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l0_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+## Why This Works
+
+- **Original**: Called `helper_a()` recursively when `r1 < 4`, creating a cycle in the call graph
+- **Fixed**: Uses a backward jump (`goto l0_%=`) within the same function to implement the loop instead of a recursive call
+- **Verification**: The loop is now bounded (increments `r1` each iteration, exits when `r1 >= 4`), and there are no recursive calls, so the verifier can analyze the finite call graph
+
+This maintains the same logic (increment `r1` up to 4) while satisfying the verifier's requirement of an acyclic call graph.

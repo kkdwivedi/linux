@@ -1,0 +1,124 @@
+{
+  "answer_text": "The verifier rejects this program because `helper_a()` contains a direct self-call:\n\n```asm\nl0_%=: call helper_a;\n```\n\nEven though the code appears to have a bounded condition:\n\n```asm\nr1 += 1;\n...\nif r1 < 4 goto l0_%=;\n```\n\nthe BPF verifier does not allow recursive subprogram calls at all. BPF-to-BPF calls must form an acyclic call graph. The verifier detects that `helper_a()` calls itself and rejects the program immediately with:\n\n```text\nrecursive call from helper_a() to helper_a()\n```\n\nThis is a structural call-graph rejection, not a failure to prove the loop bound.\n\nThe smallest source-level fix is to replace the recursive self-call with an explicit bounded loop using a local jump. That preserves the intended behavior \u2014 increment `r1` until it reaches `4`, return that value in `r0` \u2014 without using recursion.\n\nPatch:\n\n```diff\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n\n SEC(\"tracepoint\")\n __naked void entry(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n \tr1 = 0;\t\t\t\t\t\t\\\n \tcall helper_a;\t\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t::: __clobber_all);\n }\n\n static __naked __noinline __attribute__((used))\n void helper_a(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n+l1_%=:\t\t\t\t\t\t\t\\\n \tr1 += 1;\t\t\t\t\t\\\n \tr0 = r1;\t\t\t\t\t\\\n \tif r1 < 4 goto l0_%=;\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n-l0_%=:\tcall helper_a;\t\t\t\t\t\\\n+l0_%=:\tgoto l1_%=;\t\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t::: __clobber_all);\n }\n```\n\nAfter the change, `helper_a()` no longer calls itself. The backward jump forms a bounded loop instead:\n\n```asm\nl1:\n    r1 += 1;\n    r0 = r1;\n    if r1 < 4 goto l0;\n    exit;\nl0:\n    goto l1;\n```\n\nStarting from `r1 = 0`, the loop executes until `r1 == 4`, then exits with `r0 = 4`. Since the verifier can track the scalar induction variable and the loop bound is small and explicit, this is likely to pass verification while preserving the original intent without forbidden recursion.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-none/case-019-legacy.txt",
+    "case_id": "case-019",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-none",
+    "prompt_bytes": 1084,
+    "prompt_path": "public/case-019/prompt_legacy.md",
+    "prompt_sha256": "c56d2c6e4bb69291f472e6afb890014cb9c5bba47608e3e1c0192e7f6f0ff6aa",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-none/case-019-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "none"
+    },
+    "run_id": "9ab7b227-d9e5-41ec-9a74-3f9767a4653c",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00204,
+    "output_cost_usd": 0.01566,
+    "total_cost_usd": 0.0177
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 408,
+    "output_tokens": 522,
+    "raw_usage": {
+      "input_tokens": 408,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 522,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 930
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 930
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629335,
+    "created_at": 1780629324,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0dbd4a2c382e61bd006a223f4cd90481a2baac120a9d3f3fdb",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier rejects this program because `helper_a()` contains a direct self-call:\n\n```asm\nl0_%=: call helper_a;\n```\n\nEven though the code appears to have a bounded condition:\n\n```asm\nr1 += 1;\n...\nif r1 < 4 goto l0_%=;\n```\n\nthe BPF verifier does not allow recursive subprogram calls at all. BPF-to-BPF calls must form an acyclic call graph. The verifier detects that `helper_a()` calls itself and rejects the program immediately with:\n\n```text\nrecursive call from helper_a() to helper_a()\n```\n\nThis is a structural call-graph rejection, not a failure to prove the loop bound.\n\nThe smallest source-level fix is to replace the recursive self-call with an explicit bounded loop using a local jump. That preserves the intended behavior \u2014 increment `r1` until it reaches `4`, return that value in `r0` \u2014 without using recursion.\n\nPatch:\n\n```diff\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n\n SEC(\"tracepoint\")\n __naked void entry(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n \tr1 = 0;\t\t\t\t\t\t\\\n \tcall helper_a;\t\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t::: __clobber_all);\n }\n\n static __naked __noinline __attribute__((used))\n void helper_a(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n+l1_%=:\t\t\t\t\t\t\t\\\n \tr1 += 1;\t\t\t\t\t\\\n \tr0 = r1;\t\t\t\t\t\\\n \tif r1 < 4 goto l0_%=;\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n-l0_%=:\tcall helper_a;\t\t\t\t\t\\\n+l0_%=:\tgoto l1_%=;\t\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t::: __clobber_all);\n }\n```\n\nAfter the change, `helper_a()` no longer calls itself. The backward jump forms a bounded loop instead:\n\n```asm\nl1:\n    r1 += 1;\n    r0 = r1;\n    if r1 < 4 goto l0;\n    exit;\nl0:\n    goto l1;\n```\n\nStarting from `r1 = 0`, the loop executes until `r1 == 4`, then exits with `r0 = 4`. Since the verifier can track the scalar induction variable and the loop bound is small and explicit, this is likely to pass verification while preserving the original intent without forbidden recursion.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0dbd4a2c382e61bd006a223f4d79d081a29acc4bac306280ed",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "none",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 408,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 522,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 930
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

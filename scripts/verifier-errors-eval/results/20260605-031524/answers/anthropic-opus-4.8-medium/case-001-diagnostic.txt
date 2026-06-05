@@ -1,0 +1,63 @@
+## What the log is telling us
+
+The verifier didn't hit a "real" bug in the BPF instructions — it rejected the call exactly the way one would expect:
+
+```
+2: (b7) r1 = 1193046        ; R1 = 0x123456   <-- the bogus pointer
+4: (85) call bpf_cpumask_populate#61800
+R1 type=scalar expected=fp
+Verification failed: Call Type Safety: Invalid call argument
+```
+
+`bpf_cpumask_populate()` is a kfunc whose first argument must be **verifier-known memory** (a `struct cpumask` of known type/size — e.g. a trusted/allocated kptr, stack, map, or context memory). The program casts the integer constant `0x123456` to a pointer and passes that, so R1 is a scalar, not an `fp`/typed pointer. The verifier correctly refuses it.
+
+In other words, this is a **negative ("should fail") test**: it is *meant* to be rejected, and it is being rejected with the message `R1 type=scalar expected=fp`.
+
+## Why the case is "failing"
+
+The source as shown carries **no `__failure`/`__msg` annotation**, so the selftest harness treats it as a program that is expected to *load successfully*. Since the verifier (correctly) rejects it, the test is reported as a failure. Nothing about the instruction stream needs to change — the program is supposed to be rejected. The missing piece is the expectation annotation.
+
+## Smallest fix
+
+Annotate the program as an expected failure with the message the verifier prints. Include `bpf_misc.h` for the macros if it isn't already.
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_helpers.h>
+#include "bpf_misc.h"        /* for __failure / __msg */
+
+char _license[] SEC("license") = "GPL";
+
+SEC("tp_btf/task_newtask")
+__failure __msg("type=scalar expected=fp")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+	u64 bits;
+	int ret;
+
+	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
+	if (!ret)
+		return 2;
+
+	return 0;
+}
+```
+
+Now the harness expects rejection and matches the substring `type=scalar expected=fp` that the verifier emits, so the test passes.
+
+## Alternative (if the intent were to make it actually load)
+
+If instead the goal is to make the program verify *successfully*, you must hand the kfunc a real, typed cpumask instead of a fabricated pointer, e.g. allocate one:
+
+```c
+struct bpf_cpumask *cpumask = bpf_cpumask_create();
+if (!cpumask)
+	return 0;
+bits = 0;                 /* init the source bytes */
+bpf_cpumask_populate((struct cpumask *)cpumask, &bits, sizeof(bits));
+bpf_cpumask_release(cpumask);
+```
+
+But given the program is clearly written to probe the "invalid destination" path, the correct repair is the annotation fix above, not changing the test's intent.

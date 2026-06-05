@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Explanation of the Verifier Failure\n\nThe verifier rejects this program because of a loss of type information:\n\n1. **Instruction 0**: `*(u64*)(r10 - 8) = r1` stores `ctx()` (a known context pointer) at `fp-8`\n2. **Instruction 2**: `*(u8*)(r10 - 7) = r0` writes a byte to `fp-7`, which overlaps with the 8-byte value at `fp-8`\n3. **Instruction 3**: `r0 = *(u64*)(r10 - 8)` loads from `fp-8`, but because of the overlapping byte write at `fp-7`, the verifier loses track of what type of value is stored there and marks it as `scalar()`\n4. **Instruction 4**: `r0 = *(u64*)(r0 + 8)` attempts to dereference `r0` as a pointer, but since `r0` is now an unknown scalar (not a known pointer type), the verifier rejects this as an invalid memory access\n\nThe core issue is that overlapping writes to stack memory cause the verifier to lose type information about previously stored values.\n\n## Proposed Fix\n\nThe smallest fix is to avoid the overlapping write. Since instruction 2 writes only a single byte to `fp-7`, and this overlaps with the 8-byte `ctx()` value at `fp-8`, we should use a different stack location for the byte write:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"socket\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n\tr0 = 0x23;\t\t\t\t\t\\\n\t*(u8*)(r10 - 9) = r0;\t\t\t\t\\\n\tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n\tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\n**Change**: Line 8, change `*(u8*)(r10 - 7)` to `*(u8*)(r10 - 9)`\n\nThis ensures the byte write at `fp-9` does not overlap with the 8-byte `ctx()` value at `fp-8`, preserving the verifier's knowledge that `r0` loaded from `fp-8` is a valid pointer type that can be dereferenced.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-003-legacy.txt",
+    "case_id": "case-003",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 1266,
+    "prompt_path": "public/case-003/prompt_legacy.md",
+    "prompt_sha256": "ff79e3ce2090bf446fcac0650e4037fac5ac92314018b0ce73b4c838bf23c7cf",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-003-legacy.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "29678e8f-f8e1-4cd8-b50c-8402be500bc0",
+    "started_at": "2026-06-05T03:18:56+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000654,
+    "output_cost_usd": 0.003115,
+    "total_cost_usd": 0.003769
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 654,
+    "output_tokens": 623,
+    "raw_usage": {
+      "completion_tokens": 623,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.003769,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.003115,
+        "upstream_inference_cost": 0.003769,
+        "upstream_inference_prompt_cost": 0.000654
+      },
+      "is_byok": false,
+      "prompt_tokens": 654,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1277
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1277
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation of the Verifier Failure\n\nThe verifier rejects this program because of a loss of type information:\n\n1. **Instruction 0**: `*(u64*)(r10 - 8) = r1` stores `ctx()` (a known context pointer) at `fp-8`\n2. **Instruction 2**: `*(u8*)(r10 - 7) = r0` writes a byte to `fp-7`, which overlaps with the 8-byte value at `fp-8`\n3. **Instruction 3**: `r0 = *(u64*)(r10 - 8)` loads from `fp-8`, but because of the overlapping byte write at `fp-7`, the verifier loses track of what type of value is stored there and marks it as `scalar()`\n4. **Instruction 4**: `r0 = *(u64*)(r0 + 8)` attempts to dereference `r0` as a pointer, but since `r0` is now an unknown scalar (not a known pointer type), the verifier rejects this as an invalid memory access\n\nThe core issue is that overlapping writes to stack memory cause the verifier to lose type information about previously stored values.\n\n## Proposed Fix\n\nThe smallest fix is to avoid the overlapping write. Since instruction 2 writes only a single byte to `fp-7`, and this overlaps with the 8-byte `ctx()` value at `fp-8`, we should use a different stack location for the byte write:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"socket\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n\tr0 = 0x23;\t\t\t\t\t\\\n\t*(u8*)(r10 - 9) = r0;\t\t\t\t\\\n\tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n\tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\n**Change**: Line 8, change `*(u8*)(r10 - 7)` to `*(u8*)(r10 - 9)`\n\nThis ensures the byte write at `fp-9` does not overlap with the 8-byte `ctx()` value at `fp-8`, preserving the verifier's knowledge that `r0` loaded from `fp-8` is a valid pointer type that can be dereferenced.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629536,
+    "id": "gen-1780629536-34i3sd1mO91kJZUyFFWc",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 623,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.003769,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.003115,
+        "upstream_inference_cost": 0.003769,
+        "upstream_inference_prompt_cost": 0.000654
+      },
+      "is_byok": false,
+      "prompt_tokens": 654,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1277
+    }
+  },
+  "reasoning_content": ""
+}

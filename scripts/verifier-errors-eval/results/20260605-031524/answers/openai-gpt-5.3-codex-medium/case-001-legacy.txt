@@ -1,0 +1,34 @@
+The verifier is rejecting this call because of **arg#1 type** to `bpf_cpumask_populate()`:
+
+- You pass `R1 = 0x123456` (an immediate scalar / fake pointer).
+- Verifier says: `R1 type=scalar expected=fp`
+- So this kfunc/helper expects a pointer derived from the BPF frame pointer (i.e., stack memory), not an arbitrary constant address.
+
+There’s a second likely issue after fixing that: `bits` is uninitialized and is passed by pointer; if arg#2 is read by the helper, verifier may then reject uninitialized stack read. So initialize it.
+
+### Smallest likely fix
+
+Use a stack-backed object for arg#1 and initialize `bits`:
+
+```diff
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+-	u64 bits;
++	u64 mask = 0;
++	u64 bits = 0;
+ 	int ret;
+ 
+-	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
++	ret = bpf_cpumask_populate((struct cpumask *)&mask, &bits, sizeof(bits));
+ 	if (!ret)
+ 		return 2;
+ 
+ 	return 0;
+ }
+```
+
+Why this should satisfy verifier:
+- `R1` becomes `fp-...` (stack pointer), matching `expected=fp`.
+- `bits` is initialized, avoiding potential stack-read complaints on arg#2.

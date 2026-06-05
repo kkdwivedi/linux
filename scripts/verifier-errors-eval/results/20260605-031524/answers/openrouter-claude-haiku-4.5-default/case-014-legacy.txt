@@ -1,0 +1,45 @@
+## Verifier Failure Analysis
+
+The verifier rejects this program because at instruction 13 (the `bpf_probe_read_kernel` call), register R1 has lost its bounds information.
+
+**Root cause:** At instruction 10, `r1 += r3` performs pointer arithmetic where:
+- R1 starts as a `map_value` pointer (bounded to the 48-byte struct)
+- R3 is a scalar with range [0, 0xffffffff] (unbounded)
+
+After the addition, R1 becomes a `map_value` pointer with an unbounded offset applied to it. When this pointer is passed to `bpf_probe_read_kernel`, the verifier cannot guarantee it stays within the map value bounds, so it rejects the access as "unbounded memory access."
+
+## Solution
+
+The fix is to bounds-check R3 before using it in pointer arithmetic. Since the struct is 48 bytes and contains a 44-byte data array, we should ensure R3 doesn't exceed safe bounds.
+
+**Patch:**
+
+```c
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = 0;						\
+	*(u64*)(r2 + 0) = r1;				\
+	r1 = %[map_a] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l0_%=;				\
+	r1 = r0;					\
+	r3 = *(u32*)(r0 + 0);				\
+	if r3 > 4 goto l0_%=;				\
+	r1 += r3;					\
+	r2 = 1;						\
+	r3 = 0;						\
+	call %[bpf_probe_read_kernel];			\
+l0_%=:	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm(bpf_probe_read_kernel),
+	  __imm_addr(map_a)
+	: __clobber_all);
+}
+```
+
+**Key change:** Added `if r3 > 4 goto l0_%=;` after loading the offset value. This bounds-checks R3 to ensure it stays within the safe range (0-4 bytes), keeping the pointer arithmetic within the 48-byte struct bounds. The verifier will then recognize R1 as a bounded pointer when passed to `bpf_probe_read_kernel`.

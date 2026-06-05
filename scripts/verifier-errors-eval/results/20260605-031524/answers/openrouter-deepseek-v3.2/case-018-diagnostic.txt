@@ -1,0 +1,30 @@
+The verifier failure occurs because the program attempts to unlock `lock_a` while `lock_b` may still be held, violating the LIFO (last-in, first-out) unlocking order required for spin locks. Specifically, after acquiring `lock_a` then `lock_b`, the code inside the `if` block unlocks `lock_a` without first unlocking `lock_b`, even though `lock_b` might be held (depending on the execution path). The verifier cannot guarantee that `lock_b` is not held when unlocking `lock_a`, leading to the "unlock out of order" error.
+
+The simplest fix is to swap the order of lock acquisition so that `lock_b` is acquired first, followed by `lock_a`. This ensures that in the failure path (when `lock_a` fails), we unlock `lock_b` (the only held lock), which satisfies LIFO. In the success path, we unlock `lock_a` then `lock_b`, also maintaining reverse order.
+
+Here is the patch:
+
+```diff
+--- a/original.c
++++ b/fixed.c
+@@ -8,15 +8,15 @@
+ SEC("?tc")
+ int entry(struct __sk_buff *ctx)
+ {
+-	if (bpf_res_spin_lock(&lock_a))
++	if (bpf_res_spin_lock(&lock_b))
+ 		return 0;
+-	if (bpf_res_spin_lock(&lock_b)) {
+-		bpf_res_spin_unlock(&lock_a);
++	if (bpf_res_spin_lock(&lock_a)) {
++		bpf_res_spin_unlock(&lock_b);
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+ 	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+This change ensures that all unlock paths follow LIFO order, which should satisfy the verifier's requirements.

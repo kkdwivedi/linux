@@ -1,0 +1,79 @@
+{
+  "answer_text": "## Explanation\n\nThe verifier is rejecting this program because:\n\n1. `bpf_local_irq_save()` disables IRQs, creating an IRQ-disabled region (depth 1)\n2. Within this IRQ-disabled region, the code calls `helper_a()`, which is a **sleepable** function (marked with `__noinline` and defined globally)\n3. Sleepable functions may call operations that can sleep, which is not allowed in IRQ-disabled regions\n4. The IRQ-disabled region isn't closed until `bpf_local_irq_restore()` is called\n\n## Root Cause\n\nThe function `helper_a()` is inlined in some contexts but here it's a non-inline global function that the verifier treats as potentially sleepable. Calling it between `bpf_local_irq_save()` and `bpf_local_irq_restore()` violates execution context safety rules.\n\n## Solution\n\nThe smallest fix is to move the `helper_a(0)` call **outside** the IRQ-disabled region. Reorganize the code so that the critical section only protects what actually needs IRQ protection:\n\n```c\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\thelper_a(0);\n\tbpf_local_irq_save(&flags);\n\tbpf_local_irq_restore(&flags);\n\treturn 0;\n}\n```\n\nThis ensures that the sleepable function call happens outside the IRQ-disabled context, satisfying the verifier's execution context safety checks.\n\nAlternatively, if the `helper_a()` call must happen within the critical section, you would need to make `helper_a()` non-sleepable (e.g., by inlining it with `static inline` or ensuring it doesn't call any sleepable BPF helpers), but moving it outside is the simplest and most likely correct fix given the code structure.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-012-diagnostic.txt",
+    "case_id": "case-012",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 3392,
+    "prompt_path": "public/case-012/prompt_diagnostic.md",
+    "prompt_sha256": "cb0bb7bae71f637618353d539dc3320ce61e3ed2b36b833f42dc45015a35e430",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-012-diagnostic.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "aab51757-2de8-4926-905d-a5b36de171ca",
+    "started_at": "2026-06-05T04:22:35+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.001185,
+    "output_cost_usd": 0.002315,
+    "total_cost_usd": 0.0034999999999999996
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1185,
+    "output_tokens": 463,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 1185,
+      "output_tokens": 463,
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1648
+  },
+  "raw_response": {
+    "content": [
+      {
+        "text": "## Explanation\n\nThe verifier is rejecting this program because:\n\n1. `bpf_local_irq_save()` disables IRQs, creating an IRQ-disabled region (depth 1)\n2. Within this IRQ-disabled region, the code calls `helper_a()`, which is a **sleepable** function (marked with `__noinline` and defined globally)\n3. Sleepable functions may call operations that can sleep, which is not allowed in IRQ-disabled regions\n4. The IRQ-disabled region isn't closed until `bpf_local_irq_restore()` is called\n\n## Root Cause\n\nThe function `helper_a()` is inlined in some contexts but here it's a non-inline global function that the verifier treats as potentially sleepable. Calling it between `bpf_local_irq_save()` and `bpf_local_irq_restore()` violates execution context safety rules.\n\n## Solution\n\nThe smallest fix is to move the `helper_a(0)` call **outside** the IRQ-disabled region. Reorganize the code so that the critical section only protects what actually needs IRQ protection:\n\n```c\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\thelper_a(0);\n\tbpf_local_irq_save(&flags);\n\tbpf_local_irq_restore(&flags);\n\treturn 0;\n}\n```\n\nThis ensures that the sleepable function call happens outside the IRQ-disabled context, satisfying the verifier's execution context safety checks.\n\nAlternatively, if the `helper_a()` call must happen within the critical section, you would need to make `helper_a()` non-sleepable (e.g., by inlining it with `static inline` or ensuring it doesn't call any sleepable BPF helpers), but moving it outside is the simplest and most likely correct fix given the code structure.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01AFp97zb5b5n6PMmce5ZnRc",
+    "model": "claude-haiku-4-5-20251001",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 1185,
+      "output_tokens": 463,
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

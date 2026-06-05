@@ -1,0 +1,117 @@
+{
+  "answer_text": "## Explanation\n\nThe verifier enforces that `bpf_local_irq_save`/`bpf_local_irq_restore` must follow strict LIFO (last-in, first-out) ordering \u2014 essentially a stack discipline for IRQ flag states.\n\nThe code saves in this order:\n1. `bpf_local_irq_save(&flags1)` \u2192 id=1\n2. `bpf_local_irq_save(&flags2)` \u2192 id=2\n\nBut then restores in the wrong order:\n1. `bpf_local_irq_restore(&flags1)` \u2192 expects id=2 (the most recently saved), but gets id=1 \u2192 **error**\n\nThe verifier expected the restore of id=2 (the last save) first, but instead got a restore of id=1.\n\n## Fix\n\nSwap the restore order so the most recently saved flags are restored first:\n\n```c\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);   // restore flags2 first (LIFO)\n\tbpf_local_irq_restore(&flags1);   // then flags1\n```\n\nThis is the minimal change \u2014 just swap lines 248 and 249. The save order remains the same, but the restores now follow the required reverse order, matching the verifier's LIFO expectation.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-glm-5.1-high/case-017-diagnostic.txt",
+    "case_id": "case-017",
+    "model": "z-ai/glm-5.1",
+    "profile": "openrouter-glm-5.1-high",
+    "prompt_bytes": 2781,
+    "prompt_path": "public/case-017/prompt_diagnostic.md",
+    "prompt_sha256": "675d45e8a367c50d949964d5e150f18c1e043733cbcf9e98094409311c602ad9",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-glm-5.1-high/case-017-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "6f1767ed-ff67-488d-8895-bdded756300e",
+    "started_at": "2026-06-05T03:21:40+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000882,
+    "output_cost_usd": 0.00120428,
+    "total_cost_usd": 0.0020862800000000003
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 900,
+    "output_tokens": 391,
+    "raw_usage": {
+      "completion_tokens": 391,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 120
+      },
+      "cost": 0.002485368,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.00154836,
+        "upstream_inference_cost": 0.002485368,
+        "upstream_inference_prompt_cost": 0.000937008
+      },
+      "is_byok": false,
+      "prompt_tokens": 900,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 192,
+        "video_tokens": 0
+      },
+      "total_tokens": 1291
+    },
+    "reasoning_content_chars": 436,
+    "reasoning_tokens": 120,
+    "total_tokens": 1291
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation\n\nThe verifier enforces that `bpf_local_irq_save`/`bpf_local_irq_restore` must follow strict LIFO (last-in, first-out) ordering \u2014 essentially a stack discipline for IRQ flag states.\n\nThe code saves in this order:\n1. `bpf_local_irq_save(&flags1)` \u2192 id=1\n2. `bpf_local_irq_save(&flags2)` \u2192 id=2\n\nBut then restores in the wrong order:\n1. `bpf_local_irq_restore(&flags1)` \u2192 expects id=2 (the most recently saved), but gets id=1 \u2192 **error**\n\nThe verifier expected the restore of id=2 (the last save) first, but instead got a restore of id=1.\n\n## Fix\n\nSwap the restore order so the most recently saved flags are restored first:\n\n```c\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);   // restore flags2 first (LIFO)\n\tbpf_local_irq_restore(&flags1);   // then flags1\n```\n\nThis is the minimal change \u2014 just swap lines 248 and 249. The save order remains the same, but the restores now follow the required reverse order, matching the verifier's LIFO expectation.",
+          "reasoning": "The verifier error is clear: IRQ flag saves and restores must follow LIFO (last-in, first-out) order. The code saves `flags1` first, then `flags2`, but then tries to restore `flags1` before `flags2`. This is out of order.\n\nThe fix is to swap the restore order so that `flags2` is restored before `flags1`:\n\n```c\nbpf_local_irq_restore(&flags2);\nbpf_local_irq_restore(&flags1);\n```\n\nThis is the smallest fix - just swap lines 248 and 249.",
+          "reasoning_details": [
+            {
+              "format": "unknown",
+              "index": 0,
+              "text": "The verifier error is clear: IRQ flag saves and restores must follow LIFO (last-in, first-out) order. The code saves `flags1` first, then `flags2`, but then tries to restore `flags1` before `flags2`. This is out of order.\n\nThe fix is to swap the restore order so that `flags2` is restored before `flags1`:\n\n```c\nbpf_local_irq_restore(&flags2);\nbpf_local_irq_restore(&flags1);\n```\n\nThis is the smallest fix - just swap lines 248 and 249.",
+              "type": "reasoning.text"
+            }
+          ],
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "stop"
+      }
+    ],
+    "created": 1780629700,
+    "id": "gen-1780629700-6oBLjFrSa4YsS7oucNXZ",
+    "model": "z-ai/glm-5.1-20260406",
+    "object": "chat.completion",
+    "provider": "AtlasCloud",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 391,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 120
+      },
+      "cost": 0.002485368,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.00154836,
+        "upstream_inference_cost": 0.002485368,
+        "upstream_inference_prompt_cost": 0.000937008
+      },
+      "is_byok": false,
+      "prompt_tokens": 900,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 192,
+        "video_tokens": 0
+      },
+      "total_tokens": 1291
+    }
+  },
+  "reasoning_content": "The verifier error is clear: IRQ flag saves and restores must follow LIFO (last-in, first-out) order. The code saves `flags1` first, then `flags2`, but then tries to restore `flags1` before `flags2`. This is out of order.\n\nThe fix is to swap the restore order so that `flags2` is restored before `flags1`:\n\n```c\nbpf_local_irq_restore(&flags2);\nbpf_local_irq_restore(&flags1);\n```\n\nThis is the smallest fix - just swap lines 248 and 249."
+}

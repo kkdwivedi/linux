@@ -1,0 +1,109 @@
+{
+  "answer_text": "Looking at the verifier log, I can see the issue:\n\nThe problem occurs in `helper_b` where the code does `skb + 1` and passes that modified pointer to `helper_c`. The verifier explicitly states \"dereference of modified ctx ptr R2 off=192 disallowed\".\n\nLet me trace through what happens:\n1. `helper_b` receives `skb` (R2) as a valid context pointer\n2. It calls `helper_a(skb)` successfully \n3. Then it does `skb + 1` (which becomes `r6 += 192` since `skb` is a struct __sk_buff pointer, and pointer arithmetic moves by struct size)\n4. It passes this modified pointer to `helper_c`, which tries to dereference it to access `skb->ifindex`\n5. The verifier rejects this because you can't dereference a modified context pointer\n\nThe fix is simple: pass the original `skb` pointer to `helper_c` instead of the modified one.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\n__attribute__((noinline))\nint helper_a(struct __sk_buff *skb)\n{\n\treturn skb->len;\n}\n\nint helper_c(int val, struct __sk_buff *skb);\n\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);  // Changed from skb + 1 to skb\n}\n\n__attribute__((noinline))\nint helper_c(int val, struct __sk_buff *skb)\n{\n\treturn skb->ifindex * val;\n}\n\nSEC(\"tc\")\nint entry(struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_b(2, skb) + helper_c(3, skb);\n}\n```\n\nThe issue was that `helper_b` was passing `skb + 1` to `helper_c`, but context pointers cannot be arbitrarily modified and still used safely. The verifier correctly rejected this as it could lead to accessing memory outside the valid context structure.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-010-legacy.txt",
+    "case_id": "case-010",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 2233,
+    "prompt_path": "public/case-010/prompt_legacy.md",
+    "prompt_sha256": "42cb94c19ecff9212d01b745ca76ad135db7dce4e6c15eefc8d6cb8a521dd385",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-010-legacy.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "845f1ab4-08ba-48f6-8ea5-6a477fc47b6a",
+    "started_at": "2026-06-05T03:21:00+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.0001826,
+    "output_cost_usd": 0.0007722,
+    "total_cost_usd": 0.0009548
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 830,
+    "output_tokens": 429,
+    "raw_usage": {
+      "completion_tokens": 429,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.0009548,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0007722,
+        "upstream_inference_cost": 0.0009548,
+        "upstream_inference_prompt_cost": 0.0001826
+      },
+      "is_byok": false,
+      "prompt_tokens": 830,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 214,
+        "video_tokens": 0
+      },
+      "total_tokens": 1259
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1259
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Looking at the verifier log, I can see the issue:\n\nThe problem occurs in `helper_b` where the code does `skb + 1` and passes that modified pointer to `helper_c`. The verifier explicitly states \"dereference of modified ctx ptr R2 off=192 disallowed\".\n\nLet me trace through what happens:\n1. `helper_b` receives `skb` (R2) as a valid context pointer\n2. It calls `helper_a(skb)` successfully \n3. Then it does `skb + 1` (which becomes `r6 += 192` since `skb` is a struct __sk_buff pointer, and pointer arithmetic moves by struct size)\n4. It passes this modified pointer to `helper_c`, which tries to dereference it to access `skb->ifindex`\n5. The verifier rejects this because you can't dereference a modified context pointer\n\nThe fix is simple: pass the original `skb` pointer to `helper_c` instead of the modified one.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\n__attribute__((noinline))\nint helper_a(struct __sk_buff *skb)\n{\n\treturn skb->len;\n}\n\nint helper_c(int val, struct __sk_buff *skb);\n\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);  // Changed from skb + 1 to skb\n}\n\n__attribute__((noinline))\nint helper_c(int val, struct __sk_buff *skb)\n{\n\treturn skb->ifindex * val;\n}\n\nSEC(\"tc\")\nint entry(struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_b(2, skb) + helper_c(3, skb);\n}\n```\n\nThe issue was that `helper_b` was passing `skb + 1` to `helper_c`, but context pointers cannot be arbitrarily modified and still used safely. The verifier correctly rejected this as it could lead to accessing memory outside the valid context structure.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "stop"
+      }
+    ],
+    "created": 1780629660,
+    "id": "gen-1780629660-qj9zesRV5of9OLgCyamS",
+    "model": "qwen/qwen3-coder-480b-a35b-07-25",
+    "object": "chat.completion",
+    "provider": "Google",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 429,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.0009548,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0007722,
+        "upstream_inference_cost": 0.0009548,
+        "upstream_inference_prompt_cost": 0.0001826
+      },
+      "is_byok": false,
+      "prompt_tokens": 830,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 214,
+        "video_tokens": 0
+      },
+      "total_tokens": 1259
+    }
+  },
+  "reasoning_content": ""
+}

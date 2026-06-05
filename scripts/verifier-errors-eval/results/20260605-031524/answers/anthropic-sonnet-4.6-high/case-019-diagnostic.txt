@@ -1,0 +1,42 @@
+## Explanation
+
+The BPF verifier requires an **acyclic subprogram call graph** so it can statically bound stack depth and complete analysis. `helper_a` calls itself (`call helper_a`), forming a cycle, which the verifier rejects outright regardless of whether the recursion is actually finite at runtime.
+
+## Fix
+
+Convert the tail-recursive call into a backwards jump (a bounded loop). The semantics are identical: increment `r1`, store it in `r0`, and keep looping while `r1 < 4`.
+
+```diff
+ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+ 	asm volatile ("					\
+-	r1 += 1;					\
++l0_%=:	r1 += 1;					\
+ 	r0 = r1;					\
+-	if r1 < 4 goto l0_%=;				\
+-	exit;						\
+-l0_%=:	call helper_a;					\
+-	exit;						\
++	if r1 < 4 goto l0_%=;				\
++	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+The resulting assembly:
+
+```c
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l0_%=:	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l0_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+**Why this works:** A backward jump is a loop, not a subprogram call, so the call graph stays acyclic. The verifier can handle bounded loops (introduced in Linux 5.3) by tracking register ranges; here `r1` increments from its initial value toward 4, giving the verifier a clear termination bound. No `call` instruction means no recursion, so the structural check passes immediately.

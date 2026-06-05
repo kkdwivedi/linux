@@ -1,0 +1,124 @@
+{
+  "answer_text": "The verifier is rejecting the program because the two IRQ-save resources are restored in the wrong order.\n\n`bpf_local_irq_save()` creates a tracked IRQ-disabled region associated with the stack slot passed to it. These regions must be released in strict last-in, first-out order.\n\nCurrent program:\n\n```c\nbpf_local_irq_save(&flags1);    // acquire id=1\nbpf_local_irq_save(&flags2);    // acquire id=2\n\nbpf_local_irq_restore(&flags1); // tries to restore id=1 first: invalid\nbpf_local_irq_restore(&flags2);\n```\n\nAt the first restore, the verifier expects the most recently saved IRQ state, `flags2`, to be restored first. Instead, the program restores `flags1`, so verification fails with:\n\n```text\ncannot restore irq state out of order, expected id=2 acquired at insn_idx=7\n```\n\nThe smallest source-level fix is to restore the flags in reverse order:\n\n```c\nbpf_local_irq_restore(&flags2);\nbpf_local_irq_restore(&flags1);\n```\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -8,8 +8,8 @@ int entry(struct __sk_buff *ctx)\n \n \tbpf_local_irq_save(&flags1);\n \tbpf_local_irq_save(&flags2);\n-\tbpf_local_irq_restore(&flags1);\n \tbpf_local_irq_restore(&flags2);\n+\tbpf_local_irq_restore(&flags1);\n \treturn 0;\n }\n```\n\nFixed source:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);\n\tbpf_local_irq_restore(&flags1);\n\treturn 0;\n}\n```\n\nThis should satisfy the verifier because the IRQ state saved second is restored first, matching the required LIFO resource lifetime discipline.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-none/case-017-diagnostic.txt",
+    "case_id": "case-017",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-none",
+    "prompt_bytes": 2781,
+    "prompt_path": "public/case-017/prompt_diagnostic.md",
+    "prompt_sha256": "675d45e8a367c50d949964d5e150f18c1e043733cbcf9e98094409311c602ad9",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-none/case-017-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "none"
+    },
+    "run_id": "79b5b010-4b70-435f-91c3-2bfd04fbc20e",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.004445,
+    "output_cost_usd": 0.01377,
+    "total_cost_usd": 0.018215
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 889,
+    "output_tokens": 459,
+    "raw_usage": {
+      "input_tokens": 889,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 459,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 1348
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1348
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629334,
+    "created_at": 1780629324,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_00a8b7e50e3d5cda006a223f4ce05c819291fafe96f7926be3",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier is rejecting the program because the two IRQ-save resources are restored in the wrong order.\n\n`bpf_local_irq_save()` creates a tracked IRQ-disabled region associated with the stack slot passed to it. These regions must be released in strict last-in, first-out order.\n\nCurrent program:\n\n```c\nbpf_local_irq_save(&flags1);    // acquire id=1\nbpf_local_irq_save(&flags2);    // acquire id=2\n\nbpf_local_irq_restore(&flags1); // tries to restore id=1 first: invalid\nbpf_local_irq_restore(&flags2);\n```\n\nAt the first restore, the verifier expects the most recently saved IRQ state, `flags2`, to be restored first. Instead, the program restores `flags1`, so verification fails with:\n\n```text\ncannot restore irq state out of order, expected id=2 acquired at insn_idx=7\n```\n\nThe smallest source-level fix is to restore the flags in reverse order:\n\n```c\nbpf_local_irq_restore(&flags2);\nbpf_local_irq_restore(&flags1);\n```\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -8,8 +8,8 @@ int entry(struct __sk_buff *ctx)\n \n \tbpf_local_irq_save(&flags1);\n \tbpf_local_irq_save(&flags2);\n-\tbpf_local_irq_restore(&flags1);\n \tbpf_local_irq_restore(&flags2);\n+\tbpf_local_irq_restore(&flags1);\n \treturn 0;\n }\n```\n\nFixed source:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);\n\tbpf_local_irq_restore(&flags1);\n\treturn 0;\n}\n```\n\nThis should satisfy the verifier because the IRQ state saved second is restored first, matching the required LIFO resource lifetime discipline.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_00a8b7e50e3d5cda006a223f4dae608192938d653fbb40aba6",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "none",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 889,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 459,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 1348
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

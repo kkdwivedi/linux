@@ -1,0 +1,29 @@
+##Verifier Failure Analysis
+
+The error is:
+```
+Unreleased reference id=3 alloc_insn=14
+BPF_EXIT instruction in main prog would lead to reference leak
+```
+
+**Reference id=3** corresponds to `ptr2`, allocated at instruction 14 (`bpf_ringbuf_reserve_dynptr` for `ptr2`).
+
+The problem is on the **success path** (when `bpf_dynptr_data` returns non-null, i.e., `sample != NULL`):
+
+1. `ptr1` is properly submitted via `bpf_ringbuf_submit_dynptr(&ptr1, 0)` — this releases reference id=1.
+2. `ptr2` is **never submitted or discarded** — reference id=3 leaks.
+
+On the **failure path** (`!sample`), both `ptr1` and `ptr2` are properly discarded. But on the success path, `ptr2` is simply forgotten.
+
+## Fix
+
+Add `bpf_ringbuf_discard_dynptr(&ptr2, 0);` after submitting `ptr1`, so that `ptr2` is released on the success path as well:
+
+```c
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+
+	return 0;
+```
+
+This ensures that on every possible path through the function, both dynptr references are either submitted or discarded before the function exits, satisfying the verifier's reference-tracking requirement.

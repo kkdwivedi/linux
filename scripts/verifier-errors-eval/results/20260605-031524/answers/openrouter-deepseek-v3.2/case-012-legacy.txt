@@ -1,0 +1,16 @@
+The verifier error occurs because `helper_a` is marked as a sleepable function due to its call to `bpf_copy_from_user`, and it is called within an IRQ-disabled region (between `bpf_local_irq_save` and `bpf_local_irq_restore`). Sleepable functions are not allowed in IRQ-disabled regions. Additionally, `bpf_copy_from_user` is called with a NULL pointer, which is invalid but not directly flagged in the log because the verifier fails earlier.
+
+The smallest fix is to remove the sleepable call from `helper_a` by eliminating the `bpf_copy_from_user` invocation and the unused array. This makes `helper_a` non-sleepable, allowing it to be called in the IRQ-disabled region without issues.
+
+```diff
+ int __noinline helper_a(int i)
+ {
+-	char data[8];
+-
+-	if (!i)
+-		bpf_copy_from_user(data, sizeof(data), NULL);
+ 	return i;
+ }
+```
+
+This change removes the sleepable helper call while preserving the function's original behavior of returning the input `i`. The IRQ-disabled region remains unchanged, and the program should now pass verification.

@@ -1,0 +1,55 @@
+The verifier rejects this before normal instruction exploration because `helper_a()` contains a BPF-to-BPF call to itself:
+
+```asm
+l0_%=: call helper_a;
+```
+
+That creates a direct recursive subprogram call graph:
+
+```text
+entry -> helper_a -> helper_a -> ...
+```
+
+The verifier does not allow recursive BPF subprogram calls, even if the recursion is apparently bounded by a condition such as:
+
+```asm
+if r1 < 4 goto l0_%=;
+```
+
+So the failure is not about proving whether `r1` eventually reaches `4`; recursion itself is forbidden.
+
+The smallest source-level fix is to replace the recursive call with a bounded loop inside `helper_a()`. The current logic increments `r1` until it reaches `4`, returning the final value in `r0`. That can be expressed directly as a loop.
+
+Patch:
+
+```diff
+diff --git a/test.c b/test.c
+index 0000000..0000000 100644
+--- a/test.c
++++ b/test.c
+@@ -17,11 +17,10 @@ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+ 	asm volatile ("					\
++l0_%=:							\
+ 	r1 += 1;					\
+ 	r0 = r1;					\
+ 	if r1 < 4 goto l0_%=;				\
+ 	exit;						\
+-l0_%=:	call helper_a;					\
+-	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+After the change, `helper_a()` no longer calls itself. It uses a verifier-checkable bounded loop instead:
+
+```asm
+l0:
+	r1 += 1;
+	r0 = r1;
+	if r1 < 4 goto l0;
+	exit;
+```
+
+Starting from `r1 = 0`, this exits with `r0 = 4`, matching the intended effect of the original recursive version while avoiding forbidden recursion.

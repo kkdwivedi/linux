@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nThe verifier enforces a hard limit of **512 bytes** for the *combined* stack usage along any single chain of nested function calls (each non-inlined global/static function gets its own stack frame, and the frames of an active call chain are summed).\n\nHere the deepest call chain is:\n\n```\nentry  ->  helper_c  ->  helper_b   (-> helper_a, which uses no stack)\n```\n\nBoth `helper_c` and `helper_b` declare:\n\n```c\nvolatile char buf[MAX_STACK] = {};   /* MAX_STACK == 260 */\n```\n\nEach 260\u2011byte frame is rounded up to a 16\u2011byte boundary \u2192 **272 bytes** per frame. Two such frames stacked together:\n\n```\n272 + 272 = 544 bytes  > 512\n```\n\n`entry` itself adds ~0 bytes, so the \u201c3 calls\u201d total is 544, which exceeds the 512\u2011byte limit \u2014 hence:\n\n```\ncombined stack size of 3 calls is 544. Too large\n```\n\n(`helper_a` has no array and `helper_d` is only reached as a *separate* leaf call from `helper_c`, not stacked under `helper_b`, so they don\u2019t add to the worst chain.)\n\n## Smallest fix\n\nShrink the per\u2011frame stack so that two of these frames fit in 512 bytes. With two nested buffers, each frame must round to \u2264 256 bytes, i.e. `MAX_STACK \u2264 256`:\n\n```c\n2 * round_up_16(256) = 2 * 256 = 512   /* within the 512-byte limit */\n```\n\n### Patch\n\n```c\n-#define MAX_STACK 260\n+#define MAX_STACK 256\n```\n\nThis reduces each of `helper_b`/`helper_c`/`helper_d`\u2019s frame to 256 bytes, making the worst\u2011case chain (`entry -> helper_c -> helper_b`) total 512 bytes, which no longer exceeds the verifier\u2019s combined call\u2011stack\u2011depth limit.\n\nIf you want a little margin below the limit instead of being exactly at it, use a smaller value (e.g. `248`); but `256` is the minimal change that satisfies the `\u2264 512` constraint.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-013-diagnostic.txt",
+    "case_id": "case-013",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 2658,
+    "prompt_path": "public/case-013/prompt_diagnostic.md",
+    "prompt_sha256": "044070894a5a67f43ab32448001b1bd67c0db88fee4087d1bb67f71a9273513d",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-013-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "d0f79411-f593-405a-8e2d-0e1797f81bd9",
+    "started_at": "2026-06-05T03:17:40+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.0062,
+    "output_cost_usd": 0.05095,
+    "total_cost_usd": 0.05715
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1240,
+    "output_tokens": 2038,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1240,
+      "output_tokens": 2038,
+      "output_tokens_details": {
+        "thinking_tokens": 1312
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 3278
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "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",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nThe verifier enforces a hard limit of **512 bytes** for the *combined* stack usage along any single chain of nested function calls (each non-inlined global/static function gets its own stack frame, and the frames of an active call chain are summed).\n\nHere the deepest call chain is:\n\n```\nentry  ->  helper_c  ->  helper_b   (-> helper_a, which uses no stack)\n```\n\nBoth `helper_c` and `helper_b` declare:\n\n```c\nvolatile char buf[MAX_STACK] = {};   /* MAX_STACK == 260 */\n```\n\nEach 260\u2011byte frame is rounded up to a 16\u2011byte boundary \u2192 **272 bytes** per frame. Two such frames stacked together:\n\n```\n272 + 272 = 544 bytes  > 512\n```\n\n`entry` itself adds ~0 bytes, so the \u201c3 calls\u201d total is 544, which exceeds the 512\u2011byte limit \u2014 hence:\n\n```\ncombined stack size of 3 calls is 544. Too large\n```\n\n(`helper_a` has no array and `helper_d` is only reached as a *separate* leaf call from `helper_c`, not stacked under `helper_b`, so they don\u2019t add to the worst chain.)\n\n## Smallest fix\n\nShrink the per\u2011frame stack so that two of these frames fit in 512 bytes. With two nested buffers, each frame must round to \u2264 256 bytes, i.e. `MAX_STACK \u2264 256`:\n\n```c\n2 * round_up_16(256) = 2 * 256 = 512   /* within the 512-byte limit */\n```\n\n### Patch\n\n```c\n-#define MAX_STACK 260\n+#define MAX_STACK 256\n```\n\nThis reduces each of `helper_b`/`helper_c`/`helper_d`\u2019s frame to 256 bytes, making the worst\u2011case chain (`entry -> helper_c -> helper_b`) total 512 bytes, which no longer exceeds the verifier\u2019s combined call\u2011stack\u2011depth limit.\n\nIf you want a little margin below the limit instead of being exactly at it, use a smaller value (e.g. `248`); but `256` is the minimal change that satisfies the `\u2264 512` constraint.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01MFubCZsR7LjYxNvgjyUbmF",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1240,
+      "output_tokens": 2038,
+      "output_tokens_details": {
+        "thinking_tokens": 1312
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

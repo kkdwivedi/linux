@@ -1,0 +1,48 @@
+## Explanation of the Verifier Failure
+
+The verifier rejects the program with the error `R7 invalid mem access 'scalar'` at instruction 10 when attempting to write to `*p`.
+
+**Root cause:** After the call to `helper_a(sk, 0)` at instruction 8, the verifier loses track of the fact that `r7` (which holds `sk->data`) is a valid packet pointer. The verifier marks `r7` as a scalar value because:
+
+1. `helper_a` is declared `__noinline` and the verifier treats it as a global function that is "assumed valid"
+2. When control returns from a global function call, the verifier conservatively invalidates pointer registers that might have been modified
+3. `r7` (the packet data pointer) is therefore downgraded from `pkt(r=0)` to `scalar`
+4. Writing to a scalar value is invalid, hence the rejection
+
+The bounds check at instructions 2-5 successfully validates that one 4-byte integer can be safely accessed, but this validation is lost after the function call because the register tracking is cleared.
+
+## Solution
+
+The fix is to **reload `sk->data` after the function call** to restore the bounds information. This is necessary because global function calls invalidate pointer registers in the caller's context.
+
+### Patch
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+__noinline long helper_b(struct __sk_buff *sk, __u32 len)
+{
+	return bpf_skb_pull_data(sk, len);
+}
+
+__noinline long helper_a(struct __sk_buff *sk, __u32 len)
+{
+	return helper_b(sk, len);
+}
+
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	int *p = (void *)(long)sk->data;
+
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	helper_a(sk, 0);
+	p = (void *)(long)sk->data;  // Reload after function call
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+**Why this works:** Reloading `sk->data` after the function call forces the verifier to re-read the packet pointer from the context structure, which restores the `pkt()` register state and allows the bounds check to be re-established. The subsequent write to `*p` then becomes valid.

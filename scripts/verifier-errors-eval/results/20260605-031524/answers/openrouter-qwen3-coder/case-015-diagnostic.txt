@@ -1,0 +1,60 @@
+### Problem Explanation
+
+The verifier fails because of an **invalid memory access** caused by using a register (`R7`) that was previously a **packet pointer**, but got invalidated due to a **helper function call**.
+
+Here's the breakdown:
+
+1. In the `entry` function:
+   - `p` is derived from `sk->data`, which is a **packet pointer**.
+   - A bounds check is performed: `if ((void *)(p + 1) > (void *)(long)sk->data_end)`.
+   - Then, `helper_a(sk, 0)` is called, which eventually calls `bpf_skb_pull_data()`.
+
+2. The issue:
+   - `bpf_skb_pull_data()` is a **helper function** that can **change the packet data layout** (e.g., pull data from head).
+   - As a result, **all previously saved packet pointers become invalid** for safety.
+   - After the call to `helper_a`, the verifier **invalidates `R7`** (which held the original packet pointer) because the packet might have changed.
+
+3. The error:
+   - The line `*p = 42;` translates to `*(u32 *)(r7 + 0) = r1`.
+   - But `R7` is now a **scalar** (invalidated pointer), so the dereference is **not allowed**.
+
+### Solution
+
+To fix this, we must **reload and revalidate** the packet pointer **after** the helper call. That is, we must re-fetch `sk->data` and redo the bounds check **after** calling `helper_a`.
+
+This is a common pattern in BPF when using helpers that may change packet data.
+
+### Fix
+
+We need to:
+1. Move the bounds check **after** the `helper_a()` call.
+2. Re-fetch `p` from `sk->data` after the helper call.
+
+Here is the **minimal patch** to fix the issue:
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -1063,10 +1063,11 @@ int entry(struct __sk_buff *sk)
+ {
+        int *p = (void *)(long)sk->data;
+
+-       if ((void *)(p + 1) > (void *)(long)sk->data_end)
+-               return TCX_DROP;
+        helper_a(sk, 0);
++       p = (void *)(long)sk->data;
++       if ((void *)(p + 1) > (void *)(long)sk->data_end)
++               return TCX_DROP;
+        *p = 42;
+        return TCX_PASS;
+ }
+```
+
+### Why This Works
+
+- After `helper_a()` calls `bpf_skb_pull_data()`, any previous packet pointers are invalidated.
+- By re-fetching `p` **after** the helper call, we get a fresh packet pointer.
+- The bounds check is then performed on this **valid** pointer.
+- The verifier now sees that `p` is valid when we dereference it.
+
+This satisfies the verifier's requirement that all packet pointer dereferences must be validated **after** any helper call that could change the packet.

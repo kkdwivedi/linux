@@ -1,0 +1,89 @@
+I'll analyze this verifier failure step by step.
+
+## Verifier Failure Explanation
+
+The verifier rejects this program for two related reasons:
+
+1. **Primary error**: `sleepable global function helper_a() called in IRQ-disabled region`
+
+   The function `helper_a()` contains `bpf_copy_from_user()`, which is a **sleepable** helper (it can sleep while waiting for user memory to be paged in). The verifier detects that `helper_a()` calls `bpf_copy_from_user()` and therefore marks the entire function as sleepable.
+
+2. **Secondary error**: `arg#0 reference type('UNKNOWN ') size cannot be determined: -22`
+
+   This relates to the `bpf_copy_from_user(data, sizeof(data), NULL)` call where `NULL` is passed as the source pointer. The verifier can't determine the type/size of the memory at `NULL`.
+
+The core issue is that `bpf_local_irq_save()` and `bpf_local_irq_restore()` create an IRQ-disabled region, and calling a sleepable function inside an IRQ-disabled region is illegal. Sleeping while IRQs are disabled would cause a deadlock or system hang.
+
+## The Fix
+
+The smallest fix is to make `helper_a()` **not sleepable** by ensuring it doesn't call `bpf_copy_from_user()`. Since the `if (!i)` branch with `bpf_copy_from_user()` is only taken when `i==0`, and we're calling `helper_a(0)`, we need to change the call to pass a non-zero value, or restructure the code.
+
+The simplest fix: **Change `helper_a(0)` to `helper_a(1)`** so the `bpf_copy_from_user()` path is never taken at runtime, and the verifier can see the function doesn't sleep in practice.
+
+Wait - the verifier does path analysis, so it will still see that `bpf_copy_from_user()` is *reachable* (even if not taken with `i=1`), and still mark the function as sleepable.
+
+Let me reconsider: The verifier marks functions as sleepable based on whether they *contain* sleepable helpers, regardless of reachability at specific call sites. So we need to ensure `helper_a()` never calls a sleepable helper.
+
+Since we call `helper_a(0)` which triggers the sleepable path, and we need to keep the IRQ save/restore pattern, we should **remove the `bpf_copy_from_user()` call** or **make it conditional on something the verifier can prune** (but the verifier is conservative).
+
+Actually, looking more carefully: the simplest fix is to **change the call argument from `0` to `1`** so that the `if (!i)` branch is not taken. However, the verifier's interprocedural analysis may still flag `helper_a` as sleepable because it contains a sleepable helper.
+
+Let me check: in BPF, the verifier analyzes callee functions to determine if they're sleepable. If `helper_a` contains `bpf_copy_from_user`, it's marked sleepable regardless of which path reaches it.
+
+So the fix must be in `helper_a` itself - we need to prevent it from being marked sleepable.
+
+## Correct Fix
+
+Remove the `bpf_copy_from_user()` call from `helper_a()`, or make it not compile in. Since we need the smallest change and the `bpf_copy_from_user` with `NULL` would fail anyway (the `UNKNOWN` type error), we should simply **remove that call or make the branch do something else**.
+
+Actually, re-reading: the `UNKNOWN` error happens because `NULL` doesn't have a known type for the verifier to track. But the main blocking error is the sleepable-in-IRQ-disabled issue.
+
+The smallest fix that addresses both issues:
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -7,8 +7,7 @@ int __noinline helper_a(int i)
+ {
+ 	char data[8];
+ 
+-	if (!i)
+-		bpf_copy_from_user(data, sizeof(data), NULL);
++	(void)data;
+ 	return i;
+ }
+```
+
+Or even simpler - just remove the problematic body:
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -5,10 +5,7 @@ char _license[] SEC("license") = "GPL";
+ 
+ int __noinline helper_a(int i)
+ {
+-	char data[8];
+-
+-	if (!i)
+-		bpf_copy_from_user(data, sizeof(data), NULL);
+ 	return i;
+ }
+```
+
+But if we want to keep `data` to avoid unused variable warnings in some builds, or if the function structure matters for testing:
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -7,8 +7,6 @@ int __noinline helper_a(int i)
+ {
+ 	char data[8];
+ 
+-	if (!i)
+-		bpf_copy_from_user(data, sizeof(data), NULL);
+ 	return i;
+ }
+```
+
+This is the minimal fix: **remove the `if (!i) { bpf_copy_from_user(...); }` block**. This eliminates both the sleepable-in-IRQ-disabled error and the `UNKNOWN` type error for `NULL`.

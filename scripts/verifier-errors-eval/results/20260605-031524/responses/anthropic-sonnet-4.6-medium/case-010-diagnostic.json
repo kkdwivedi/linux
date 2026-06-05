@@ -1,0 +1,87 @@
+{
+  "answer_text": "The bug is in `helper_b`: it passes `skb + 1` to `helper_c`, which creates a modified ctx pointer with offset 192 (sizeof struct __sk_buff = 192). The BPF verifier disallows dereferencing a ctx pointer that has been offset.\n\nThe fix is to just pass `skb` instead of `skb + 1`:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n```",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-medium/case-010-diagnostic.txt",
+    "case_id": "case-010",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-medium",
+    "prompt_bytes": 3922,
+    "prompt_path": "public/case-010/prompt_diagnostic.md",
+    "prompt_sha256": "c9975b0bd7d86b4edddce6166024784483798109ab83deeb5185dbddd366cae7",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-medium/case-010-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "1b39d02a-09d4-406b-ab87-e064ab4caf73",
+    "started_at": "2026-06-05T03:17:53+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.004329,
+    "output_cost_usd": 0.002175,
+    "total_cost_usd": 0.006504
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1443,
+    "output_tokens": 145,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1443,
+      "output_tokens": 145,
+      "output_tokens_details": {
+        "thinking_tokens": 0
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1588
+  },
+  "raw_response": {
+    "content": [
+      {
+        "text": "The bug is in `helper_b`: it passes `skb + 1` to `helper_c`, which creates a modified ctx pointer with offset 192 (sizeof struct __sk_buff = 192). The BPF verifier disallows dereferencing a ctx pointer that has been offset.\n\nThe fix is to just pass `skb` instead of `skb + 1`:\n\n```c\n__attribute__((noinline))\nint helper_b(int val, struct __sk_buff *skb)\n{\n\treturn helper_a(skb) + helper_c(val, skb);\n}\n```",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01X19ybZjiaS7YEQf2ttvXHL",
+    "model": "claude-sonnet-4-6",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1443,
+      "output_tokens": 145,
+      "output_tokens_details": {
+        "thinking_tokens": 0
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

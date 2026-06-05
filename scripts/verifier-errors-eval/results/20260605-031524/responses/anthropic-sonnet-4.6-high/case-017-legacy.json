@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nThe BPF verifier enforces that `bpf_local_irq_save`/`bpf_local_irq_restore` pairs must follow **LIFO (stack) order** \u2014 the most recently saved IRQ state must be restored first.\n\nThe program does:\n1. `bpf_local_irq_save(&flags1)` \u2192 acquires ref id=1\n2. `bpf_local_irq_save(&flags2)` \u2192 acquires ref id=2\n3. `bpf_local_irq_restore(&flags1)` \u2192 tries to release id=1, but verifier expects id=2 (the most recent)\n\nThe verifier rejects this because restoring `flags1` before `flags2` violates the required nesting order.\n\n## Fix\n\nSwap the two `bpf_local_irq_restore` calls so they unwind in LIFO order:\n\n```c\n-\tbpf_local_irq_restore(&flags1);\n-\tbpf_local_irq_restore(&flags2);\n+\tbpf_local_irq_restore(&flags2);\n+\tbpf_local_irq_restore(&flags1);\n```\n\nThe corrected function body:\n\n```c\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);   // restore last-saved first\n\tbpf_local_irq_restore(&flags1);   // then restore first-saved\n\treturn 0;\n```\n\nThis matches the verifier's expectation: after both saves, ref id=2 is on top of the \"stack\" and must be released before id=1.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-high/case-017-legacy.txt",
+    "case_id": "case-017",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-high",
+    "prompt_bytes": 1745,
+    "prompt_path": "public/case-017/prompt_legacy.md",
+    "prompt_sha256": "7fc465b0f01c16b7f076395e6776f54156c97eb932b04d9dd1f878444e3ec702",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-high/case-017-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "0e061ca8-96cc-4f77-8f80-3fb76f7f3347",
+    "started_at": "2026-06-05T04:17:11+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00243,
+    "output_cost_usd": 0.011535,
+    "total_cost_usd": 0.013965
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 810,
+    "output_tokens": 769,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 810,
+      "output_tokens": 769,
+      "output_tokens_details": {
+        "thinking_tokens": 341
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 638,
+    "reasoning_tokens": 0,
+    "total_tokens": 1579
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EuoHCmUIDhgCKkCkchAQzG+qwyBRWIZ9p+/lM9DTvXXTbV2TtHILaLS3OHwJFCVpkHyoPVEbGHxHYvsfkr38uq1SA1sAnguCRNM/MhFjbGF1ZGUtc29ubmV0LTQtNjgAQgh0aGlua2luZxIMYRqAExleckz+uKXlGgwLEM0t66mdgF3QMzQiMFhIQPJKX2rc+4Gk/bgi4k83jJYmeD0AF13wb1O3h9hJjApjuDu4inenivkfPshVjSqyBqJixvtEamETRYKgzdi/trkXdjEE3rA8f4ZQq10phMXEGJIdS870+c52+qYPD3WR8rgO6ZJ3qYrV3yNnUi+Lw7Druui0XNNZryW7zpsVorPvlySQ724sAkWe/j11xBxL0s+dQeyWu3PgJOKOISaE0wFWY+EPsbs2iMHyLz7VKNWzrBx1jG8PIWmPkCHOb9uzL9IbbuE/pb98OxeDPaKGEURXyzXaqllXuQ5Als3/O40XZiwocbCr01KgMQDDgdNE4CKnNA0LCkC0rVwlPDccbFVmA8vdTms+IskwqCQ36dktXqhw5aKdy8WwtPKNWp1rnTHFzKUuzKvi5rYndcPeeE6mozNxnT2ZQpcoBaCycR4XG3/zmH4uZix8ZNfwLT4sJVXyRgxmJ/Ld9rHEN1cCMZL39y3yyNb/pTNZdvNW9lTssglyszD45YbHFMk+d7wWcSV3mh5UnCvfzcYQWb4cWjgsqH5Uvwk8EkLl1JPvJOvhDrtV9i5+p+aTUqWtHl9S6LD+42k5uiRl3z1a3vUWnOe8Zh3xYAyQ6k2G2J5CulRILWgjXE7XzhURppf8w9WDC3p+pTNXa0hfzXmitSpu7vk1ROZ+avXW0oI1K4IWRIx80ThZege5trqyUPseCvprn1SwXd+1roPa3JMW9T8SiuEyaLbQowMNtSF69zEl3YwxkODc7doaeWAmiD/g0CwJ3KqDOyZmEUwYfdEiEnHkacwL5FcvgLIAexZ5Wf4vUA/nQfNQdjDIuY/JpBTOBypUH7u7Utcj+zoC5Qi50OtKsUN9tqq0W/XVa0GhAyNFpflhMkOvQBjKg4iZ/O366A8c5vVvf6glUtmjyQEUaNK6Ty8ZZqKxXm49bD/8zgef1VUwoCzu9W8Pw2kl7xOGFEy9j593MmpUTDiqci/uWXQxi83ndY8E4SFivXxYDfqtoraV7nhT4El9Sh2uUFS7DVYuziNJv8/FOch2iaDgoLDAPQus+4qhyAZ5TcgNWfh6LsnL83PWkSn9iMTcPtfb8AUoKUlqLujKNOEBVmmQA4JX4o8XnAxy5rR/hFolMqWs2f0GT4TvlLalhSwRv96UO0+R/S6WGAE=",
+        "thinking": "The verifier error is clear: \"cannot restore irq state out of order, expected id=2 acquired at insn_idx=7\"\n\nThe BPF verifier enforces that IRQ save/restore must be done in LIFO (stack) order. The code does:\n1. `bpf_local_irq_save(&flags1)` - saves IRQ state #1\n2. `bpf_local_irq_save(&flags2)` - saves IRQ state #2\n3. `bpf_local_irq_restore(&flags1)` - tries to restore #1, but #2 is on top!\n\n\n4. `bpf_local_irq_restore(&flags2)` - restores #2\n\nThe fix is straightforward: I need to reverse the restore order so that the most recently saved state gets restored first. That means swapping lines 248 and 249 to restore flags2 before flags1.",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nThe BPF verifier enforces that `bpf_local_irq_save`/`bpf_local_irq_restore` pairs must follow **LIFO (stack) order** \u2014 the most recently saved IRQ state must be restored first.\n\nThe program does:\n1. `bpf_local_irq_save(&flags1)` \u2192 acquires ref id=1\n2. `bpf_local_irq_save(&flags2)` \u2192 acquires ref id=2\n3. `bpf_local_irq_restore(&flags1)` \u2192 tries to release id=1, but verifier expects id=2 (the most recent)\n\nThe verifier rejects this because restoring `flags1` before `flags2` violates the required nesting order.\n\n## Fix\n\nSwap the two `bpf_local_irq_restore` calls so they unwind in LIFO order:\n\n```c\n-\tbpf_local_irq_restore(&flags1);\n-\tbpf_local_irq_restore(&flags2);\n+\tbpf_local_irq_restore(&flags2);\n+\tbpf_local_irq_restore(&flags1);\n```\n\nThe corrected function body:\n\n```c\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);   // restore last-saved first\n\tbpf_local_irq_restore(&flags1);   // then restore first-saved\n\treturn 0;\n```\n\nThis matches the verifier's expectation: after both saves, ref id=2 is on top of the \"stack\" and must be released before id=1.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01FSJCnZGaUWy2XQsJG2KFFW",
+    "model": "claude-sonnet-4-6",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 810,
+      "output_tokens": 769,
+      "output_tokens_details": {
+        "thinking_tokens": 341
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": "The verifier error is clear: \"cannot restore irq state out of order, expected id=2 acquired at insn_idx=7\"\n\nThe BPF verifier enforces that IRQ save/restore must be done in LIFO (stack) order. The code does:\n1. `bpf_local_irq_save(&flags1)` - saves IRQ state #1\n2. `bpf_local_irq_save(&flags2)` - saves IRQ state #2\n3. `bpf_local_irq_restore(&flags1)` - tries to restore #1, but #2 is on top!\n\n\n4. `bpf_local_irq_restore(&flags2)` - restores #2\n\nThe fix is straightforward: I need to reverse the restore order so that the most recently saved state gets restored first. That means swapping lines 248 and 249 to restore flags2 before flags1."
+}

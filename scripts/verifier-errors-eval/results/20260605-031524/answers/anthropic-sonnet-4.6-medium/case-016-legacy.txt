@@ -1,0 +1,46 @@
+## Verifier Failure Explanation
+
+After `bpf_sk_lookup_tcp` (insn 19), the verifier tracks an open socket reference (id=2). The code then checks `r6` (the packet mark):
+
+```
+if r6 == 0 goto l1;   // if mark==0, go release socket
+exit;                  // if mark!=0, EXIT — leaks the socket reference!
+l1: if r0 == 0 goto l2;
+    r1 = r0; call bpf_sk_release;
+l2: exit;
+```
+
+When `r6 != 0`, the program exits at insn 21 **without releasing** the socket obtained from `bpf_sk_lookup_tcp`. The verifier rejects this as an unreleased reference leak.
+
+## Fix
+
+Restructure the post-lookup logic so the socket is always released (if non-null) **before** the `r6` check:
+
+```c
+	call %[bpf_sk_lookup_tcp];			\
+	if r0 == 0 goto l1_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l1_%=:	if r6 == 0 goto l2_%=;				\
+	exit;						\
+l2_%=:	exit;						\
+```
+
+### Complete Patch
+
+```diff
+-	if r6 == 0 goto l1_%=;				\
+-	exit;						\
+-l1_%=:	if r0 == 0 goto l2_%=;				\
+-	r1 = r0;					\
+-	call %[bpf_sk_release];				\
+-l2_%=:	exit;						\
++	if r0 == 0 goto l1_%=;				\
++	r1 = r0;					\
++	call %[bpf_sk_release];				\
++l1_%=:	if r6 == 0 goto l2_%=;				\
++	exit;						\
++l2_%=:	exit;						\
+```
+
+This ensures the socket reference is unconditionally released (when non-null) on every exit path, satisfying the verifier's reference-tracking requirement.

@@ -1,0 +1,79 @@
+{
+  "answer_text": "## Analysis\n\nThe verifier failure occurs because:\n\n1. At instruction 0, `r1` (the context parameter) is stored at `fp-8`, and the verifier tracks it as `ctx()`\n2. At instruction 2, a byte write to `fp-7` happens, which overlaps with the `fp-8` location and causes the verifier to \"lose\" the precise type information about what's at `fp-8`, marking it as `mmmmmmmm` (mixed/unknown)\n3. At instruction 3, `r0 = *(u64*)(r10 - 8)` loads from that location, but since the verifier can no longer definitively prove it's a pointer (due to the overlapping write), it conservatively treats `r0` as a `scalar()`\n4. At instruction 4, the code tries to dereference `r0 + 8`, which fails because `r0` is now an integer scalar, not a pointer\n\nThe root cause is the **overlapping memory write** to `fp-7` that corrupts the verifier's knowledge that `fp-8` contains a pointer.\n\n## Solution\n\nThe smallest fix is to avoid the overlapping write. Move the byte write to a location that doesn't overlap with where the pointer is stored:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"socket\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n\tr0 = 0x23;\t\t\t\t\t\\\n\t*(u8*)(r10 - 16) = r0;\t\t\t\t\\\n\tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n\tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\n**Change**: Replace `*(u8*)(r10 - 7)` with `*(u8*)(r10 - 16)` (or any offset that doesn't overlap with the 8-byte region at `fp-8`).\n\nThis preserves the verifier's ability to track that `fp-8` contains a valid pointer, allowing the subsequent dereference at instruction 4 to succeed.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-003-diagnostic.txt",
+    "case_id": "case-003",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 2939,
+    "prompt_path": "public/case-003/prompt_diagnostic.md",
+    "prompt_sha256": "f0ae7f2740c6566909dcad09724c1c4e67495167ac5f9dff858044543f91e0e9",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-003-diagnostic.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "e87e28c4-8b7d-4128-999c-94c5e8ebbe1b",
+    "started_at": "2026-06-05T04:21:27+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.001098,
+    "output_cost_usd": 0.00277,
+    "total_cost_usd": 0.003868
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1098,
+    "output_tokens": 554,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 1098,
+      "output_tokens": 554,
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1652
+  },
+  "raw_response": {
+    "content": [
+      {
+        "text": "## Analysis\n\nThe verifier failure occurs because:\n\n1. At instruction 0, `r1` (the context parameter) is stored at `fp-8`, and the verifier tracks it as `ctx()`\n2. At instruction 2, a byte write to `fp-7` happens, which overlaps with the `fp-8` location and causes the verifier to \"lose\" the precise type information about what's at `fp-8`, marking it as `mmmmmmmm` (mixed/unknown)\n3. At instruction 3, `r0 = *(u64*)(r10 - 8)` loads from that location, but since the verifier can no longer definitively prove it's a pointer (due to the overlapping write), it conservatively treats `r0` as a `scalar()`\n4. At instruction 4, the code tries to dereference `r0 + 8`, which fails because `r0` is now an integer scalar, not a pointer\n\nThe root cause is the **overlapping memory write** to `fp-7` that corrupts the verifier's knowledge that `fp-8` contains a pointer.\n\n## Solution\n\nThe smallest fix is to avoid the overlapping write. Move the byte write to a location that doesn't overlap with where the pointer is stored:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nSEC(\"socket\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n\tr0 = 0x23;\t\t\t\t\t\\\n\t*(u8*)(r10 - 16) = r0;\t\t\t\t\\\n\tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n\tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\n**Change**: Replace `*(u8*)(r10 - 7)` with `*(u8*)(r10 - 16)` (or any offset that doesn't overlap with the 8-byte region at `fp-8`).\n\nThis preserves the verifier's ability to track that `fp-8` contains a valid pointer, allowing the subsequent dereference at instruction 4 to succeed.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01PRFbTuJCsHKU9FUmX95yEv",
+    "model": "claude-haiku-4-5-20251001",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 1098,
+      "output_tokens": 554,
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

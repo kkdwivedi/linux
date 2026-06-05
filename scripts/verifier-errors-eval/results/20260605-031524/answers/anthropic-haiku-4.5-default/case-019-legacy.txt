@@ -1,0 +1,49 @@
+## Explanation of the Verifier Failure
+
+The BPF verifier explicitly prohibits **recursive function calls** in eBPF programs. The error message "recursive call from helper_a() to helper_a()" indicates that the function `helper_a` is calling itself, which violates the verifier's constraints.
+
+The problematic code is in `helper_a`:
+```c
+l0_%=:	call helper_a;		// Self-recursive call
+	exit;
+```
+
+This creates a recursive loop where `helper_a` calls itself when `r1 < 4`.
+
+## Proposed Fix
+
+The smallest fix is to **remove the recursive call** and convert it to a loop using conditional branches instead. Since eBPF supports forward/backward jumps, we can replace the recursion with an iterative approach:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r1 = 0;						\
+	call helper_a;					\
+	exit;						\
+"	::: __clobber_all);
+}
+
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l0_%=:	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l0_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+## Why This Works
+
+1. **Removes recursion**: Instead of calling `helper_a` recursively, we use a backward jump (`goto l0_%=`) that loops within the same function.
+2. **Preserves logic**: The loop still increments `r1` and exits when `r1 >= 4`, maintaining the original behavior.
+3. **Verifier compliance**: Backward jumps (loops) are allowed; only recursive function calls are forbidden.
+
+The key change is moving the label `l0_%=:` to the beginning of the loop and replacing `call helper_a` with `goto l0_%=`.

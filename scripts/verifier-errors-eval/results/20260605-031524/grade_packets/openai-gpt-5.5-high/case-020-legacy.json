@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Reduce CALLS_50 fan-out or the number of helper layers.",
+    "Pass a stable non-FP-derived argument pattern when possible.",
+    "Replace the generated call tree with a simpler bounded loop or less duplicated call structure."
+  ],
+  "canonical_fix": "Reduce the number of distinct call paths or argument patterns reaching the subprograms, for example by reducing fan-out/depth, consolidating calls, or avoiding many distinct FP-offset arguments.",
+  "case_id": "case-020",
+  "category": "Verifier Limit",
+  "difficulty": "hard",
+  "expected_explanation": "The program creates an enormous number of distinct bpf2bpf call paths and frame-pointer-derived argument patterns. Liveness analysis exceeds its complexity limit while recomputing subprogram liveness across those paths.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-high/case-020-legacy.txt",
+    "case_id": "case-020",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-high",
+    "prompt_bytes": 6158,
+    "prompt_path": "public/case-020/prompt_legacy.md",
+    "prompt_sha256": "cecfa6936349490d4b7bd2b0131df3ba133333894cfcdcc4438f6f6f0196b689",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-high/case-020-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "36361ff4-890c-4ead-aa0c-9e621cb2c151",
+    "started_at": "2026-06-05T03:16:13+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "The program is rejected before normal instruction verification finishes because the verifier\u2019s subprogram liveness walk blows up exponentially.\n\nEach non-leaf function does 50 static BPF-to-BPF calls to the next helper, and the call chain is:\n\n```text\nentry -> helper_a -> helper_b -> helper_c -> helper_d -> helper_e -> helper_f -> helper_g\n```\n\nBecause these are `static` subprograms, the verifier analyzes callees in caller context. With 50 call sites at each of 7 levels, the liveness analysis has to walk an enormous call tree. The log repeatedly shows:\n\n```text\nsubprog#7: analyzing (depth 7)...\nsubprog#7 helper_g:\n1064: r0 = 0\n1065: exit\n```\n\nand eventually:\n\n```text\nliveness analysis exceeded complexity limit (10001 calls)\nprocessed 0 insns ...\n```\n\nSo this is not a semantic safety failure like invalid memory access; it is purely verifier complexity from the 50-way fanout.\n\nA small source-level fix is to reduce the per-level fanout so the total liveness walk stays below the verifier\u2019s 10k-call limit. With 3 calls per level, the expanded call tree is roughly:\n\n```text\n3 + 3^2 + 3^3 + 3^4 + 3^5 + 3^6 + 3^7 = 3279\n```\n\nwhich is comfortably below 10000.\n\nPatch:\n\n```diff\n--- a/test.c\n+++ b/test.c\n@@ -7,7 +7,7 @@\n \tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n \tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n+#define CALLS_50(fn) CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)\n \n __naked __noinline __used\n static unsigned long helper_g(void)\n```\n\nThe macro name becomes slightly misleading, but this is the smallest edit. If desired for clarity, rename it to `CALLS_3` and update the call sites, but functionally the one-line change should make the verifier pass by avoiding the liveness complexity limit.",
+  "must_mention": [
+    "The failure is verifier liveness complexity, not runtime recursion",
+    "Many call paths or distinct FP offsets drive the limit",
+    "The fix is to simplify the call/argument pattern"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only increases a runtime loop bound",
+    "Adds packet or memory bounds checks",
+    "Suggests releasing a resource"
+  ]
+}

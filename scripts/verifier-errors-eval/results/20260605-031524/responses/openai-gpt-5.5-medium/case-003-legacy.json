@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier loses the pointer type because the program partially overwrites the spilled pointer.\n\nStep-by-step:\n\n```asm\n*(u64*)(r10 - 8) = r1;\n```\n\nThis spills `r1`, the context pointer, to stack slot `fp-8..fp-1`. The verifier records that stack slot as containing a spilled `ctx` pointer.\n\n```asm\n*(u8*)(r10 - 7) = r0;\n```\n\nThis writes one byte into the middle of that same 8-byte stack slot. A partial overwrite of a spilled pointer invalidates the verifier\u2019s pointer metadata for the whole slot. That is why the log changes the slot to `mmmmmmmm`:\n\n```text\nfp-8=mmmmmmmm\n```\n\nThen:\n\n```asm\nr0 = *(u64*)(r10 - 8);\n```\n\nBecause the spill was corrupted, the verifier reloads it as a plain scalar, not as `ctx`:\n\n```text\nR0=scalar()\n```\n\nFinally:\n\n```asm\nr0 = *(u64*)(r0 + 8);\n```\n\ntries to dereference that scalar, so the verifier rejects it:\n\n```text\nR0 invalid mem access 'scalar'\n```\n\nThe smallest fix for the reported failure is to make the byte store not overlap the spilled pointer, e.g. store it at `r10 - 16` instead of `r10 - 7`.\n\nFor a normal `SEC(\"socket\")` program, `ctx + 8` is also a 32-bit `__sk_buff` field, so using a 32-bit load is safer than a 64-bit load.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -8,9 +8,9 @@ __naked void entry(void)\n \tasm volatile (\"\t\t\t\t\t\\\n \t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n \tr0 = 0x23;\t\t\t\t\t\\\n-\t*(u8*)(r10 - 7) = r0;\t\t\t\t\\\n+\t*(u8*)(r10 - 16) = r0;\t\t\t\t\\\n \tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n-\tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n+\tr0 = *(u32*)(r0 + 8);\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t::: __clobber_all);\n }\n```\n\nThe essential verifier fix is the stack offset change: it preserves the spilled `ctx` pointer metadata so the reload gives `R0=ctx()` instead of `R0=scalar()`. The `u32` context load makes the final context access match the socket context field size.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-medium/case-003-legacy.txt",
+    "case_id": "case-003",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-medium",
+    "prompt_bytes": 1266,
+    "prompt_path": "public/case-003/prompt_legacy.md",
+    "prompt_sha256": "ff79e3ce2090bf446fcac0650e4037fac5ac92314018b0ce73b4c838bf23c7cf",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-medium/case-003-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "e05096c7-fa97-4eeb-9536-623abaa780e7",
+    "started_at": "2026-06-05T03:15:35+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.002735,
+    "output_cost_usd": 0.14253,
+    "total_cost_usd": 0.14526499999999998
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 547,
+    "output_tokens": 4751,
+    "raw_usage": {
+      "input_tokens": 547,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 4751,
+      "output_tokens_details": {
+        "reasoning_tokens": 4142
+      },
+      "total_tokens": 5298
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 4142,
+    "total_tokens": 5298
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629456,
+    "created_at": 1780629335,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0e8de5912344ebac006a223f5775c881a0b0f06a8d7a6e9365",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0e8de5912344ebac006a223f58270481a0bde72329685fc46a",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier loses the pointer type because the program partially overwrites the spilled pointer.\n\nStep-by-step:\n\n```asm\n*(u64*)(r10 - 8) = r1;\n```\n\nThis spills `r1`, the context pointer, to stack slot `fp-8..fp-1`. The verifier records that stack slot as containing a spilled `ctx` pointer.\n\n```asm\n*(u8*)(r10 - 7) = r0;\n```\n\nThis writes one byte into the middle of that same 8-byte stack slot. A partial overwrite of a spilled pointer invalidates the verifier\u2019s pointer metadata for the whole slot. That is why the log changes the slot to `mmmmmmmm`:\n\n```text\nfp-8=mmmmmmmm\n```\n\nThen:\n\n```asm\nr0 = *(u64*)(r10 - 8);\n```\n\nBecause the spill was corrupted, the verifier reloads it as a plain scalar, not as `ctx`:\n\n```text\nR0=scalar()\n```\n\nFinally:\n\n```asm\nr0 = *(u64*)(r0 + 8);\n```\n\ntries to dereference that scalar, so the verifier rejects it:\n\n```text\nR0 invalid mem access 'scalar'\n```\n\nThe smallest fix for the reported failure is to make the byte store not overlap the spilled pointer, e.g. store it at `r10 - 16` instead of `r10 - 7`.\n\nFor a normal `SEC(\"socket\")` program, `ctx + 8` is also a 32-bit `__sk_buff` field, so using a 32-bit load is safer than a 64-bit load.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -8,9 +8,9 @@ __naked void entry(void)\n \tasm volatile (\"\t\t\t\t\t\\\n \t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n \tr0 = 0x23;\t\t\t\t\t\\\n-\t*(u8*)(r10 - 7) = r0;\t\t\t\t\\\n+\t*(u8*)(r10 - 16) = r0;\t\t\t\t\\\n \tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n-\tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n+\tr0 = *(u32*)(r0 + 8);\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t::: __clobber_all);\n }\n```\n\nThe essential verifier fix is the stack offset change: it preserves the spilled `ctx` pointer metadata so the reload gives `R0=ctx()` instead of `R0=scalar()`. The `u32` context load makes the final context access match the socket context field size.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0e8de5912344ebac006a223fc6503081a0af24946f8b2b40a1",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 547,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 4751,
+      "output_tokens_details": {
+        "reasoning_tokens": 4142
+      },
+      "total_tokens": 5298
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

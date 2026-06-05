@@ -1,0 +1,552 @@
+{
+  "schema_version": 1,
+  "pricing_checked_at": "2026-06-05",
+  "notes": [
+    "Provider hints found locally: OPENAI, CLAUDE, KIMI, OPENROUTER.",
+    "Costs are route-specific. Direct Kimi and OpenRouter Kimi are separate entries.",
+    "OpenAI GPT-5.5 is the requested GPT-5.5 API route. GPT-5.3-Codex is included as the current Codex-optimized API model.",
+    "Effort profiles change token usage and latency; the listed prices are per-token rates, not per-effort fixed prices."
+  ],
+  "metrics_record": "api_eval_metrics.md",
+  "run_sets": {
+    "smoke": [
+      "openai-gpt-5.3-codex-medium",
+      "anthropic-haiku-4.5-default",
+      "kimi-k2.6-no-thinking",
+      "openrouter-deepseek-v3.2"
+    ],
+    "full": [
+      "openai-gpt-5.5-none",
+      "openai-gpt-5.5-low",
+      "openai-gpt-5.5-medium",
+      "openai-gpt-5.5-high",
+      "openai-gpt-5.3-codex-medium",
+      "openai-gpt-5.3-codex-high",
+      "anthropic-opus-4.8-medium",
+      "anthropic-opus-4.8-high",
+      "anthropic-sonnet-4.6-medium",
+      "anthropic-sonnet-4.6-high",
+      "anthropic-haiku-4.5-default",
+      "kimi-k2.6-thinking",
+      "kimi-k2.6-no-thinking",
+      "openrouter-claude-opus-4.8-high",
+      "openrouter-claude-sonnet-4.6-medium",
+      "openrouter-claude-haiku-4.5-default",
+      "openrouter-deepseek-r1-0528",
+      "openrouter-deepseek-v3.2",
+      "openrouter-qwen3-coder",
+      "openrouter-glm-5.1-high"
+    ]
+  },
+  "providers": {
+    "openai": {
+      "api": "responses",
+      "base_url": "https://api.openai.com/v1",
+      "env_candidates": [
+        "OPENAI_API_KEY"
+      ],
+      "secret_label_candidates": [
+        "OpenAI"
+      ]
+    },
+    "anthropic": {
+      "api": "messages",
+      "base_url": "https://api.anthropic.com",
+      "env_candidates": [
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_API_KEY"
+      ],
+      "secret_label_candidates": [
+        "Claude"
+      ],
+      "enabled_by_local_key_hints": true
+    },
+    "kimi": {
+      "api": "openai_chat_completions",
+      "base_url": "https://api.moonshot.ai/v1",
+      "env_candidates": [
+        "MOONSHOT_API_KEY",
+        "KIMI_API_KEY"
+      ],
+      "secret_label_candidates": [
+        "Kimi"
+      ]
+    },
+    "openrouter": {
+      "api": "openai_chat_completions",
+      "base_url": "https://openrouter.ai/api/v1",
+      "env_candidates": [
+        "OPENROUTER_API_KEY"
+      ],
+      "secret_label_candidates": [
+        "Openrouter"
+      ]
+    }
+  },
+  "models": [
+    {
+      "profile_id": "openai-gpt-5.5-none",
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "display_name": "OpenAI GPT-5.5",
+      "reasoning_profile": {
+        "parameter": "reasoning.effort",
+        "value": "none"
+      },
+      "max_output_tokens": 32768,
+      "context_window": 1050000,
+      "prices_per_1m_tokens": {
+        "input": 5.0,
+        "cached_input": 0.5,
+        "output": 30.0
+      },
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-5.5"
+    },
+    {
+      "profile_id": "openai-gpt-5.5-low",
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "display_name": "OpenAI GPT-5.5",
+      "reasoning_profile": {
+        "parameter": "reasoning.effort",
+        "value": "low"
+      },
+      "max_output_tokens": 32768,
+      "context_window": 1050000,
+      "prices_per_1m_tokens": {
+        "input": 5.0,
+        "cached_input": 0.5,
+        "output": 30.0
+      },
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-5.5"
+    },
+    {
+      "profile_id": "openai-gpt-5.5-medium",
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "display_name": "OpenAI GPT-5.5",
+      "reasoning_profile": {
+        "parameter": "reasoning.effort",
+        "value": "medium"
+      },
+      "max_output_tokens": 32768,
+      "context_window": 1050000,
+      "prices_per_1m_tokens": {
+        "input": 5.0,
+        "cached_input": 0.5,
+        "output": 30.0
+      },
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-5.5"
+    },
+    {
+      "profile_id": "openai-gpt-5.5-high",
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "display_name": "OpenAI GPT-5.5",
+      "reasoning_profile": {
+        "parameter": "reasoning.effort",
+        "value": "high"
+      },
+      "max_output_tokens": 32768,
+      "context_window": 1050000,
+      "prices_per_1m_tokens": {
+        "input": 5.0,
+        "cached_input": 0.5,
+        "output": 30.0
+      },
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-5.5"
+    },
+    {
+      "profile_id": "openai-gpt-5.5-xhigh",
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "display_name": "OpenAI GPT-5.5",
+      "reasoning_profile": {
+        "parameter": "reasoning.effort",
+        "value": "xhigh"
+      },
+      "max_output_tokens": 65536,
+      "context_window": 1050000,
+      "prices_per_1m_tokens": {
+        "input": 5.0,
+        "cached_input": 0.5,
+        "output": 30.0
+      },
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-5.5"
+    },
+    {
+      "profile_id": "openai-gpt-5.3-codex-medium",
+      "provider": "openai",
+      "model": "gpt-5.3-codex",
+      "display_name": "OpenAI GPT-5.3-Codex",
+      "reasoning_profile": {
+        "parameter": "reasoning.effort",
+        "value": "medium"
+      },
+      "max_output_tokens": 32768,
+      "context_window": 400000,
+      "prices_per_1m_tokens": {
+        "input": 1.75,
+        "cached_input": 0.175,
+        "output": 14.0
+      },
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-5.3-codex"
+    },
+    {
+      "profile_id": "openai-gpt-5.3-codex-high",
+      "provider": "openai",
+      "model": "gpt-5.3-codex",
+      "display_name": "OpenAI GPT-5.3-Codex",
+      "reasoning_profile": {
+        "parameter": "reasoning.effort",
+        "value": "high"
+      },
+      "max_output_tokens": 32768,
+      "context_window": 400000,
+      "prices_per_1m_tokens": {
+        "input": 1.75,
+        "cached_input": 0.175,
+        "output": 14.0
+      },
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-5.3-codex"
+    },
+    {
+      "profile_id": "openai-gpt-5.3-codex-xhigh",
+      "provider": "openai",
+      "model": "gpt-5.3-codex",
+      "display_name": "OpenAI GPT-5.3-Codex",
+      "reasoning_profile": {
+        "parameter": "reasoning.effort",
+        "value": "xhigh"
+      },
+      "max_output_tokens": 65536,
+      "context_window": 400000,
+      "prices_per_1m_tokens": {
+        "input": 1.75,
+        "cached_input": 0.175,
+        "output": 14.0
+      },
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-5.3-codex"
+    },
+    {
+      "profile_id": "anthropic-opus-4.8-medium",
+      "provider": "anthropic",
+      "model": "claude-opus-4-8",
+      "display_name": "Claude Opus 4.8",
+      "reasoning_profile": {
+        "parameter": "output_config.effort",
+        "value": "medium",
+        "thinking": {
+          "type": "adaptive"
+        }
+      },
+      "max_output_tokens": 65536,
+      "context_window": 1000000,
+      "prices_per_1m_tokens": {
+        "input": 5.0,
+        "cache_write_5m": 6.25,
+        "cache_write_1h": 10.0,
+        "cache_read": 0.5,
+        "output": 25.0
+      },
+      "source_url": "https://platform.claude.com/docs/en/about-claude/models/overview"
+    },
+    {
+      "profile_id": "anthropic-opus-4.8-high",
+      "provider": "anthropic",
+      "model": "claude-opus-4-8",
+      "display_name": "Claude Opus 4.8",
+      "reasoning_profile": {
+        "parameter": "output_config.effort",
+        "value": "high",
+        "thinking": {
+          "type": "adaptive"
+        }
+      },
+      "max_output_tokens": 65536,
+      "context_window": 1000000,
+      "prices_per_1m_tokens": {
+        "input": 5.0,
+        "cache_write_5m": 6.25,
+        "cache_write_1h": 10.0,
+        "cache_read": 0.5,
+        "output": 25.0
+      },
+      "source_url": "https://platform.claude.com/docs/en/about-claude/models/overview"
+    },
+    {
+      "profile_id": "anthropic-opus-4.8-xhigh",
+      "provider": "anthropic",
+      "model": "claude-opus-4-8",
+      "display_name": "Claude Opus 4.8",
+      "reasoning_profile": {
+        "parameter": "output_config.effort",
+        "value": "xhigh",
+        "thinking": {
+          "type": "adaptive"
+        }
+      },
+      "max_output_tokens": 65536,
+      "context_window": 1000000,
+      "prices_per_1m_tokens": {
+        "input": 5.0,
+        "cache_write_5m": 6.25,
+        "cache_write_1h": 10.0,
+        "cache_read": 0.5,
+        "output": 25.0
+      },
+      "source_url": "https://platform.claude.com/docs/en/build-with-claude/effort"
+    },
+    {
+      "profile_id": "anthropic-sonnet-4.6-medium",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "display_name": "Claude Sonnet 4.6",
+      "reasoning_profile": {
+        "parameter": "output_config.effort",
+        "value": "medium",
+        "thinking": {
+          "type": "adaptive"
+        }
+      },
+      "max_output_tokens": 32768,
+      "context_window": 1000000,
+      "prices_per_1m_tokens": {
+        "input": 3.0,
+        "cache_write_5m": 3.75,
+        "cache_write_1h": 6.0,
+        "cache_read": 0.3,
+        "output": 15.0
+      },
+      "source_url": "https://platform.claude.com/docs/en/about-claude/models/overview"
+    },
+    {
+      "profile_id": "anthropic-sonnet-4.6-high",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "display_name": "Claude Sonnet 4.6",
+      "reasoning_profile": {
+        "parameter": "output_config.effort",
+        "value": "high",
+        "thinking": {
+          "type": "adaptive"
+        }
+      },
+      "max_output_tokens": 32768,
+      "context_window": 1000000,
+      "prices_per_1m_tokens": {
+        "input": 3.0,
+        "cache_write_5m": 3.75,
+        "cache_write_1h": 6.0,
+        "cache_read": 0.3,
+        "output": 15.0
+      },
+      "source_url": "https://platform.claude.com/docs/en/build-with-claude/effort"
+    },
+    {
+      "profile_id": "anthropic-haiku-4.5-default",
+      "provider": "anthropic",
+      "model": "claude-haiku-4-5",
+      "display_name": "Claude Haiku 4.5",
+      "reasoning_profile": {
+        "parameter": "default",
+        "value": "default",
+        "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku."
+      },
+      "max_output_tokens": 16384,
+      "context_window": 200000,
+      "prices_per_1m_tokens": {
+        "input": 1.0,
+        "cache_write_5m": 1.25,
+        "cache_write_1h": 2.0,
+        "cache_read": 0.1,
+        "output": 5.0
+      },
+      "source_url": "https://platform.claude.com/docs/en/about-claude/models/overview"
+    },
+    {
+      "profile_id": "kimi-k2.6-thinking",
+      "provider": "kimi",
+      "model": "kimi-k2.6",
+      "display_name": "Kimi K2.6",
+      "temperature": 1,
+      "reasoning_profile": {
+        "parameter": "thinking.type",
+        "value": "enabled"
+      },
+      "max_output_tokens": 32768,
+      "context_window": 262144,
+      "prices_per_1m_tokens": {
+        "input": 0.95,
+        "cache_read": 0.16,
+        "output": 4.0
+      },
+      "source_url": "https://platform.kimi.ai/docs/pricing/chat-k26"
+    },
+    {
+      "profile_id": "kimi-k2.6-no-thinking",
+      "provider": "kimi",
+      "model": "kimi-k2.6",
+      "display_name": "Kimi K2.6",
+      "temperature": 0.6,
+      "reasoning_profile": {
+        "parameter": "thinking.type",
+        "value": "disabled"
+      },
+      "max_output_tokens": 32768,
+      "context_window": 262144,
+      "prices_per_1m_tokens": {
+        "input": 0.95,
+        "cache_read": 0.16,
+        "output": 4.0
+      },
+      "source_url": "https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart"
+    },
+    {
+      "profile_id": "kimi-k2-thinking",
+      "provider": "kimi",
+      "model": "kimi-k2-thinking",
+      "display_name": "Kimi K2 Thinking",
+      "enabled": false,
+      "note": "The local direct Kimi key returned 404 for this model route during validation, so it is not part of the default full run set.",
+      "temperature": 1,
+      "reasoning_profile": {
+        "parameter": "model",
+        "value": "fixed-thinking"
+      },
+      "max_output_tokens": 32768,
+      "context_window": 262144,
+      "prices_per_1m_tokens": {
+        "input": 0.6,
+        "cache_read": 0.15,
+        "output": 2.5
+      },
+      "source_url": "https://platform.kimi.ai/docs/pricing/chat-k2"
+    },
+    {
+      "profile_id": "openrouter-claude-opus-4.8-high",
+      "provider": "openrouter",
+      "model": "anthropic/claude-opus-4.8",
+      "display_name": "OpenRouter Claude Opus 4.8",
+      "reasoning_profile": {
+        "parameter": "reasoning.effort",
+        "value": "high",
+        "include_reasoning": true
+      },
+      "max_output_tokens": 32768,
+      "context_window": 1000000,
+      "prices_per_1m_tokens": {
+        "input": 5.0,
+        "output": 25.0
+      },
+      "source_url": "https://openrouter.ai/api/v1/models"
+    },
+    {
+      "profile_id": "openrouter-claude-sonnet-4.6-medium",
+      "provider": "openrouter",
+      "model": "anthropic/claude-sonnet-4.6",
+      "display_name": "OpenRouter Claude Sonnet 4.6",
+      "reasoning_profile": {
+        "parameter": "reasoning.effort",
+        "value": "medium",
+        "include_reasoning": true
+      },
+      "max_output_tokens": 32768,
+      "context_window": 1000000,
+      "prices_per_1m_tokens": {
+        "input": 3.0,
+        "output": 15.0
+      },
+      "source_url": "https://openrouter.ai/api/v1/models"
+    },
+    {
+      "profile_id": "openrouter-claude-haiku-4.5-default",
+      "provider": "openrouter",
+      "model": "anthropic/claude-haiku-4.5",
+      "display_name": "OpenRouter Claude Haiku 4.5",
+      "reasoning_profile": {
+        "parameter": "default",
+        "value": "default"
+      },
+      "max_output_tokens": 16384,
+      "context_window": 200000,
+      "prices_per_1m_tokens": {
+        "input": 1.0,
+        "output": 5.0
+      },
+      "source_url": "https://openrouter.ai/api/v1/models"
+    },
+    {
+      "profile_id": "openrouter-deepseek-r1-0528",
+      "provider": "openrouter",
+      "model": "deepseek/deepseek-r1-0528",
+      "display_name": "OpenRouter DeepSeek R1 0528",
+      "reasoning_profile": {
+        "parameter": "reasoning.effort",
+        "value": "high",
+        "include_reasoning": true
+      },
+      "max_output_tokens": 32768,
+      "context_window": 163840,
+      "prices_per_1m_tokens": {
+        "input": 0.5,
+        "output": 2.15
+      },
+      "source_url": "https://openrouter.ai/api/v1/models"
+    },
+    {
+      "profile_id": "openrouter-deepseek-v3.2",
+      "provider": "openrouter",
+      "model": "deepseek/deepseek-v3.2",
+      "display_name": "OpenRouter DeepSeek V3.2",
+      "reasoning_profile": {
+        "parameter": "reasoning.effort",
+        "value": "medium",
+        "include_reasoning": true
+      },
+      "max_output_tokens": 16384,
+      "context_window": 131072,
+      "prices_per_1m_tokens": {
+        "input": 0.2288,
+        "output": 0.3432
+      },
+      "source_url": "https://openrouter.ai/api/v1/models"
+    },
+    {
+      "profile_id": "openrouter-qwen3-coder",
+      "provider": "openrouter",
+      "model": "qwen/qwen3-coder",
+      "display_name": "OpenRouter Qwen3 Coder",
+      "reasoning_profile": {
+        "parameter": "default",
+        "value": "default",
+        "note": "OpenRouter does not list reasoning controls for this model."
+      },
+      "max_output_tokens": 16384,
+      "context_window": 1048576,
+      "prices_per_1m_tokens": {
+        "input": 0.22,
+        "output": 1.8
+      },
+      "source_url": "https://openrouter.ai/api/v1/models"
+    },
+    {
+      "profile_id": "openrouter-glm-5.1-high",
+      "provider": "openrouter",
+      "model": "z-ai/glm-5.1",
+      "display_name": "OpenRouter GLM 5.1",
+      "reasoning_profile": {
+        "parameter": "reasoning.effort",
+        "value": "high",
+        "include_reasoning": true
+      },
+      "max_output_tokens": 32768,
+      "context_window": 202752,
+      "prices_per_1m_tokens": {
+        "input": 0.98,
+        "output": 3.08
+      },
+      "source_url": "https://openrouter.ai/api/v1/models"
+    }
+  ]
+}

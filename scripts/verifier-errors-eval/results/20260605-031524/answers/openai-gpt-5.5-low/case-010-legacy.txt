@@ -1,0 +1,44 @@
+The verifier rejects `helper_b()` because it passes a modified context pointer to another BPF subprogram:
+
+```c
+return helper_a(skb) + helper_c(val, skb + 1);
+```
+
+For `struct __sk_buff *skb`, `skb + 1` advances the pointer by `sizeof(struct __sk_buff)`, which the verifier log shows as `192` bytes:
+
+```text
+21: (07) r6 += 192                    ; R6=ctx(imm=192)
+23: (bf) r2 = r6                      ; R2=ctx(imm=192)
+24: (85) call pc+2
+dereference of modified ctx ptr R2 off=192 disallowed
+```
+
+`helper_c()` then dereferences that pointer:
+
+```c
+return skb->ifindex * val;
+```
+
+The verifier allows direct field accesses from the original context pointer, but it does not allow dereferencing an arbitrary/modified context pointer such as `skb + 1`. Therefore the call into `helper_c()` is rejected.
+
+The smallest source-level fix is to pass the original `skb` pointer to `helper_c()` instead of `skb + 1`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -15,7 +15,7 @@ int helper_c(int val, struct __sk_buff *skb);
+ __attribute__((noinline))
+ int helper_b(int val, struct __sk_buff *skb)
+ {
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+ }
+ 
+ __attribute__((noinline))
+```
+
+With this change, `helper_c()` receives the unmodified `ctx` pointer, so its access to `skb->ifindex` should be accepted by the verifier.

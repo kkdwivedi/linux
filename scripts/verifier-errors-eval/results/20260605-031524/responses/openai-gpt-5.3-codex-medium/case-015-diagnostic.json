@@ -1,0 +1,130 @@
+{
+  "answer_text": "`p` is derived from `sk->data` **before** a call chain that reaches `bpf_skb_pull_data()`.  \nThat helper can reallocate/shift skb linear data, so the verifier invalidates previously known packet pointers after the call.\n\nSo this sequence is the problem:\n\n1. load `sk->data` into `p` (`R7=pkt`)\n2. bounds-check `p`\n3. call `helper_a()` \u2192 may move packet data, invalidates `R7`\n4. dereference old `p` \u2192 verifier sees scalar, rejects\n\nThat\u2019s exactly why log says `R7 invalid mem access 'scalar'` at `*p = 42`.\n\n## Smallest likely fix\n\nReacquire `sk->data` and redo bounds check **after** `helper_a()`, or move the helper call before taking `p`.\n\n### Minimal patch (move call earlier)\n\n```diff\n SEC(\"tc\")\n int entry(struct __sk_buff *sk)\n {\n-\tint *p = (void *)(long)sk->data;\n+\tint *p;\n+\n+\thelper_a(sk, 0);\n+\tp = (void *)(long)sk->data;\n \n \tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n \t\treturn TCX_DROP;\n-\thelper_a(sk, 0);\n \t*p = 42;\n \treturn TCX_PASS;\n }\n```\n\nThis keeps semantics close while ensuring the pointer used for `*p` is fresh and validated for current packet data layout.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-medium/case-015-diagnostic.txt",
+    "case_id": "case-015",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-medium",
+    "prompt_bytes": 3663,
+    "prompt_path": "public/case-015/prompt_diagnostic.md",
+    "prompt_sha256": "f4ee93633090707b3340ee048a1cd9c29849370062dafdfa25c31c23d9df8821",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-medium/case-015-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "d8493c41-122a-4b55-b04f-3255448aa523",
+    "started_at": "2026-06-05T03:16:34+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00208425,
+    "output_cost_usd": 0.008946,
+    "total_cost_usd": 0.011030250000000002
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1191,
+    "output_tokens": 639,
+    "raw_usage": {
+      "input_tokens": 1191,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 639,
+      "output_tokens_details": {
+        "reasoning_tokens": 311
+      },
+      "total_tokens": 1830
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 311,
+    "total_tokens": 1830
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629404,
+    "created_at": 1780629394,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0d563ef6c1f0ef97006a223f92582081a0abb8a4992a8a2830",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0d563ef6c1f0ef97006a223f92f47481a09fd4f4bdf76c2e17",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "`p` is derived from `sk->data` **before** a call chain that reaches `bpf_skb_pull_data()`.  \nThat helper can reallocate/shift skb linear data, so the verifier invalidates previously known packet pointers after the call.\n\nSo this sequence is the problem:\n\n1. load `sk->data` into `p` (`R7=pkt`)\n2. bounds-check `p`\n3. call `helper_a()` \u2192 may move packet data, invalidates `R7`\n4. dereference old `p` \u2192 verifier sees scalar, rejects\n\nThat\u2019s exactly why log says `R7 invalid mem access 'scalar'` at `*p = 42`.\n\n## Smallest likely fix\n\nReacquire `sk->data` and redo bounds check **after** `helper_a()`, or move the helper call before taking `p`.\n\n### Minimal patch (move call earlier)\n\n```diff\n SEC(\"tc\")\n int entry(struct __sk_buff *sk)\n {\n-\tint *p = (void *)(long)sk->data;\n+\tint *p;\n+\n+\thelper_a(sk, 0);\n+\tp = (void *)(long)sk->data;\n \n \tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n \t\treturn TCX_DROP;\n-\thelper_a(sk, 0);\n \t*p = 42;\n \treturn TCX_PASS;\n }\n```\n\nThis keeps semantics close while ensuring the pointer used for `*p` is fresh and validated for current packet data layout.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0d563ef6c1f0ef97006a223f97d2bc81a09724cc84eb0ffea9",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1191,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 639,
+      "output_tokens_details": {
+        "reasoning_tokens": 311
+      },
+      "total_tokens": 1830
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

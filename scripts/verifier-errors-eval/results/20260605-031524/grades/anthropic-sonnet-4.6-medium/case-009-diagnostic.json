@@ -1,0 +1,38 @@
+{
+  "grade": {
+    "graded_at": "2026-06-05T04:55:00+00:00",
+    "graded_by": "local-codex",
+    "missing": [],
+    "problems": [
+      "The repair should use a loaded",
+      "checked local to avoid a second nullable field load."
+    ],
+    "repair_summary": "Manual audit: final patch adds a field NULL check but still calls bpf_task_acquire(value->task).",
+    "score": 3,
+    "strengths": [],
+    "success": true,
+    "verdict": "Manual audit: final patch adds a field NULL check but still calls bpf_task_acquire(value->task)."
+  },
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-medium/case-009-diagnostic.txt",
+    "case_id": "case-009",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-medium",
+    "prompt_bytes": 9539,
+    "prompt_path": "public/case-009/prompt_diagnostic.md",
+    "prompt_sha256": "b18a80e715b0997c1feba2b4b098abd71869a9fb867ace1b91abe52c1a1cab07",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-medium/case-009-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "55bea980-b52e-43a4-b59f-333c5ccb58eb",
+    "started_at": "2026-06-05T04:04:02+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  }
+}

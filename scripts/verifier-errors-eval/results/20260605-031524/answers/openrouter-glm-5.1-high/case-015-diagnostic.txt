@@ -1,0 +1,39 @@
+## Explanation of the Verifier Failure
+
+The call to `helper_a(sk, 0)` internally calls `bpf_skb_pull_data()`, which can reallocate the skb's data buffer (moving it to a different memory location). After such a call, the verifier **invalidates all packet pointer registers** because the old pointers may no longer point to valid memory.
+
+In the original code, `p` (held in R7) is loaded from `sk->data` **before** the helper call. After the call, R7 is no longer treated as a packet pointer — it becomes a scalar — so the dereference `*p = 42` fails with "invalid mem access 'scalar'".
+
+## Fix
+
+Move the pointer load and bounds check **after** the `helper_a` call. The initial bounds check before the call is useless since the pointer is invalidated anyway.
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+__noinline long helper_b(struct __sk_buff *sk, __u32 len)
+{
+	return bpf_skb_pull_data(sk, len);
+}
+
+__noinline long helper_a(struct __sk_buff *sk, __u32 len)
+{
+	return helper_b(sk, len);
+}
+
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	helper_a(sk, 0);
+
+	int *p = (void *)(long)sk->data;
+
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+**Why this works:** By loading `sk->data` and performing the bounds check **after** the `bpf_skb_pull_data` call, the verifier sees a fresh, validated packet pointer that hasn't been invalidated by any subsequent operation. The dereference `*p = 42` then passes verification.

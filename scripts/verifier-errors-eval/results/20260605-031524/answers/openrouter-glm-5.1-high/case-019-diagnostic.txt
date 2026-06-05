@@ -1,0 +1,30 @@
+## Explanation of the Verifier Failure
+
+The BPF verifier rejects the program because `helper_a` calls itself, forming a **recursive subprogram call**. The BPF verifier requires a finite, acyclic call graph so it can bound stack depth and analysis. Recursive bpf2bpf calls are explicitly prohibited.
+
+The logic of `helper_a` is:
+1. Increment `r1` by 1
+2. Copy `r1` to `r0`
+3. If `r1 < 4`, call `helper_a` again (recursion)
+4. Otherwise, exit
+
+This is simply incrementing `r1` in a loop until it reaches 4 — a classic tail recursion that can be rewritten as an explicit loop.
+
+## Fix
+
+Replace the recursive call with a backward jump (loop), which is the standard way to handle this in BPF:
+
+```c
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l1_%=:	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l1_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+**What changed:** The `if r1 < 4 goto l0_%=;` / `call helper_a;` / `exit;` sequence is replaced with a single `if r1 < 4 goto l1_%=;` that jumps back to the top of the function (the `r1 += 1` instruction), forming an explicit bounded loop instead of a recursive call. The loop is bounded because `r1` is incremented each iteration and the condition `r1 < 4` guarantees termination, which the verifier can track.

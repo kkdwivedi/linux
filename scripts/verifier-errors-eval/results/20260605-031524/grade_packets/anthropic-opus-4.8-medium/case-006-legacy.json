@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Replace bpf_ktime_get_coarse_ns with bpf_ktime_get_ns if that satisfies the program's requirements and is allowed.",
+    "Change the program type/section to one where the helper is allowed."
+  ],
+  "canonical_fix": "Use a helper allowed for this program type, such as an allowed time helper with suitable semantics, or move the logic to a program type/attach point where bpf_ktime_get_coarse_ns is permitted.",
+  "case_id": "case-006",
+  "category": "Policy",
+  "difficulty": "easy",
+  "expected_explanation": "The program type used by this case is not allowed to call bpf_ktime_get_coarse_ns. This is a helper policy/program-type compatibility failure, not a register or memory proof failure.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-006-legacy.txt",
+    "case_id": "case-006",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 1056,
+    "prompt_path": "public/case-006/prompt_legacy.md",
+    "prompt_sha256": "120f6abe2c1570fcf1f340a5df8b99d8138acdc6e56cef9bda9d3f882cdbea64",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-006-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "a247128a-1382-4255-9f2d-4400ab20fee9",
+    "started_at": "2026-06-05T03:17:13+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Explanation\n\nThe verifier rejects the program here:\n\n```\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\nThis is **not** a typical \"unsafe state\" error \u2014 it's a helper-availability check. `bpf_ktime_get_coarse_ns()` is not on the allow-list of helpers for `kprobe` (perf-event/tracing) program types. The kernel restricts the coarse-time helper from these contexts (it can run in NMI/probe context where the coarse clock isn't safe to read), so `check_helper_call()` fails immediately at the `call` instruction.\n\nThe fix must either:\n- use a helper that *is* allowed for `kprobe` programs, or\n- attach the program to a type where the coarse-time helper is permitted.\n\n## Smallest fix\n\nSwap the helper for the regular time helper, `bpf_ktime_get_ns()`, which is allowed in `kprobe` programs and is otherwise equivalent for this test:\n\n```c\nSEC(\"kprobe\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_ns];\t\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_ns)\n\t: __clobber_all);\n}\n```\n\nThis removes the disallowed-helper error while keeping the program structure identical.\n\n(Alternative if you specifically need `bpf_ktime_get_coarse_ns`: change the section to a program type that permits it, e.g. `SEC(\"tc\")` / `SEC(\"cgroup/...\")`/`SEC(\"syscall\")` depending on the test's intent. But if the test only needs a valid call, switching to `bpf_ktime_get_ns` is the minimal change.)",
+  "must_mention": [
+    "Helper is forbidden for this program type",
+    "The fix is to use an allowed helper or compatible program type"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds register initialization around the helper call",
+    "Treats it as a GPL license issue",
+    "Suggests a bounds or NULL check"
+  ]
+}

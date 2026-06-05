@@ -1,0 +1,29 @@
+The verifier error indicates a reference leak: a `bpf_cpumask` object is allocated but never released before program exit. The issue occurs in the success path where `make_object()` returns a valid cpumask pointer, but the main program doesn't release it.
+
+**Root Cause**: The `make_object()` function returns a cpumask with a reference count of 1 (from `bpf_cpumask_create()`). The main program stores this pointer via `__sink()` but never calls `bpf_cpumask_release()` before exiting, causing a reference leak.
+
+**Fix**: Release the cpumask in the main program after it's no longer needed. The minimal fix adds a conditional release call:
+
+```diff
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+ 	struct bpf_cpumask *cpumask;
+ 
+ 	cpumask = make_object();
+ 	__sink(cpumask);
++	if (cpumask)
++		bpf_cpumask_release(cpumask);
+ 	return 0;
+ }
+```
+
+**Why this satisfies the verifier**:
+1. The NULL check ensures we only release valid cpumask pointers
+2. `bpf_cpumask_release()` properly decrements the reference count to 0
+3. All allocation paths are now balanced with corresponding releases:
+   - `make_object()` releases on the non-empty error path
+   - Main program releases on the success path
+   - NULL returns require no action
+
+The verifier will now see that the reference (id=2 in the log) is properly released before program exit, eliminating the reference leak error.

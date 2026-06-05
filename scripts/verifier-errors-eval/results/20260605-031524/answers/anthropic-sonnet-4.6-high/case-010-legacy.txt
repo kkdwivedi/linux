@@ -1,0 +1,36 @@
+## Explanation of the Failure
+
+In `helper_b`, the call is:
+```c
+return helper_a(skb) + helper_c(val, skb + 1);
+```
+
+`skb + 1` performs C pointer arithmetic on `struct __sk_buff *`, advancing the pointer by `sizeof(struct __sk_buff)` = 192 bytes. The verifier tracks this as `ctx(imm=192)` and rejects it because **BPF does not allow passing a modified (offset) context pointer** to any function. The context pointer must be passed unmodified.
+
+The verifier log confirms:
+```
+21: (07) r6 += 192                    ; R6=ctx(imm=192)
+...
+dereference of modified ctx ptr R2 off=192 disallowed
+Caller passes invalid args into func#3 ('helper_c')
+```
+
+## Fix
+
+Remove the erroneous `+ 1` from the `skb` argument in `helper_b`:
+
+```diff
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+```
+
+The corrected function:
+```c
+__attribute__((noinline))
+int helper_b(int val, struct __sk_buff *skb)
+{
+	return helper_a(skb) + helper_c(val, skb);
+}
+```
+
+This passes the original, unmodified context pointer to `helper_c`, satisfying the BPF verifier's requirement that context pointers not be offset before being passed to subprograms.

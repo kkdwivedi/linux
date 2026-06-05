@@ -1,0 +1,36 @@
+## Explanation of the Failure
+
+The root cause is that `helper_a` (transitively through `helper_b`) calls `bpf_skb_pull_data`, which can reallocate the packet buffer. After such a call, the verifier invalidates all previously cached packet pointers — they become `scalar` (unknown) rather than `pkt()` pointers.
+
+In the log you can see:
+- Before the call: `R7=pkt(r=4,imm=4)` — valid, bounds-checked packet pointer
+- After `call pc+4` (helper_a): `R7` is now a `scalar`
+- Then `*(u32 *)(r7 +0) = r1` → **R7 invalid mem access 'scalar'**
+
+The bounds check at line 1064 is performed *before* `helper_a`, but `bpf_skb_pull_data` may move the packet data, so `p`/`r7` is no longer a valid packet pointer after the call. The bounds check must be repeated after the helper call.
+
+## Fix
+
+Re-fetch `sk->data` and re-do the bounds check **after** calling `helper_a`:
+
+```c
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	int *p = (void *)(long)sk->data;
+
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	helper_a(sk, 0);
+
+	/* Re-validate: bpf_skb_pull_data may have moved packet data */
+	p = (void *)(long)sk->data;
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+After `helper_a` returns, reloading `p` from `sk->data` gives the verifier a fresh `pkt(r=0)` pointer, and the new bounds check re-establishes `r=4` before the store, making the access valid.

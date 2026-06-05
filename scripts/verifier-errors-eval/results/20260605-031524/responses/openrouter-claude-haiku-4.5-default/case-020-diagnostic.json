@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Analysis\n\nThe verifier is failing due to exceeding the **liveness analysis complexity limit** (10001 calls). This happens because:\n\n1. The program creates a deeply nested call chain: `entry` \u2192 `helper_a` (50 calls) \u2192 `helper_b` (50 calls) \u2192 ... \u2192 `helper_g` (50 calls)\n2. This results in **50^7 = 78,125 billion** potential call paths to the innermost function `helper_g`\n3. The verifier's liveness analysis must recompute which registers/stack locations are live across all these paths, causing exponential complexity\n4. Each time `helper_g` is analyzed from different call contexts, the verifier re-analyzes it, hitting the 10,001 call limit\n\n## Root Cause\n\nThe macro-based approach creates too many distinct call paths reaching the same subprogram. The verifier tracks liveness per call context, and with 50 calls at each of 7 levels, the number of distinct contexts explodes combinatorially.\n\n## Solution\n\nReduce the nesting depth or the number of calls per level. The simplest fix is to **reduce `CALLS_50` to a smaller number** like `CALLS_10` or even fewer calls per level.\n\n### Patch\n\n```c\n#define CALLS_10(fn) \\\n\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n\tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n+#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn)\n```\n\nOr alternatively, reduce the depth by removing one or more helper levels (e.g., remove `helper_a` and have `entry` call `helper_b` directly).\n\n**Why this works:** Reducing from 50 calls to 20 per level drops the call path explosion from 50^7 to 20^7, which is manageable by the verifier's liveness analysis within the 10,001 call limit.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-020-diagnostic.txt",
+    "case_id": "case-020",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 4110,
+    "prompt_path": "public/case-020/prompt_diagnostic.md",
+    "prompt_sha256": "cb7344658f86bd080c64c73a9c8ee3095a7de5b045356c00872dce60afb5bfb8",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-020-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "2d12e8fb-7f68-496b-b7fe-706dcc4827f5",
+    "started_at": "2026-06-05T03:19:06+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.001763,
+    "output_cost_usd": 0.003135,
+    "total_cost_usd": 0.0048980000000000004
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1763,
+    "output_tokens": 627,
+    "raw_usage": {
+      "completion_tokens": 627,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.004898,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.003135,
+        "upstream_inference_cost": 0.004898,
+        "upstream_inference_prompt_cost": 0.001763
+      },
+      "is_byok": false,
+      "prompt_tokens": 1763,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 2390
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 2390
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Analysis\n\nThe verifier is failing due to exceeding the **liveness analysis complexity limit** (10001 calls). This happens because:\n\n1. The program creates a deeply nested call chain: `entry` \u2192 `helper_a` (50 calls) \u2192 `helper_b` (50 calls) \u2192 ... \u2192 `helper_g` (50 calls)\n2. This results in **50^7 = 78,125 billion** potential call paths to the innermost function `helper_g`\n3. The verifier's liveness analysis must recompute which registers/stack locations are live across all these paths, causing exponential complexity\n4. Each time `helper_g` is analyzed from different call contexts, the verifier re-analyzes it, hitting the 10,001 call limit\n\n## Root Cause\n\nThe macro-based approach creates too many distinct call paths reaching the same subprogram. The verifier tracks liveness per call context, and with 50 calls at each of 7 levels, the number of distinct contexts explodes combinatorially.\n\n## Solution\n\nReduce the nesting depth or the number of calls per level. The simplest fix is to **reduce `CALLS_50` to a smaller number** like `CALLS_10` or even fewer calls per level.\n\n### Patch\n\n```c\n#define CALLS_10(fn) \\\n\tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n\tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n+#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn)\n```\n\nOr alternatively, reduce the depth by removing one or more helper levels (e.g., remove `helper_a` and have `entry` call `helper_b` directly).\n\n**Why this works:** Reducing from 50 calls to 20 per level drops the call path explosion from 50^7 to 20^7, which is manageable by the verifier's liveness analysis within the 10,001 call limit.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629546,
+    "id": "gen-1780629546-EHzTUNqqsdeEXmwCUXp1",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 627,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.004898,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.003135,
+        "upstream_inference_cost": 0.004898,
+        "upstream_inference_prompt_cost": 0.001763
+      },
+      "is_byok": false,
+      "prompt_tokens": 1763,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 2390
+    }
+  },
+  "reasoning_content": ""
+}

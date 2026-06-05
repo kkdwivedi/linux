@@ -1,0 +1,51 @@
+## What the verifier is complaining about
+
+The error is:
+
+```
+10: (63) *(u32 *)(r7 +0) = r1
+R7 invalid mem access 'scalar'
+```
+
+`R7` holds your packet pointer `p` (loaded from `sk->data`). At the time of the store it is no longer a `pkt` pointer — it has been turned into a `scalar`.
+
+## Why it happens
+
+You do the bounds check *before* calling `helper_a()`:
+
+```c
+int *p = (void *)(long)sk->data;
+if ((void *)(p + 1) > (void *)(long)sk->data_end)   /* validates p */
+    return TCX_DROP;
+helper_a(sk, 0);                                    /* <-- invalidates packet ptrs */
+*p = 42;                                            /* p is now stale */
+```
+
+`helper_a()` is a **global** function. The verifier treats a call to a global function conservatively: because such a function may call helpers that reposition/relinearize the packet (here `helper_a` → `helper_b` → `bpf_skb_pull_data()`, which can change `data`/`data_end`), **all packet pointers held by the caller are invalidated across the call**. So the previously-validated `R7` is downgraded to a scalar, and the store `*p = 42` is rejected.
+
+This is correct behavior: a previous bounds check is meaningless after a call that can move the packet.
+
+## The fix
+
+Re-load the packet pointer and re-do the bounds check **after** the call. The smallest change is to reorder so the load/check happens after `helper_a()`:
+
+```c
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	int *p;
+
+	helper_a(sk, 0);
+
+	p = (void *)(long)sk->data;
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+Now `p` is derived from `sk->data` *after* any packet-modifying call, and the bounds check immediately precedes the store with no intervening call, so the verifier can keep `p` as a valid `pkt` pointer with the proven range.
+
+(Equivalently, if the original ordering must be kept, simply re-read `p` and re-run the `p + 1 > data_end` check between `helper_a()` and the store — the key point is that a fresh, validated packet pointer must be used after the global-function call.)

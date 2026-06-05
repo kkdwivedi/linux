@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Verifier Failure Analysis\n\nThe verifier is detecting a **reference leak**. Here's what's happening:\n\n1. At instruction 19, `bpf_sk_lookup_tcp` is called and returns a `sock_or_null` with reference ID 2 (tracked by the verifier)\n2. At instruction 20, there's a conditional check `if r6 == 0 goto pc+1`\n3. At instruction 21, the program exits\n4. **The problem**: When `r6 != 0`, the program exits at instruction 21 without releasing the socket reference that was acquired at instruction 19\n\nThe verifier requires that all acquired references (like sockets from `bpf_sk_lookup_tcp`) must be explicitly released before the program exits. The code only releases the reference in the `l1_%=` label when `r6 == 0`, but when `r6 != 0`, it exits without calling `bpf_sk_release`.\n\n## Root Cause\n\nThe logic is inverted. The code should:\n- Release the socket if it was successfully obtained (`r0 != 0`)\n- Exit without releasing if the lookup failed (`r0 == 0`)\n\nBut currently it's checking `r6` (the mark field) instead of `r0` (the return value from `bpf_sk_lookup_tcp`).\n\n## Fix\n\nThe condition at instruction 20 should check `r0` instead of `r6`:\n\n```c\nif r0 == 0 goto l1_%=;\n```\n\nThis way:\n- If `r0 == 0` (lookup failed), jump to `l1_%=` and exit without releasing\n- If `r0 != 0` (lookup succeeded), fall through to call `bpf_sk_release` and then exit\n\n## Patch\n\n```diff\n l0_%=:\tr6 = *(u32*)(r2 + %[mark]);\t\t\t\\\n \tr2 = 0;\t\t\t\t\t\t\\\n \t*(u32*)(r10 -8) = r2;\t\t\t\t\\\n \t*(u64*)(r10 -16) = r2;\t\t\t\t\\\n \t*(u64*)(r10 -24) = r2;\t\t\t\t\\\n \t*(u64*)(r10 -32) = r2;\t\t\t\t\\\n \t*(u64*)(r10 -40) = r2;\t\t\t\t\\\n \t*(u64*)(r10 -48) = r2;\t\t\t\t\\\n \tr2 = r10;\t\t\t\t\t\\\n \tr2 += -48;\t\t\t\t\t\\\n \tr3 = 36;\t\t\t\t\t\\\n \tr4 = 0;\t\t\t\t\t\t\\\n \tr5 = 0;\t\t\t\t\t\t\\\n \tcall %[bpf_sk_lookup_tcp];\t\t\t\\\n-\tif r6 == 0 goto l1_%=;\t\t\t\t\\\n+\tif r0 == 0 goto l1_%=;\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n l1_%=:\tif r0 == 0 goto l2_%=;\t\t\t\t\\\n \tr1 = r0;\t\t\t\t\t\\\n \tcall %[bpf_sk_release];\t\t\t\t\\\n l2_%=:\texit;\t\t\t\t\t\t\\\n```\n\nThis ensures the socket reference is always released before exit, satisfying the verifier's reference tracking requirements.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-016-legacy.txt",
+    "case_id": "case-016",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 3059,
+    "prompt_path": "public/case-016/prompt_legacy.md",
+    "prompt_sha256": "31d64bebee3b4c19aa2fe3161c2814daf2c593074fd789dc1ebc83723ed9f8a8",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-016-legacy.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "0f51c6d6-ff6c-4404-92b6-8e267dbbe96e",
+    "started_at": "2026-06-05T03:19:05+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.001643,
+    "output_cost_usd": 0.003995,
+    "total_cost_usd": 0.005638000000000001
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1643,
+    "output_tokens": 799,
+    "raw_usage": {
+      "completion_tokens": 799,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.005638,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.003995,
+        "upstream_inference_cost": 0.005638,
+        "upstream_inference_prompt_cost": 0.001643
+      },
+      "is_byok": false,
+      "prompt_tokens": 1643,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 2442
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 2442
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Verifier Failure Analysis\n\nThe verifier is detecting a **reference leak**. Here's what's happening:\n\n1. At instruction 19, `bpf_sk_lookup_tcp` is called and returns a `sock_or_null` with reference ID 2 (tracked by the verifier)\n2. At instruction 20, there's a conditional check `if r6 == 0 goto pc+1`\n3. At instruction 21, the program exits\n4. **The problem**: When `r6 != 0`, the program exits at instruction 21 without releasing the socket reference that was acquired at instruction 19\n\nThe verifier requires that all acquired references (like sockets from `bpf_sk_lookup_tcp`) must be explicitly released before the program exits. The code only releases the reference in the `l1_%=` label when `r6 == 0`, but when `r6 != 0`, it exits without calling `bpf_sk_release`.\n\n## Root Cause\n\nThe logic is inverted. The code should:\n- Release the socket if it was successfully obtained (`r0 != 0`)\n- Exit without releasing if the lookup failed (`r0 == 0`)\n\nBut currently it's checking `r6` (the mark field) instead of `r0` (the return value from `bpf_sk_lookup_tcp`).\n\n## Fix\n\nThe condition at instruction 20 should check `r0` instead of `r6`:\n\n```c\nif r0 == 0 goto l1_%=;\n```\n\nThis way:\n- If `r0 == 0` (lookup failed), jump to `l1_%=` and exit without releasing\n- If `r0 != 0` (lookup succeeded), fall through to call `bpf_sk_release` and then exit\n\n## Patch\n\n```diff\n l0_%=:\tr6 = *(u32*)(r2 + %[mark]);\t\t\t\\\n \tr2 = 0;\t\t\t\t\t\t\\\n \t*(u32*)(r10 -8) = r2;\t\t\t\t\\\n \t*(u64*)(r10 -16) = r2;\t\t\t\t\\\n \t*(u64*)(r10 -24) = r2;\t\t\t\t\\\n \t*(u64*)(r10 -32) = r2;\t\t\t\t\\\n \t*(u64*)(r10 -40) = r2;\t\t\t\t\\\n \t*(u64*)(r10 -48) = r2;\t\t\t\t\\\n \tr2 = r10;\t\t\t\t\t\\\n \tr2 += -48;\t\t\t\t\t\\\n \tr3 = 36;\t\t\t\t\t\\\n \tr4 = 0;\t\t\t\t\t\t\\\n \tr5 = 0;\t\t\t\t\t\t\\\n \tcall %[bpf_sk_lookup_tcp];\t\t\t\\\n-\tif r6 == 0 goto l1_%=;\t\t\t\t\\\n+\tif r0 == 0 goto l1_%=;\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n l1_%=:\tif r0 == 0 goto l2_%=;\t\t\t\t\\\n \tr1 = r0;\t\t\t\t\t\\\n \tcall %[bpf_sk_release];\t\t\t\t\\\n l2_%=:\texit;\t\t\t\t\t\t\\\n```\n\nThis ensures the socket reference is always released before exit, satisfying the verifier's reference tracking requirements.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629545,
+    "id": "gen-1780629545-WuuoVbIIyK2Yk914bpDf",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 799,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.005638,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.003995,
+        "upstream_inference_cost": 0.005638,
+        "upstream_inference_prompt_cost": 0.001643
+      },
+      "is_byok": false,
+      "prompt_tokens": 1643,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 2442
+    }
+  },
+  "reasoning_content": ""
+}

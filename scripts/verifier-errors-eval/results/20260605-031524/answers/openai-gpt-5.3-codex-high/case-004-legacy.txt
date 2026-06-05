@@ -1,0 +1,37 @@
+The failure is caused by how the verifier treats `helper_a()`’s argument when validating that subprogram on its own.
+
+### Why it fails
+
+In the log, at `helper_a` entry:
+
+- `R1=mem_or_null(id=1,sz=4)`
+
+So `s` is considered a **nullable memory pointer**.  
+Then the code does:
+
+- `r6 = r1`
+- `r2 = *(u32 *)(r6 +0)`  ← dereference `s->x`
+
+There is no prior null check, so dereferencing `mem_or_null` is rejected:
+
+- `R6 invalid mem access 'mem_or_null'`
+
+Even though caller passes `&s` (non-null stack address), verifier checks `helper_a` with generic arg constraints, not just that one callsite fact.
+
+---
+
+### Smallest likely fix
+
+Add a null check before dereferencing `s`.
+
+```diff
+@@
+ __noinline int helper_a(const struct Item *s)
+ {
++	if (!s)
++		return 0;
+ 	return bpf_get_prandom_u32() < s->x;
+ }
+```
+
+This is minimal and should make verifier happy by refining `s` to non-null on the dereference path.

@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier error is a **reference leak** from the second ringbuf dynptr (`ptr2`).\n\n### What happens\n\nYou reserve two dynptr-backed ringbuf records:\n\n- `ptr1` at insn 7 (ref id=1)\n- `ptr2` at insn 14 (ref id=3)\n\nIn the `!sample` branch, you correctly discard both.\n\nBut on the `sample != NULL` branch, you only do:\n\n```c\nbpf_ringbuf_submit_dynptr(&ptr1, 0);\nreturn 0;\n```\n\n`ptr2` is never submitted or discarded there, so verifier reports:\n\n- `Unreleased reference id=3 alloc_insn=14`\n\n---\n\n### Smallest fix\n\nRelease `ptr2` on the success path as well (discard it since you never use it).\n\n#### Patch\n\n```diff\n@@ SEC(\"?raw_tp\")\n int entry(void *ctx)\n {\n \tstruct bpf_dynptr ptr1, ptr2;\n \tstruct sample *sample;\n@@\n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\n \treturn 0;\n }\n```\n\nThis makes ownership balanced on all exit paths, which is what the verifier requires.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-medium/case-011-diagnostic.txt",
+    "case_id": "case-011",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-medium",
+    "prompt_bytes": 5553,
+    "prompt_path": "public/case-011/prompt_diagnostic.md",
+    "prompt_sha256": "c4e9b1631d514a5b5c9e921fc3dfd8dc5de6eebfbb59913cb9ede46e6625c9ef",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-medium/case-011-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "1fa5a981-dfff-4dd6-8375-f95f1c1a707f",
+    "started_at": "2026-06-05T03:16:31+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.003248,
+    "output_cost_usd": 0.008456,
+    "total_cost_usd": 0.011703999999999999
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1856,
+    "output_tokens": 604,
+    "raw_usage": {
+      "input_tokens": 1856,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 604,
+      "output_tokens_details": {
+        "reasoning_tokens": 332
+      },
+      "total_tokens": 2460
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 332,
+    "total_tokens": 2460
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629400,
+    "created_at": 1780629391,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_06329658205c0dd5006a223f8f413c81a1ac0d8a802e451a03",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_06329658205c0dd5006a223f8fbafc81a190db0ac11a2a8272",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier error is a **reference leak** from the second ringbuf dynptr (`ptr2`).\n\n### What happens\n\nYou reserve two dynptr-backed ringbuf records:\n\n- `ptr1` at insn 7 (ref id=1)\n- `ptr2` at insn 14 (ref id=3)\n\nIn the `!sample` branch, you correctly discard both.\n\nBut on the `sample != NULL` branch, you only do:\n\n```c\nbpf_ringbuf_submit_dynptr(&ptr1, 0);\nreturn 0;\n```\n\n`ptr2` is never submitted or discarded there, so verifier reports:\n\n- `Unreleased reference id=3 alloc_insn=14`\n\n---\n\n### Smallest fix\n\nRelease `ptr2` on the success path as well (discard it since you never use it).\n\n#### Patch\n\n```diff\n@@ SEC(\"?raw_tp\")\n int entry(void *ctx)\n {\n \tstruct bpf_dynptr ptr1, ptr2;\n \tstruct sample *sample;\n@@\n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\n \treturn 0;\n }\n```\n\nThis makes ownership balanced on all exit paths, which is what the verifier requires.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_06329658205c0dd5006a223f94e67081a1ad65da300d5e203b",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1856,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 604,
+      "output_tokens_details": {
+        "reasoning_tokens": 332
+      },
+      "total_tokens": 2460
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

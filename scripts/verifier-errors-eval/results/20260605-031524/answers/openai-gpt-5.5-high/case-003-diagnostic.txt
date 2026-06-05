@@ -1,0 +1,55 @@
+The verifier loses the pointer type because the program partially overwrites the stack slot that contains the spilled context pointer.
+
+After instruction 0, the 8 bytes at `r10 - 8` through `r10 - 1` contain a spilled `ctx` pointer:
+
+```asm
+*(u64*)(r10 - 8) = r1;   /* fp-8 = ctx */
+```
+
+But this instruction writes one byte inside that same 8-byte slot:
+
+```asm
+*(u8*)(r10 - 7) = r0;
+```
+
+`r10 - 7` is the second byte of the spilled pointer. The verifier cannot treat a partially overwritten pointer spill as a valid pointer anymore, so it marks the whole slot as miscellaneous/scalar data:
+
+```text
+fp-8=mmmmmmmm
+```
+
+Therefore the later reload:
+
+```asm
+r0 = *(u64*)(r10 - 8);
+```
+
+does not restore `R0=ctx`; it produces `R0=scalar()`. Then this dereference is rejected:
+
+```asm
+r0 = *(u64*)(r0 + 8);
+```
+
+because scalar integers cannot be dereferenced.
+
+The smallest fix is to stop writing the byte into the spilled pointer slot. Put the byte in a neighboring stack byte, e.g. `r10 - 9`, which is outside the `r10 - 8` .. `r10 - 1` range.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -8,7 +8,7 @@ __naked void entry(void)
+ 	asm volatile ("					\
+ 	*(u64*)(r10 - 8) = r1;				\
+ 	r0 = 0x23;					\
+-	*(u8*)(r10 - 7) = r0;				\
++	*(u8*)(r10 - 9) = r0;				\
+ 	r0 = *(u64*)(r10 - 8);				\
+ 	r0 = *(u64*)(r0 + 8);				\
+ 	exit;						\
+```
+
+With this change, the spill at `fp-8` remains a clean `ctx` pointer spill. The reload should restore `R0` as a pointer-valued register, so the following memory access is no longer rejected as a scalar dereference.

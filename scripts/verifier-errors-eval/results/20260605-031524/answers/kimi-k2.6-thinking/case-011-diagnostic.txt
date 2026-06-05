@@ -1,0 +1,31 @@
+**Explanation**
+
+The verifier tracks resource ownership for dynamically-allocated objects such as ring-buffer dynptrs.  
+In this program:
+
+1. `ptr1` and `ptr2` are both reserved from the ringbuf (instructions 7 and 14).  
+   Each reservation creates an owned reference that must be released before the program exits.
+2. On the failure path (`sample == NULL`) both `ptr1` and `ptr2` are discarded, so ownership is properly released.
+3. On the success path (`sample != NULL`) the program submits `ptr1` but never releases `ptr2`.  
+   Consequently, reference **id=3** (the internal id for `ptr2`, allocated at instruction 14) is still live when the program hits the `exit` instruction.
+
+The verifier rejects the program because of this resource leak on the non-NULL path.
+
+**Fix**
+
+Add a release for `ptr2` on the success path before returning. Since `ptr2` is unused, discarding it is the appropriate operation.
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -108,6 +108,7 @@ int entry(void *ctx)
+ 	}
+ 
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
++	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+ 
+ 	return 0;
+ }
+```
+
+This ensures every acquired dynptr is accounted for on every control-flow path, satisfying the verifier’s resource-lifetime check.

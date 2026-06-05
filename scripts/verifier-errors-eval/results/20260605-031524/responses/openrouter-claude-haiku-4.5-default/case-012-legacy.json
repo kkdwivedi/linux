@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Verifier Failure Analysis\n\nThe verifier is rejecting this program because:\n\n1. **IRQ-disabled region violation**: `bpf_local_irq_save()` disables interrupts and increments a reference counter (shown as `refs=1` in the log).\n\n2. **Sleepable function in atomic context**: The function `helper_a()` is marked `__noinline`, which means it's a global function. When called within an IRQ-disabled region (after `bpf_local_irq_save()`), the verifier detects that `helper_a()` contains `bpf_copy_from_user()`, which is a **sleepable helper**.\n\n3. **The core issue**: Sleepable helpers cannot be called when interrupts are disabled because they may sleep, which would deadlock the kernel.\n\nThe error message \"sleepable global function helper_a() called in IRQ-disabled region\" explicitly states this violation.\n\n## Root Cause\n\nThe `bpf_copy_from_user()` call inside `helper_a()` is sleepable. When `helper_a()` is called after `bpf_local_irq_save()`, the verifier correctly rejects it because the IRQ-disabled region prevents sleeping.\n\n## Proposed Fix\n\nMove the `helper_a(0)` call **outside** the IRQ-disabled region:\n\n```c\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\thelper_a(0);\n\tbpf_local_irq_save(&flags);\n\tbpf_local_irq_restore(&flags);\n\treturn 0;\n}\n```\n\n**Why this works**: By calling `helper_a(0)` before `bpf_local_irq_save()`, the sleepable helper executes in a context where sleeping is allowed. The IRQ-disabled region only contains the save/restore pair, which are non-sleepable operations.\n\nThis is the minimal fix that satisfies the verifier's constraint that sleepable functions cannot execute in IRQ-disabled regions.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-012-legacy.txt",
+    "case_id": "case-012",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 1526,
+    "prompt_path": "public/case-012/prompt_legacy.md",
+    "prompt_sha256": "3c7396a0a94e22b4ffa05f47bf695c68faeca27ec07a26da548d621cb3473cdb",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-012-legacy.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "1909491a-670c-438d-80c7-e4929b44ed5c",
+    "started_at": "2026-06-05T03:19:02+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000681,
+    "output_cost_usd": 0.00246,
+    "total_cost_usd": 0.0031409999999999997
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 681,
+    "output_tokens": 492,
+    "raw_usage": {
+      "completion_tokens": 492,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.003141,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.00246,
+        "upstream_inference_cost": 0.003141,
+        "upstream_inference_prompt_cost": 0.000681
+      },
+      "is_byok": false,
+      "prompt_tokens": 681,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1173
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1173
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Verifier Failure Analysis\n\nThe verifier is rejecting this program because:\n\n1. **IRQ-disabled region violation**: `bpf_local_irq_save()` disables interrupts and increments a reference counter (shown as `refs=1` in the log).\n\n2. **Sleepable function in atomic context**: The function `helper_a()` is marked `__noinline`, which means it's a global function. When called within an IRQ-disabled region (after `bpf_local_irq_save()`), the verifier detects that `helper_a()` contains `bpf_copy_from_user()`, which is a **sleepable helper**.\n\n3. **The core issue**: Sleepable helpers cannot be called when interrupts are disabled because they may sleep, which would deadlock the kernel.\n\nThe error message \"sleepable global function helper_a() called in IRQ-disabled region\" explicitly states this violation.\n\n## Root Cause\n\nThe `bpf_copy_from_user()` call inside `helper_a()` is sleepable. When `helper_a()` is called after `bpf_local_irq_save()`, the verifier correctly rejects it because the IRQ-disabled region prevents sleeping.\n\n## Proposed Fix\n\nMove the `helper_a(0)` call **outside** the IRQ-disabled region:\n\n```c\nSEC(\"?syscall\")\nint entry(void *ctx)\n{\n\tunsigned long flags;\n\n\thelper_a(0);\n\tbpf_local_irq_save(&flags);\n\tbpf_local_irq_restore(&flags);\n\treturn 0;\n}\n```\n\n**Why this works**: By calling `helper_a(0)` before `bpf_local_irq_save()`, the sleepable helper executes in a context where sleeping is allowed. The IRQ-disabled region only contains the save/restore pair, which are non-sleepable operations.\n\nThis is the minimal fix that satisfies the verifier's constraint that sleepable functions cannot execute in IRQ-disabled regions.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629542,
+    "id": "gen-1780629542-k2VlV2mjcuwoZ89JcEmr",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 492,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.003141,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.00246,
+        "upstream_inference_cost": 0.003141,
+        "upstream_inference_prompt_cost": 0.000681
+      },
+      "is_byok": false,
+      "prompt_tokens": 681,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1173
+    }
+  },
+  "reasoning_content": ""
+}

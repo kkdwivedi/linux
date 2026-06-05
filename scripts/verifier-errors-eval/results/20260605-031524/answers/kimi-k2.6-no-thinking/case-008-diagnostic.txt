@@ -1,0 +1,43 @@
+Looking at this verifier failure, I need to understand what's happening with `bpf_dynptr_slice`.
+
+## Verifier Failure Explanation
+
+The error is:
+```
+invalid read from stack R3 off -24+8 size 9
+```
+
+The issue is with the `buffer` argument to `bpf_dynptr_slice`. Let's trace through:
+
+1. `char buffer[8] = {};` - allocates 8 bytes on the stack (at `fp-24`)
+2. `bpf_dynptr_slice(&ptr, 0, buffer, 9)` - passes `buffer` with length `9`
+
+The verifier tracks that `buffer` is only 8 bytes, but the call requests 9 bytes (`r4 = 9`). This is a **buffer overflow** - we're asking `bpf_dynptr_slice` to potentially write up to 9 bytes into an 8-byte buffer.
+
+The `bpf_dynptr_slice` helper takes:
+- `struct bpf_dynptr *ptr` (the dynptr)
+- `__u32 offset` (offset into the dynptr)
+- `void *buffer` (a buffer to copy into, or NULL)
+- `__u32 len` (length to slice)
+
+When `buffer` is non-NULL, the verifier checks that `buffer` has at least `len` bytes available. Here, `buffer` is 8 bytes but `len` is 9.
+
+## The Fix
+
+The smallest fix is to make the `buffer` size match the length parameter, or reduce the length parameter to match the buffer. Since the code likely intends to read 8 bytes (the buffer size), the length should be `8`, not `9`.
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -2007,7 +2007,7 @@ int entry(struct __sk_buff *skb)
+ 	if (bpf_dynptr_from_skb(skb, 0, &ptr))
+ 		return 1;
+ 
+-	data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
++	data = bpf_dynptr_slice(&ptr, 0, buffer, 8);
+ 
+ 	return !!data;
+ }
+```
+
+This changes the length parameter from `9` to `8`, matching the actual size of `buffer[8]`. The verifier will then see that `R3` points to 8 bytes of stack memory and `R4` requests 8 bytes, which satisfies the memory/length pair contract.

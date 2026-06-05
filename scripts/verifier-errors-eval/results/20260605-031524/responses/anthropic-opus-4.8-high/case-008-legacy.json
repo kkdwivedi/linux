@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\n`bpf_dynptr_slice(&ptr, 0, buffer, len)` copies (or returns a pointer to) `len` bytes, using `buffer` as the fallback storage. The verifier therefore requires that the `buffer`/`len` pair describe a valid memory region \u2014 i.e. `len` must not exceed the size of `buffer`.\n\nHere:\n\n```c\nchar buffer[8] = {};\n...\ndata = bpf_dynptr_slice(&ptr, 0, buffer, 9);\n```\n\n`buffer` is only 8 bytes, but the call asks for 9 bytes. The verifier sees the stack slot at `fp-24` is 8 bytes and the requested length is 9, so the read would run off the end of the buffer:\n\n```\ninvalid read from stack R3 off -24+8 size 9\nR3 and R4 memory, len pair leads to invalid memory access\n```\n\n## Fix\n\nMake the length match (or be smaller than) the buffer size. Either shrink the requested length to 8, or enlarge the buffer to 9.\n\nSmallest source-level change \u2014 match the length to the buffer:\n\n```c\n-\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 9);\n+\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 8);\n```\n\n(Equivalently `char buffer[9] = {};` if 9 bytes is actually desired.) After this change the `buffer`/`len` pair stays within the 8-byte stack object, satisfying the verifier's bounds check.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-008-legacy.txt",
+    "case_id": "case-008",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 1995,
+    "prompt_path": "public/case-008/prompt_legacy.md",
+    "prompt_sha256": "bb69e9d81c52b441a9ca18ed1387cdaf4d358455af3a7eb36dc706949cff365c",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-008-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "57ca1385-9a40-48e3-a8e4-3d135de400ab",
+    "started_at": "2026-06-05T03:17:35+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.0057,
+    "output_cost_usd": 0.0183,
+    "total_cost_usd": 0.024
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1140,
+    "output_tokens": 732,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1140,
+      "output_tokens": 732,
+      "output_tokens_details": {
+        "thinking_tokens": 222
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1872
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EuYFCmMIDhgCKkAnTV1ON1O4YHtypK+zrCsd0LNdbA9x++Sx6k/2HIy5QfszIinhSJjfEv09hHXBWmjCTcDc0yDdsdDWcPXP68AAMg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDDm+dhV9MRZ9ckHqBhoMKmqpJ4+i4ooBIzspIjDF0VNTFA4411ljJyB3R4ab4Z7P7bwTm4vFc2Fc1bLZ0PwdjMyXzDq5qofnEfboCW8qsAR3+cmbpQpa4ApPB3RXY+Ezj08fpKPdmUSWVAn87SI4YtdSaDJby/aYCSR0H/S2WpyeLNtV9apTefcYBW1FW/kqggnCcov/zCLjSddT4tQlf7AcJXD9XNn9sY64B9RB6bO45Dt/2PwV4Zu+veXGkmX3lscIdTAe6fo9Jyiro6TOH9Re28/VbyWCI0myfqBJA/jTykAqnRzVjTe/6yk6fL/Oc56g2NIb97x4Q8ykmkTLXqQbyRv9mHTUdvEKUrjtkQn7R19COzoCs0zCllvs8dWIiThBBB/IW/J7adfVEpQhw0ovGCbHBmSR5BbmG56qaFuNIpFlbcqL4MKD47HXPRh6CLCUkLUpd5vhBXWx19etEfprPJ4LLOstnZsb1Q17JLBqEoPQBWAXGbhlQ86Dsuwdx+trzuFXyyaNmDUHh5isehwF4ns3FcV6k3cqccbKkvx/AG7djTmMxsnBZ3JSyTwtBtSGNqh9nrhZZjtRCBlw917YJ/WXbqoRM81hkHlsWq/5LVbXcNdyz3YBsJabcgctsflPIN23C7FQvNgc1d9pKXNP+IyJcWoH623ds76IHIRNEl7pdCKJw1XWLvTDsVPuzAsG9Vrwriik4faVm1appSOlGiyxw5XFwkM+cwxSKvp5rt2lVOeu1ZQrNXHLfCZjv+TWNcH9c8jjOh7Y82h/APTGUQhIicNbst7E66286OT8qdL2bXZ5Gf4uGHpG+a4L90f8uKLneO1/rkblNB4GdxgB",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\n`bpf_dynptr_slice(&ptr, 0, buffer, len)` copies (or returns a pointer to) `len` bytes, using `buffer` as the fallback storage. The verifier therefore requires that the `buffer`/`len` pair describe a valid memory region \u2014 i.e. `len` must not exceed the size of `buffer`.\n\nHere:\n\n```c\nchar buffer[8] = {};\n...\ndata = bpf_dynptr_slice(&ptr, 0, buffer, 9);\n```\n\n`buffer` is only 8 bytes, but the call asks for 9 bytes. The verifier sees the stack slot at `fp-24` is 8 bytes and the requested length is 9, so the read would run off the end of the buffer:\n\n```\ninvalid read from stack R3 off -24+8 size 9\nR3 and R4 memory, len pair leads to invalid memory access\n```\n\n## Fix\n\nMake the length match (or be smaller than) the buffer size. Either shrink the requested length to 8, or enlarge the buffer to 9.\n\nSmallest source-level change \u2014 match the length to the buffer:\n\n```c\n-\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 9);\n+\tdata = bpf_dynptr_slice(&ptr, 0, buffer, 8);\n```\n\n(Equivalently `char buffer[9] = {};` if 9 bytes is actually desired.) After this change the `buffer`/`len` pair stays within the 8-byte stack object, satisfying the verifier's bounds check.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01FuQeDU3NYa8KgRdNW1VBKp",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1140,
+      "output_tokens": 732,
+      "output_tokens_details": {
+        "thinking_tokens": 222
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

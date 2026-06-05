@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Use bpf_cpumask_create(), check for NULL, call bpf_cpumask_populate on the returned cpumask pointer, and release it before returning.",
+    "Replace the integer-cast pointer with another verifier-known memory object accepted by the kfunc contract."
+  ],
+  "canonical_fix": "Allocate or otherwise use verifier-known cpumask memory and pass that pointer to bpf_cpumask_populate, then release it if ownership was acquired.",
+  "case_id": "case-001",
+  "category": "Call Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The first argument to bpf_cpumask_populate is produced by casting the integer constant 0x123456 to a cpumask pointer. The verifier tracks it as a scalar, not as verifier-known writable memory of the required cpumask size.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-medium/case-001-legacy.txt",
+    "case_id": "case-001",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-medium",
+    "prompt_bytes": 1470,
+    "prompt_path": "public/case-001/prompt_legacy.md",
+    "prompt_sha256": "a0e1ddcc93f0bbda0f2825039ffd053bcc68794492e83d423c6bece1a756de61",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-medium/case-001-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "c15ce5ae-6897-4ca1-aae6-5932970bd42a",
+    "started_at": "2026-06-05T03:16:14+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "The verifier is rejecting this call because of **arg#1 type** to `bpf_cpumask_populate()`:\n\n- You pass `R1 = 0x123456` (an immediate scalar / fake pointer).\n- Verifier says: `R1 type=scalar expected=fp`\n- So this kfunc/helper expects a pointer derived from the BPF frame pointer (i.e., stack memory), not an arbitrary constant address.\n\nThere\u2019s a second likely issue after fixing that: `bits` is uninitialized and is passed by pointer; if arg#2 is read by the helper, verifier may then reject uninitialized stack read. So initialize it.\n\n### Smallest likely fix\n\nUse a stack-backed object for arg#1 and initialize `bits`:\n\n```diff\n SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n-\tstruct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;\n-\tu64 bits;\n+\tu64 mask = 0;\n+\tu64 bits = 0;\n \tint ret;\n \n-\tret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));\n+\tret = bpf_cpumask_populate((struct cpumask *)&mask, &bits, sizeof(bits));\n \tif (!ret)\n \t\treturn 2;\n \n \treturn 0;\n }\n```\n\nWhy this should satisfy verifier:\n- `R1` becomes `fp-...` (stack pointer), matching `expected=fp`.\n- `bits` is initialized, avoiding potential stack-read complaints on arg#2.",
+  "must_mention": [
+    "R1 is a scalar/integer, not memory",
+    "The destination pointer must be verifier-known memory",
+    "Do not cast a constant integer to a pointer"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes the integer value",
+    "Adds a NULL check around the integer-cast pointer",
+    "Suppresses or ignores the return value without fixing the destination pointer"
+  ]
+}

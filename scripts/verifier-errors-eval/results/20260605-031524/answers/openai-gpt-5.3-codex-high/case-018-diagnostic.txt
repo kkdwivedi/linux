@@ -1,0 +1,34 @@
+Verifier rejects this because of **lock lifetime ordering**:
+
+- You lock `lock_a`, then try `lock_b`.
+- If `lock_b` succeeds, both locks are active (`A` then `B`).
+- Unlocks must be **LIFO**: first `B`, then `A`.
+- Current source unlocks `A` before `B` on the success path, which is invalid.
+- LLVM then hoists/emits `unlock(&lock_a)` early (as seen in the log), making the out-of-order unlock obvious to the verifier.
+
+### Smallest likely fix
+
+Swap the two unlocks in the success path.
+
+```diff
+ SEC("?tc")
+ int entry(struct __sk_buff *ctx)
+ {
+ 	if (bpf_res_spin_lock(&lock_a))
+ 		return 0;
+ 	if (bpf_res_spin_lock(&lock_b)) {
+ 		bpf_res_spin_unlock(&lock_a);
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+-	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+This makes all paths valid:
+
+- `lock_b` failed: only `A` held → unlock `A`.
+- `lock_b` succeeded: `A,B` held → unlock `B` then `A`.

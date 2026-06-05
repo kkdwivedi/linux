@@ -1,0 +1,31 @@
+`helper_a()` is verified as a separate subprogram (`__noinline`), and its argument `s` is treated conservatively as `mem_or_null`.  
+So at this line:
+
+```c
+return bpf_get_prandom_u32() < s->x;
+```
+
+the load of `s->x` becomes:
+
+```
+r2 = *(u32 *)(r6 +0)
+```
+
+while `r6` is still `mem_or_null`, hence the verifier rejects it as a possible NULL dereference.
+
+Even though `entry()` passes `&s`, the callee’s pointer type is still nullable unless you prove non-NULL inside the callee (or change compilation/structure so it gets inlined/specialized).
+
+### Smallest likely fix
+
+Add an explicit NULL guard in `helper_a()` before dereferencing `s`.
+
+```diff
+ __noinline int helper_a(const struct Item *s)
+ {
++	if (!s)
++		return 0;
+ 	return bpf_get_prandom_u32() < s->x;
+ }
+```
+
+This gives the verifier a non-NULL path for the dereference and should make the program pass.

@@ -1,0 +1,37 @@
+## Explanation
+
+When `__noinline` functions are validated by the BPF verifier, they are verified **independently** of their callers. Because the verifier has no information about what the caller passes, it conservatively treats the pointer argument `s` as `mem_or_null` (potentially NULL). Even though the caller always passes a valid stack address, the verifier cannot assume that when validating `helper_a` in isolation.
+
+At instruction 10 (`r2 = *(u32 *)(r6 +0)`), R6 still has type `mem_or_null`, and the verifier rejects the dereference because it cannot prove the pointer is non-NULL.
+
+## Fix
+
+Add a NULL guard inside `helper_a` so the verifier sees that `s` is only dereferenced on the non-NULL path:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+struct Item {
+	int x;
+};
+
+__noinline int helper_a(const struct Item *s)
+{
+	if (!s)
+		return 0;
+	return bpf_get_prandom_u32() < s->x;
+}
+
+SEC("cgroup_skb/ingress")
+int entry(struct __sk_buff *skb)
+{
+	const struct Item s = {.x = skb->len};
+
+	helper_a(&s);
+
+	return 1;
+}
+```
+
+After the `if (!s) return 0;` check, the verifier knows that on the fall-through path `s` is non-NULL, so the subsequent `s->x` dereference is safe. This is the minimal change required — it matches exactly what the verifier log's suggestion recommends: *"Add a NULL check and dereference the pointer only on the non-NULL path."*

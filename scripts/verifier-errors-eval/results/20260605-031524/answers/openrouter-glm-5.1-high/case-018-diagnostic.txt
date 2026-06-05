@@ -1,0 +1,43 @@
+## Verifier Failure Explanation
+
+The verifier enforces **LIFO (last-in, first-out) ordering** for `bpf_res_spin_lock`/`bpf_res_spin_unlock`. Locks must be released in the reverse order they were acquired.
+
+In this program, `lock_a` is acquired first, then `lock_b`. However, in the success path (when both locks are acquired), the unlocks are in the **wrong order**:
+
+```c
+bpf_res_spin_unlock(&lock_a);  // ❌ unlocking lock_a while lock_b is still held
+bpf_res_spin_unlock(&lock_b);  // should be unlocked first
+```
+
+The compiler further exacerbates this by placing the error-path unlock of `lock_a` (from the `if (bpf_res_spin_lock(&lock_b))` block) **before** the conditional branch on the lock_b result. This means the verifier, while exploring the path where `lock_b` succeeded (R0=0), sees an unlock of `lock_a` while `lock_b` is still held — a clear LIFO violation.
+
+## Fix
+
+Swap the unlock order in the success path so that `lock_b` (the last-acquired lock) is released first:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+struct bpf_res_spin_lock lock_a __hidden SEC(".data.A");
+struct bpf_res_spin_lock lock_b __hidden SEC(".data.B");
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);   /* unlock last-acquired first */
+	bpf_res_spin_unlock(&lock_a);   /* then unlock first-acquired */
+	return 0;
+}
+```
+
+**Why this works:**
+- **Success path** (both locks held): `lock_b` is released before `lock_a`, satisfying LIFO.
+- **Error path** (`lock_b` failed): only `lock_a` is held, so unlocking just `lock_a` is correct — there's no ordering conflict since `lock_b` was never acquired.
+- With the correct LIFO order in the success path, the compiler should generate code where the conditional branch on `lock_b`'s result precedes the success-path unlocks, avoiding the out-of-order detection the verifier flagged.

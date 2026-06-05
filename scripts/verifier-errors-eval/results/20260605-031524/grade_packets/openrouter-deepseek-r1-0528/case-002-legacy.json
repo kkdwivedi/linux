@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Release cpumask after __sink(cpumask) if cpumask is non-NULL.",
+    "Transfer the owned cpumask into a kptr/map in a verifier-accepted way so the program no longer owns it."
+  ],
+  "canonical_fix": "After make_object returns a non-NULL cpumask, call bpf_cpumask_release(cpumask) before returning on every path that still owns it.",
+  "case_id": "case-002",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "easy",
+  "expected_explanation": "make_object acquires an owned cpumask reference. The entry program stores/sinks it and returns without releasing or transferring ownership, so one exit path leaks the reference.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-r1-0528/case-002-legacy.txt",
+    "case_id": "case-002",
+    "model": "deepseek/deepseek-r1-0528",
+    "profile": "openrouter-deepseek-r1-0528",
+    "prompt_bytes": 2521,
+    "prompt_path": "public/case-002/prompt_legacy.md",
+    "prompt_sha256": "b1009b27b63c85152af26046b06f483efc378f604fa60de5cb0fdda6b91ed858",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-r1-0528/case-002-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "38fb1a93-94ab-415c-b39d-910d4fbb1a29",
+    "started_at": "2026-06-05T03:19:07+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "The verifier log indicates a reference leak for a `bpf_cpumask` object (id=2) created by `bpf_cpumask_create()`. The reference is acquired in `make_object()` and returned to the main program, but is never released before program exit.\n\n**Failure Explanation:**\n- `make_object()` returns a reference-counted `bpf_cpumask*` when successful\n- The main program stores this reference (`cpumask`) but never releases it\n- BPF requires all acquired references to be released before program exit\n- Verifier detects the unreleased reference at exit instruction (insn 21)\n\n**Fix:**\nRelease the `cpumask` reference in the main program if it's non-NULL. The smallest fix is to add a release call after `__sink(cpumask)`:\n\n```diff\n SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n \tstruct bpf_cpumask *cpumask;\n \n \tcpumask = make_object();\n \t__sink(cpumask);\n+\tif (cpumask)\n+\t\tbpf_cpumask_release(cpumask);\n \treturn 0;\n }\n```\n\n**Reason:**\n- Checks for NULL pointer to avoid invalid release\n- Releases the reference before program exit\n- Matches the error handling in `make_object()` where releases already occur\n- Maintains correct reference counting semantics\n\n**Complete Fixed Source:**\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_tracing.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nstatic struct bpf_cpumask *make_object(void);\n\nstatic const struct cpumask *cast(struct bpf_cpumask *cpumask)\n{\n\treturn (const struct cpumask *)cpumask;\n}\n\nstatic struct bpf_cpumask *make_object(void)\n{\n\tstruct bpf_cpumask *cpumask;\n\n\tcpumask = bpf_cpumask_create();\n\tif (!cpumask)\n\t\treturn NULL;\n\n\tif (!bpf_cpumask_empty(cast(cpumask))) {\n\t\tbpf_cpumask_release(cpumask);\n\t\treturn NULL;\n\t}\n\n\treturn cpumask;\n}\n\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct bpf_cpumask *cpumask;\n\n\tcpumask = make_object();\n\t__sink(cpumask);\n\tif (cpumask)\n\t\tbpf_cpumask_release(cpumask);\n\n\treturn 0;\n}\n```",
+  "must_mention": [
+    "An owned cpumask reference is acquired",
+    "Every exit path must release or transfer ownership",
+    "The NULL path does not need release"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Removes the acquisition without preserving the intended object use",
+    "Calls release without considering NULL when the API requires non-NULL",
+    "Releases only on an error path and still returns with ownership on success"
+  ]
+}

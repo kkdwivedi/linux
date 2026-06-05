@@ -1,0 +1,42 @@
+## Explanation
+
+`bpf_res_spin_lock` enforces **LIFO (last-in, first-out)** lock ordering. In your function the acquisition order is:
+
+1. `lock_a`
+2. `lock_b`
+
+so the release order **must** be `lock_b` then `lock_a`. But your success path does the opposite:
+
+```c
+bpf_res_spin_unlock(&lock_a);   /* releases the OLDER lock first */
+bpf_res_spin_unlock(&lock_b);
+```
+
+That's already an out-of-order release. On top of that, because `unlock(&lock_a)` is the *common* operation between the error path (`if (bpf_res_spin_lock(&lock_b)) { unlock(a); return; }`) and the success path, the compiler hoists the `unlock(&lock_a)` above the branch on `w6` (the result of locking `b`). The resulting instruction stream releases `lock_a` while `lock_b` may still be held — exactly what the verifier reports:
+
+```
+10: (85) call bpf_res_spin_unlock   <- unlocking lock_a
+bpf_res_spin_unlock cannot be out of order
+```
+
+## Fix
+
+Release the locks in reverse order of acquisition (unlock `b` before `a`):
+
+```c
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);   /* was &lock_a */
+	bpf_res_spin_unlock(&lock_a);   /* was &lock_b */
+	return 0;
+}
+```
+
+Now both paths obey LIFO: the error path holds only `lock_a` and releases it, and the success path releases `lock_b` then `lock_a`. The shared trailing `unlock(&lock_a)` can be merged by the compiler without violating ordering, so the verifier's resource-lifetime check passes.

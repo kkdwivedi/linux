@@ -1,0 +1,31 @@
+## Explanation
+
+After calling `helper_a` (a global/non-inlined function that ultimately calls `bpf_skb_pull_data`), the verifier invalidates all packet pointers because `bpf_skb_pull_data` can reallocate the packet buffer, making any previously-validated pointer stale. Since `helper_a` is marked `__noinline` (global), the verifier treats it as a black box and assumes it may change the packet layout.
+
+At instruction 10, `r7` (which held `p`) is now classified as `scalar` instead of a valid packet pointer, so the write `*p = 42` fails with `R7 invalid mem access 'scalar'`.
+
+## Fix
+
+Reload `sk->data` and re-validate the bounds **after** the `helper_a` call:
+
+```c
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	int *p = (void *)(long)sk->data;
+
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	helper_a(sk, 0);
+
+	/* Re-validate packet pointer after potential bpf_skb_pull_data */
+	p = (void *)(long)sk->data;
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+By reloading `sk->data` into `p` and rechecking `p + 1` against `sk->data_end` after the call, the verifier gets a fresh, properly-bounded packet pointer for the subsequent write.

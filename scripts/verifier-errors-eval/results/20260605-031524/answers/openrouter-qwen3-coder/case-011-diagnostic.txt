@@ -1,0 +1,45 @@
+### Problem Analysis
+
+The verifier log indicates a **resource leak**. Specifically:
+
+- Two `bpf_ringbuf_reserve_dynptr` calls are made:
+  - The first reserves a dynamic pointer (`ptr1`) and is later submitted via `bpf_ringbuf_submit_dynptr`.
+  - The second reserves a dynamic pointer (`ptr2`) but is **never released** (either submitted or discarded) on the path where `sample` is valid (i.e., non-null).
+
+The verifier detects that:
+- Resource `id=3` (corresponding to `ptr2`) is acquired at instruction 14.
+- On the path where `sample` is valid (i.e., the `if (!sample)` branch is not taken), the program exits without releasing `ptr2`.
+- This violates the **resource lifetime safety rule**, which requires all acquired resources to be released before the program exits.
+
+### Fix Explanation
+
+To fix the issue, we must ensure that **both `ptr1` and `ptr2` are released** on all code paths:
+- If `sample` is null, both are discarded (this is already handled).
+- If `sample` is valid, we currently only submit `ptr1`, but we must also **submit or discard `ptr2`**.
+
+Since the program logic only uses `ptr1` to submit data, the simplest fix is to **discard `ptr2`** in the path where `sample` is valid (i.e., after the `if (!sample)` block).
+
+### Proposed Fix
+
+Add a call to `bpf_ringbuf_discard_dynptr(&ptr2, 0)` after submitting `ptr1` to ensure `ptr2` is released.
+
+### Patch
+
+```diff
+--- a/source.c
++++ b/source.c
+@@ -107,6 +107,7 @@ int entry(void *ctx)
+ 	}
+
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
++	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+
+ 	return 0;
+ }
+```
+
+### Why This Fixes the Issue
+
+- On the path where `sample` is null, both `ptr1` and `ptr2` are discarded (already handled).
+- On the path where `sample` is valid, `ptr1` is submitted, and now `ptr2` is explicitly discarded.
+- This ensures that **all resources are released** before the program exits, satisfying the verifier's resource lifetime safety checks.

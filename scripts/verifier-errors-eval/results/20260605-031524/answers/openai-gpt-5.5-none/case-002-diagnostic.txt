@@ -1,0 +1,63 @@
+The verifier failure is a straightforward reference leak.
+
+`bpf_cpumask_create()` returns an owned `struct bpf_cpumask *`. The verifier tracks that as:
+
+```text
+R0=trusted_ptr_or_null_bpf_cpumask(id=2) refs=2
+```
+
+After the NULL check, on the successful path `cpumask` is a non-NULL owned reference. In `make_object()`:
+
+```c
+if (!bpf_cpumask_empty(cast(cpumask))) {
+	bpf_cpumask_release(cpumask);
+	return NULL;
+}
+
+return cpumask;
+```
+
+the non-empty path releases the cpumask, but the empty path returns the still-owned object to the caller.
+
+Then in `entry()`:
+
+```c
+cpumask = make_object();
+__sink(cpumask);
+
+return 0;
+```
+
+the returned owned reference is never released or otherwise transferred. `__sink(cpumask)` only prevents optimization; it does not release ownership. So the program exits while still holding the reference allocated by `bpf_cpumask_create()`, producing:
+
+```text
+Unreleased reference id=2 alloc_insn=0
+```
+
+The smallest source-level fix is to release `cpumask` in `entry()` after `make_object()` returns, guarding against NULL.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -31,8 +31,11 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ 	struct bpf_cpumask *cpumask;
+ 
+ 	cpumask = make_object();
+ 	__sink(cpumask);
++	if (cpumask)
++		bpf_cpumask_release(cpumask);
+ 
+ 	return 0;
+ }
+```
+
+Why this should satisfy the verifier:
+
+- If `bpf_cpumask_create()` returns NULL, there is no reference to release.
+- If `bpf_cpumask_empty()` returns false, `make_object()` already releases the object and returns NULL.
+- If `make_object()` returns a non-NULL `cpumask`, ownership is still held by the caller, so `entry()` must release it before exit.
+- The added `if (cpumask) bpf_cpumask_release(cpumask);` closes the only leaked ownership path.

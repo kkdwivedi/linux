@@ -1,0 +1,82 @@
+## What the verifier is complaining about
+
+The error is **not** about instruction count or state explosion — it's a specific limit:
+
+```
+liveness analysis exceeded complexity limit (10001 calls)
+Verification failed: Verifier Limit: Limit exceeded
+```
+
+This program builds a *call tree*, not a call chain:
+
+- `entry` calls `helper_a` **50** times
+- `helper_a` calls `helper_b` **50** times
+- … down through `helper_g`
+
+There are 7 call edges from `entry` down to `helper_g`, each with a fan-out of 50.
+So the number of distinct call *paths* that reach `helper_g` is roughly:
+
+```
+50^7 ≈ 7.8 × 10^11
+```
+
+When the verifier finishes analyzing a callee it has to propagate stack/register
+**liveness** information back up into the caller frame, and it does this once per
+call path. The kernel caps the number of these liveness recomputations at
+**10001**. With a fan-out of 50 over 7 levels, that cap is blown almost
+immediately — hence the repeated
+
+```
+subprog#7: analyzing (depth 7)...
+```
+lines followed by the limit error. This is purely a combinatorial-blowup problem
+in the call graph; the actual instructions are trivial (`r0 = 0; exit`).
+
+## Smallest fix
+
+Reduce the *fan-out* (or depth) so the number of call paths reaching the deepest
+subprogram stays under the 10001 liveness-recomputation budget.
+
+With 7 nested levels you need a branching factor `b` such that `b^7 < 10001`:
+
+- `b = 4` → `4^7 = 16384` ❌ (still over)
+- `b = 3` → `3^7 = 2187` ✅
+
+So replacing the `CALLS_50` fan-out with a fan-out of 3 is sufficient and is the
+smallest structural change:
+
+```c
+/* fan-out of 3 instead of 50 keeps liveness recomputations under the limit */
+#define CALLS_3(fn) \
+	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)
+```
+
+and change every `CALLS_50(...)` to `CALLS_3(...)`, e.g.:
+
+```c
+static unsigned long helper_f(void)
+{
+	asm volatile (
+		CALLS_3(helper_g)
+		"r0 = 0;"
+		"exit;"
+		::: __clobber_all);
+}
+/* ... same substitution in helper_e, helper_d, helper_c, helper_b, helper_a, entry ... */
+```
+
+(You can delete the now-unused `CALLS_10`/`CALLS_50` macros.)
+
+### Why this works
+- The verification logic and instruction shape are unchanged; only the number of
+  call paths is reduced.
+- `3^7 = 2187` liveness recomputations is comfortably below the `10001` limit, so
+  the liveness analysis completes instead of aborting with “Limit exceeded”.
+
+Equivalent alternatives that achieve the same goal:
+- Keep the larger fan-out but **remove several `helper_*` levels** so the tree is
+  shallower (reduce the exponent rather than the base), or
+- Use any branching factor/depth combination whose product of fan-outs is `< 10001`.
+
+The key idea the verifier’s suggestion is pointing at — *“Reduce the number of
+distinct call paths”* — is exactly what shrinking the fan-out accomplishes.

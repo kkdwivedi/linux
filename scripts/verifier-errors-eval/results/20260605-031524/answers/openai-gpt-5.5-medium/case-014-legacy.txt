@@ -1,0 +1,59 @@
+The failure is because `r3` is loaded from the map value:
+
+```asm
+r3 = *(u32*)(r0 + 0);
+```
+
+The verifier treats that as an arbitrary 32-bit scalar:
+
+```text
+R3=scalar(smin=0,smax=umax=0xffffffff)
+```
+
+Then the program does:
+
+```asm
+r1 = r0;
+r1 += r3;
+```
+
+So `r1` becomes `map_value + arbitrary_offset`. The map value is only 48 bytes:
+
+```text
+vs=48
+```
+
+but `r3` could be anything up to `0xffffffff`. When `r1` is passed as the destination buffer to:
+
+```asm
+call bpf_probe_read_kernel
+```
+
+with size `1`, the verifier cannot prove that `r1..r1+1` is still inside the map value, so it rejects with:
+
+```text
+R1 unbounded memory access, make sure to bounds check any such access
+```
+
+The smallest fix is to bounds-check `r3` before adding it to the map-value pointer. Since the helper writes 1 byte and the map value is 48 bytes, the maximum valid byte offset is `47`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -24,6 +24,7 @@ __naked void entry(void)
+ 	if r0 == 0 goto l0_%=;				\
+ 	r1 = r0;					\
+ 	r3 = *(u32*)(r0 + 0);				\
++	if r3 > 47 goto l0_%=;				\
+ 	r1 += r3;					\
+ 	r2 = 1;						\
+ 	r3 = 0;						\
+```
+
+After this check, on the fall-through path the verifier can infer `r3 <= 47`, so `r1 = map_value + r3` points somewhere within the 48-byte map value, and a 1-byte write by `bpf_probe_read_kernel()` is in bounds.
+
+If the intended target is specifically `data[offset]` rather than an offset from the start of the whole struct, then the semantic fix would instead be to check `r3 <= 43` and add `4` before applying the offset. But for the verifier failure shown, the minimal source-level repair is the single unsigned bounds check above.

@@ -1,0 +1,61 @@
+The verifier failure occurs because the helper function `helper_a` attempts to dereference a pointer (`s`) that the verifier considers potentially NULL (`mem_or_null`). The pointer originates from a stack variable in `entry`, but the verifier loses this non-NULL guarantee when passing it to another function. The load instruction `*(u32 *)(r6 +0)` fails because `r6` (a copy of `s`) might be NULL.
+
+### Fix Explanation
+The smallest fix is to pass the struct by value instead of by pointer. This eliminates the pointer dereference and associated NULL-check requirements. The struct `Item` is small (4 bytes), making this efficient.
+
+### Fixed Source
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+struct Item {
+	int x;
+};
+
+__noinline int helper_a(struct Item s)
+{
+	return bpf_get_prandom_u32() < s.x;
+}
+
+SEC("cgroup_skb/ingress")
+int entry(struct __sk_buff *skb)
+{
+	const struct Item s = {.x = skb->len};
+
+	helper_a(s);
+
+	return 1;
+}
+```
+
+### Patch
+```diff
+--- original.c
++++ fixed.c
+@@ -7,9 +7,9 @@
+ 	int x;
+ };
+ 
+-__noinline int helper_a(const struct Item *s)
++__noinline int helper_a(struct Item s)
+ {
+-	return bpf_get_prandom_u32() < s->x;
++	return bpf_get_prandom_u32() < s.x;
+ }
+ 
+ SEC("cgroup_skb/ingress")
+@@ -17,7 +17,7 @@
+ {
+ 	const struct Item s = {.x = skb->len};
+ 
+-	helper_a(&s);
++	helper_a(s);
+ 
+ 	return 1;
+ }
+```
+
+### Why This Fix Works
+1. **Removes pointer dereference**: By passing the struct by value, we avoid accessing memory through a pointer, eliminating the `invalid mem access` error.
+2. **Preserves semantics**: The logic remains identical since we're only reading the scalar value `s.x`.
+3. **Verifier-friendly**: The struct value is passed as a scalar register, which the verifier can track without memory-safety concerns.

@@ -1,0 +1,41 @@
+## Explanation
+
+The verifier builds a call graph for bpf2bpf (subprogram) calls and requires it to be **finite and acyclic** so it can statically bound the maximum stack depth and complete its analysis. 
+
+In your program, `helper_a()` calls **itself**:
+
+```c
+l0_%=:	call helper_a;
+```
+
+That creates a cycle (`helper_a -> helper_a`) in the call graph, which the verifier explicitly forbids:
+
+```
+recursive call from helper_a() to helper_a()
+Verification failed: Program Structure: Recursive subprogram call
+```
+
+This rejection happens at the *structural* phase, before any instructions are even simulated (`processed 0 insns`), so no amount of value/range tracking will help — the recursion itself must go.
+
+## Fix
+
+The recursion is just a counting loop: it increments `r1` until `r1 >= 4`, returning `r1` in `r0`. Rewrite the self-call as an in-function bounded loop (branch back to a label in the same subprogram instead of `call helper_a`). The loop is bounded because `r1` starts at 0 and strictly increases each iteration until it reaches 4, so the verifier can prove termination.
+
+```c
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l0_%=:	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l0_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+### Why this satisfies the verifier
+- There is no longer any `call helper_a`, so the bpf2bpf call graph contains no cycle — the structural "recursive subprogram call" check passes.
+- The backward branch `if r1 < 4 goto l0_%=` is now an intra-program loop. Since `r1` is incremented by 1 every iteration and the guard exits once `r1 >= 4`, the verifier's bounded-loop analysis can prove it terminates (at most 4 iterations from the initial `r1 = 0` passed by `entry`).
+
+If the intent of this selftest was actually to *verify that recursion is rejected* (a negative test), then the correct "fix" is the opposite: keep the recursive call and annotate the test to expect failure (e.g. mark it with the expected `__failure __msg("recursive call from helper_a()")`). But as a program meant to *pass* verification, converting the self-call into the bounded loop above is the minimal change.

@@ -1,0 +1,55 @@
+# Verifier Failure Analysis
+
+## The Problem
+
+The verifier is reporting an **unreleased reference leak**:
+
+```
+Unreleased reference id=3 alloc_insn=14
+BPF_EXIT instruction in main prog would lead to reference leak
+```
+
+Looking at the verifier log:
+- Line 7: `bpf_ringbuf_reserve_dynptr` for `ptr1` creates reference id=2
+- Line 14: `bpf_ringbuf_reserve_dynptr` for `ptr2` creates reference id=4 (with parent_id=3)
+- Line 18: `bpf_dynptr_data` on `ptr1` creates reference id=5 (with parent_id=2)
+- Line 32: Only `ptr1` is submitted via `bpf_ringbuf_submit_dynptr` (releases id=2)
+- Line 34: Program exits with reference id=3 still active
+
+The issue is that **`ptr2` is never released**. The code:
+1. Reserves both `ptr1` and `ptr2`
+2. When `bpf_dynptr_data(&ptr1)` fails, it discards both dynptrs in the error path (lines 105-107 in source)
+3. **But on the success path**, after submitting `ptr1`, the program returns without releasing `ptr2`
+
+## Root Cause
+
+In the success path (when `sample != NULL`), after submitting `ptr1`, `ptr2` is never discarded. It must be explicitly released before the function returns.
+
+## The Fix
+
+Add a `bpf_ringbuf_discard_dynptr(&ptr2, 0);` call before the return statement on the success path:
+
+```c
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+
+	return 0;
+```
+
+**Complete patched code section:**
+
+```c
+	sample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));
+	if (!sample) {
+		bpf_ringbuf_discard_dynptr(&ptr1, 0);
+		bpf_ringbuf_discard_dynptr(&ptr2, 0);
+		return 0;
+	}
+
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+
+	return 0;
+```
+
+This ensures that both dynamically allocated references are properly released regardless of which code path is taken, satisfying the verifier's reference tracking requirements.

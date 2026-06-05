@@ -1,0 +1,34 @@
+The actual verifier rejection is this line:
+
+> `sleepable global function helper_a() called in IRQ-disabled region`
+
+### Why it fails
+- `entry()` disables IRQs via `bpf_local_irq_save(&flags)`.
+- While IRQs are disabled, it calls `helper_a(0)`.
+- `helper_a()` contains `bpf_copy_from_user(...)`, which is a **sleepable** operation.
+- Verifier forbids any sleepable call path in an IRQ-disabled region.
+
+So even though the code is small, the call ordering violates verifier rules.
+
+---
+
+### Smallest likely fix
+Call `helper_a()` **before** disabling IRQs (or after restoring).  
+This keeps sleepable work outside the IRQ-off critical section.
+
+```diff
+ SEC("?syscall")
+ int entry(void *ctx)
+ {
+ 	unsigned long flags;
+ 
+-	bpf_local_irq_save(&flags);
+ 	helper_a(0);
++	bpf_local_irq_save(&flags);
+ 	bpf_local_irq_restore(&flags);
+ 	return 0;
+ }
+```
+
+That is the minimal source change most likely to make this pass.  
+(Top log line about arg#0 type is not the rejecting condition here; the hard failure is the sleepable-call-in-IRQ-disabled-region error.)

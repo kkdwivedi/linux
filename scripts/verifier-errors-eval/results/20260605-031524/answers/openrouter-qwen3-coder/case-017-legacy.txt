@@ -1,0 +1,29 @@
+Looking at the verifier log, I can see the issue:
+
+The error message "cannot restore irq state out of order, expected id=2 acquired at insn_idx=7" indicates that the BPF verifier is tracking the order of IRQ save/restore operations and requires them to be properly nested (LIFO - Last In, First Out).
+
+The program is doing:
+1. Save flags1 (id=1) at instruction 3
+2. Save flags2 (id=2) at instruction 7  
+3. Restore flags1 (id=1) at instruction 9 - This is the error!
+
+The verifier expects the most recently saved IRQ state (flags2/id=2) to be restored first, but the code is trying to restore flags1 (id=1) first, which breaks the expected nesting order.
+
+The fix is to restore the IRQ states in the reverse order of how they were saved:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	unsigned long flags1, flags2;
+
+	bpf_local_irq_save(&flags1);
+	bpf_local_irq_save(&flags2);
+	bpf_local_irq_restore(&flags2);  // Restore flags2 first (most recent)
+	bpf_local_irq_restore(&flags1);  // Then restore flags1
+	return 0;
+}
+```

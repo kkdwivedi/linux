@@ -1,0 +1,32 @@
+## Explanation of the Failure
+
+The verifier tracks ownership of `struct bpf_cpumask *` resources. `bpf_cpumask_create()` acquires a reference (id=2) inside `make_object()`. When `make_object()` returns the pointer to `entry`, the *caller* inherits ownership of that reference.
+
+In `entry`, `__sink(cpumask)` is just a no-op compiler barrier — it does **not** release the reference. The program then returns 0 without ever calling `bpf_cpumask_release()`, leaving the reference live on the exit path. The verifier catches this as a resource leak:
+
+```
+Unreleased reference id=2 alloc_insn=0
+BPF_EXIT instruction in main prog would lead to reference leak
+```
+
+## Fix
+
+After `make_object()` returns a non-NULL cpumask, the caller must release it before exiting. The smallest fix is to add a null check and release in `entry`:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *cpumask;
+
+	cpumask = make_object();
+	if (!cpumask)
+		return 0;
+	__sink(cpumask);
+	bpf_cpumask_release(cpumask);
+
+	return 0;
+}
+```
+
+This ensures every exit path either never acquired the reference (NULL return from `make_object`) or releases it via `bpf_cpumask_release(cpumask)` before the program exits, satisfying the verifier's resource lifetime safety requirement.

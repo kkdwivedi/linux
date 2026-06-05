@@ -1,0 +1,38 @@
+## Explanation
+
+The verifier rejected the program with:
+
+```
+program of this type cannot use helper bpf_ktime_get_coarse_ns#160
+```
+
+This is not a logic/state error — it's a **helper-allowlist** rejection. `bpf_ktime_get_coarse_ns()` is deliberately **not** permitted in tracing-style program types (kprobe / tracepoint / perf_event). The kernel blocks it there because the coarse-time path can be observed/raced in those contexts (it was excluded from the tracing helper set), so the program type's `is_valid_access`/helper-proto check refuses it.
+
+Nothing about the asm structure, register state, or naked function is wrong; the only problem is the choice of helper.
+
+## Fix
+
+Use a helper that *is* allowed for kprobe programs. `bpf_ktime_get_ns()` is the direct, allowed equivalent.
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("kprobe")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_ns];			\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+```
+
+This is the smallest possible change (swap the helper) and makes the program pass the policy/helper check while keeping identical structure and semantics.
+
+(If the intent of the test was specifically to exercise the *kprobe + coarse_ns* combination, the alternative minimal fix is to change `SEC("kprobe")` to a program type that does allow the coarse helper, e.g. a socket/cgroup type — but replacing the helper is the more conservative, clearly-correct edit.)

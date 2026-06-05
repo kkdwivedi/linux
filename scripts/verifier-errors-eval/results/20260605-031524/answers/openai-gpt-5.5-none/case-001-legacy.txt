@@ -1,0 +1,51 @@
+The verifier rejects the program at the helper call:
+
+```text
+4: call bpf_cpumask_populate
+R1 type=scalar expected=fp
+```
+
+`bpf_cpumask_populate()`’s first argument is expected by the verifier to be a pointer to stack memory (`fp`-relative pointer), i.e. a local `struct cpumask` object. But the program passes:
+
+```c
+struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+...
+bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
+```
+
+The constant address `0x123456` is just a scalar value to the verifier, not a valid pointer. The cast does not make it a trusted pointer. Hence:
+
+```text
+R1 type=scalar expected=fp
+```
+
+The smallest fix is to pass an actual stack-allocated `struct cpumask` instead of the fake constant pointer.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -6,12 +6,12 @@ char _license[] SEC("license") = "GPL";
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+-	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
++	struct cpumask mask;
+ 	u64 bits;
+ 	int ret;
+ 
+-	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
++	ret = bpf_cpumask_populate(&mask, &bits, sizeof(bits));
+ 	if (!ret)
+ 		return 2;
+ 
+```
+
+Why this should pass verification:
+
+- `&mask` is a stack pointer, so register `R1` at the helper call will be `fp`-relative instead of scalar.
+- `&bits` is already stack memory and `sizeof(bits)` is a constant `8`, matching what the verifier log shows for arguments 2 and 3.
+- This satisfies the helper’s verifier requirement that the destination `struct cpumask *` point to valid stack storage.

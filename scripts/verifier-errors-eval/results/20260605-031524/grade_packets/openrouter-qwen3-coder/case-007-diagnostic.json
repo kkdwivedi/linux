@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Replace slice_len with sizeof(buffer) or sizeof(*hdr) at the call site.",
+    "Add if (slice_len > sizeof(buffer)) return ...; before bpf_dynptr_slice.",
+    "Clamp or mask slice_len so the verifier proves it cannot exceed the stack buffer."
+  ],
+  "canonical_fix": "Make the slice length verifier-bounded to the fallback buffer size before the call, or pass a compile-time constant size that is no larger than the buffer.",
+  "case_id": "case-007",
+  "category": "Memory Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The dynptr slice fallback buffer is stack memory, but the length comes from a variable global value with no verifier-proven upper bound. The verifier cannot prove the memory/length pair stays within the fallback buffer.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-qwen3-coder/case-007-diagnostic.txt",
+    "case_id": "case-007",
+    "model": "qwen/qwen3-coder",
+    "profile": "openrouter-qwen3-coder",
+    "prompt_bytes": 4340,
+    "prompt_path": "public/case-007/prompt_diagnostic.md",
+    "prompt_sha256": "d1d8d7dccaad3f83ecae6c603310091500168180bae26b21eb757e9dd3d1640d",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-qwen3-coder/case-007-diagnostic.json",
+    "reasoning_profile": {
+      "note": "OpenRouter does not list reasoning controls for this model.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "ff68ba83-6110-430f-8bd5-83106ded61eb",
+    "started_at": "2026-06-05T03:20:57+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "Looking at the verifier log, the issue is with the `bpf_dynptr_slice` call at line 1602. The verifier is complaining about an \"unbounded memory access\" and \"invalid memory access\" for the memory/length pair.\n\nLet me analyze the problem:\n\n1. The `bpf_dynptr_slice` function is being called with:\n   - `&ptr` (R1) - the dynptr \n   - `0` (R2) - offset\n   - `buffer` (R3) - destination buffer (stack pointer fp-32)\n   - `slice_len` (R4) - length (loaded from map data)\n\n2. The verifier error indicates that R4 (slice_len) is unbounded - it has a range of 0 to 0xffffffff, which is too broad for the verifier to guarantee safe memory access.\n\n3. The root cause is that `slice_len` is read from a map value without any bounds checking, making it an untrusted, unbounded value.\n\nThe fix is to add bounds checking to ensure `slice_len` doesn't exceed the size of the buffer. Since `buffer` is defined as `char buffer[sizeof(*hdr)]` where `hdr` is `struct ethhdr*`, the buffer size is `sizeof(struct ethhdr)`.\n\nHere's the fix:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nstruct {\n\t__uint(type, BPF_MAP_TYPE_RINGBUF);\n\t__uint(max_entries, 4096);\n} ringbuf SEC(\".maps\");\n\n__u32 slice_len = sizeof(struct ethhdr);\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *skb)\n{\n\tstruct bpf_dynptr ptr;\n\tstruct ethhdr *hdr;\n\tchar buffer[sizeof(struct ethhdr)] = {};\n\t__u32 len;\n\n\tbpf_dynptr_from_skb(skb, 0, &ptr);\n\n\tlen = slice_len;\n\tif (len > sizeof(buffer))\n\t\tlen = sizeof(buffer);\n\n\thdr = bpf_dynptr_slice(&ptr, 0, buffer, len);\n\tif (!hdr)\n\t\treturn SK_DROP;\n\n\treturn SK_PASS;\n}\n```\n\nThe key changes:\n1. Added a local variable `len` to hold the slice length\n2. Added bounds checking: `if (len > sizeof(buffer)) len = sizeof(buffer);`\n3. Use `len` instead of `slice_len` in the `bpf_dynptr_slice` call\n\nThis ensures that the length parameter is bounded by the actual size of the buffer, satisfying the verifier's safety requirements.",
+  "must_mention": [
+    "R4/length is variable or unbounded",
+    "The fallback buffer has fixed stack size",
+    "Verifier needs a length upper bound before the call"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks the returned hdr pointer",
+    "Increases unrelated ringbuf size",
+    "Changes the dynptr source but leaves variable length unbounded"
+  ]
+}

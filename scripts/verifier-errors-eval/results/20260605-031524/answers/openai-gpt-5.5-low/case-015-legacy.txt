@@ -1,0 +1,64 @@
+The verifier failure is caused by using a packet data pointer that was validated **before** a call that may invalidate packet pointers.
+
+`p` is derived from `sk->data` and bounds-checked:
+
+```c
+int *p = (void *)(long)sk->data;
+
+if ((void *)(p + 1) > (void *)(long)sk->data_end)
+	return TCX_DROP;
+```
+
+At that point the verifier knows `p`/`r7` is a valid packet pointer with at least 4 bytes accessible.
+
+But then the program calls:
+
+```c
+helper_a(sk, 0);
+```
+
+which eventually calls:
+
+```c
+bpf_skb_pull_data(sk, len);
+```
+
+`bpf_skb_pull_data()` can reallocate or otherwise change the skb data area. Therefore, after that helper call, any previously saved packet pointer is no longer trusted. In the log, after the call, `r7` is no longer a valid packet pointer:
+
+```text
+10: (63) *(u32 *)(r7 +0) = r1
+R7 invalid mem access 'scalar'
+```
+
+So the store:
+
+```c
+*p = 42;
+```
+
+uses a stale packet pointer.
+
+The fix is to reload `sk->data` and `sk->data_end` after the helper call, then redo the bounds check before writing.
+
+A minimal source-level fix:
+
+```diff
+ SEC("tc")
+ int entry(struct __sk_buff *sk)
+ {
+ 	int *p = (void *)(long)sk->data;
+ 
+ 	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+ 		return TCX_DROP;
+ 	helper_a(sk, 0);
++
++	p = (void *)(long)sk->data;
++	if ((void *)(p + 1) > (void *)(long)sk->data_end)
++		return TCX_DROP;
++
+ 	*p = 42;
+ 	return TCX_PASS;
+ }
+```
+
+The first bounds check becomes redundant for the final store, but leaving it in place is harmless. The important part is that the pointer used by `*p = 42` is loaded and bounds-checked **after** the `bpf_skb_pull_data()` call.

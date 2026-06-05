@@ -1,0 +1,68 @@
+## What the log is telling you
+
+The program intentionally passes a garbage pointer as the destination `cpumask`:
+
+```c
+struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
+```
+
+So at the call site `R1` holds the scalar constant `0x123456`, and the verifier
+correctly rejects it:
+
+```
+4: (85) call bpf_cpumask_populate#61745
+R1 type=scalar expected=fp
+```
+
+This is **not** a bug in the program logic — passing a bogus pointer here *must*
+fail verification. The program is a *negative* (`__failure`) test.
+
+## Why the test is "failing"
+
+The source is missing the test-harness annotations that tell `test_loader` that
+this program is **expected** to fail verification (and with which message).
+Without `__failure`/`__msg`, the loader assumes the program should load
+successfully, so the (correct) verifier rejection is reported as a test failure.
+
+## The fix
+
+Add the `bpf_misc.h` annotations marking the program as an expected failure, and
+match the verifier message shown in the log.
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_helpers.h>
+#include "bpf_misc.h"
+
+char _license[] SEC("license") = "GPL";
+
+SEC("tp_btf/task_newtask")
+__failure __msg("type=scalar expected=fp")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *invalid = (struct bpf_cpumask *)0x123456;
+	u64 bits;
+	int ret;
+
+	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
+	if (!ret)
+		return 2;
+
+	return 0;
+}
+```
+
+The only source-level edits are:
+1. `#include "bpf_misc.h"` (provides the `__failure`/`__msg` macros).
+2. `__failure __msg("type=scalar expected=fp")` on the program.
+
+With these, the harness now expects the verifier to reject the program and
+checks that the rejection message contains `type=scalar expected=fp`, which
+matches the log exactly, so the test passes.
+
+(If, instead, the intent were for the program to genuinely load, you would have
+to pass a real `bpf_cpumask` obtained from `bpf_cpumask_create()` rather than the
+fabricated `0x123456` pointer — but the `invalid` naming makes clear this is
+meant to be a failure test.)

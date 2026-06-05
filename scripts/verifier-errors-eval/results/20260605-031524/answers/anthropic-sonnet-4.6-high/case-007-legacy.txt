@@ -1,0 +1,28 @@
+## Explanation of Verifier Failure
+
+The verifier rejects the program at instruction 16 (`bpf_dynptr_slice`) because the `len` argument (R4) is loaded from a global variable (`slice_len`), which the verifier treats as an unbounded scalar:
+
+```
+11: (61) r4 = *(u32 *)(r1 +0)   ; R4=scalar(smin=0,smax=umax=0xffffffff,...)
+...
+R4 unbounded memory access, use 'var &= const' or 'if (var < const)'
+```
+
+`bpf_dynptr_slice` requires that the `len` parameter be a **bounded compile-time constant** so the verifier can statically validate that the local buffer (`R3`, pointing to `buffer` on the stack) is large enough to hold the requested slice. Since `slice_len` is a global variable, the verifier cannot determine its value at verification time and therefore rejects it.
+
+## Fix
+
+Replace the global variable `slice_len` with the compile-time constant `sizeof(*hdr)` directly in the `bpf_dynptr_slice` call:
+
+```diff
+-	hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
++	hdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(*hdr));
+```
+
+This makes the length argument a known constant (`sizeof(struct ethhdr)`), allowing the verifier to confirm the stack buffer is exactly large enough and that the memory access is valid.
+
+The global variable `slice_len` (and its declaration) can also be removed if it's no longer needed:
+
+```diff
+-__u32 slice_len = sizeof(struct ethhdr);
+```

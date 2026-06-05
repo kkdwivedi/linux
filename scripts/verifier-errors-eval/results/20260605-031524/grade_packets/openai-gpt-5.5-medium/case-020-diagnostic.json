@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Reduce CALLS_50 fan-out or the number of helper layers.",
+    "Pass a stable non-FP-derived argument pattern when possible.",
+    "Replace the generated call tree with a simpler bounded loop or less duplicated call structure."
+  ],
+  "canonical_fix": "Reduce the number of distinct call paths or argument patterns reaching the subprograms, for example by reducing fan-out/depth, consolidating calls, or avoiding many distinct FP-offset arguments.",
+  "case_id": "case-020",
+  "category": "Verifier Limit",
+  "difficulty": "hard",
+  "expected_explanation": "The program creates an enormous number of distinct bpf2bpf call paths and frame-pointer-derived argument patterns. Liveness analysis exceeds its complexity limit while recomputing subprogram liveness across those paths.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-medium/case-020-diagnostic.txt",
+    "case_id": "case-020",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-medium",
+    "prompt_bytes": 4110,
+    "prompt_path": "public/case-020/prompt_diagnostic.md",
+    "prompt_sha256": "cb7344658f86bd080c64c73a9c8ee3095a7de5b045356c00872dce60afb5bfb8",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-medium/case-020-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "299161e6-180c-462a-b324-2f286a6ad8aa",
+    "started_at": "2026-06-05T03:15:45+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The program is verifier-pathological: every function contains 50 BPF-to-BPF calls to the next helper, and the call chain is deep:\n\n```text\nentry -> helper_a -> helper_b -> helper_c -> helper_d -> helper_e -> helper_f -> helper_g\n```\n\nEach call also passes a different stack pointer value in `r1`:\n\n```asm\nr1 = r10;\nr1 += -off;\ncall helper_x;\n```\n\nSo the verifier\u2019s subprogram liveness analysis ends up recomputing liveness for the same lower subprograms through many distinct call paths / argument states. By the time it repeatedly reaches `helper_g`, it exceeds the verifier\u2019s liveness-complexity cap:\n\n```text\nliveness analysis exceeded complexity limit (10001 calls)\n```\n\nThis is not an instruction-count failure; it happens before normal state exploration:\n\n```text\nprocessed 0 insns ...\n```\n\n### Smallest likely source-level fix\n\nMake the helper subprograms global instead of `static`.\n\nFor BPF, non-static/global subprograms are verified more like independent global functions instead of being context-sensitively re-analyzed through every caller path. Since these helpers take no declared arguments and ignore `r1`, making them global should avoid the exponential liveness recomputation while preserving the actual instruction structure.\n\nPatch:\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -9,7 +9,7 @@\n \n __naked __noinline __used\n-static unsigned long helper_g(void)\n+unsigned long helper_g(void)\n {\n \tasm volatile (\n \t\t\"r0 = 0;\"\n@@ -20,7 +20,7 @@ static unsigned long helper_g(void)\n }\n \n __naked __noinline __used\n-static unsigned long helper_f(void)\n+unsigned long helper_f(void)\n {\n \tasm volatile (\n \t\tCALLS_50(helper_g)\n@@ -31,7 +31,7 @@ static unsigned long helper_f(void)\n }\n \n __naked __noinline __used\n-static unsigned long helper_e(void)\n+unsigned long helper_e(void)\n {\n \tasm volatile (\n \t\tCALLS_50(helper_f)\n@@ -42,7 +42,7 @@ static unsigned long helper_e(void)\n }\n \n __naked __noinline __used\n-static unsigned long helper_d(void)\n+unsigned long helper_d(void)\n {\n \tasm volatile (\n \t\tCALLS_50(helper_e)\n@@ -53,7 +53,7 @@ static unsigned long helper_d(void)\n }\n \n __naked __noinline __used\n-static unsigned long helper_c(void)\n+unsigned long helper_c(void)\n {\n \tasm volatile (\n \t\tCALLS_50(helper_d)\n@@ -64,7 +64,7 @@ static unsigned long helper_c(void)\n }\n \n __naked __noinline __used\n-static unsigned long helper_b(void)\n+unsigned long helper_b(void)\n {\n \tasm volatile (\n \t\tCALLS_50(helper_c)\n@@ -75,7 +75,7 @@ static unsigned long helper_b(void)\n }\n \n __naked __noinline __used\n-static unsigned long helper_a(void)\n+unsigned long helper_a(void)\n {\n \tasm volatile (\n \t\tCALLS_50(helper_b)\n```\n\nIf the test specifically requires these helpers to remain local/static, then the alternative is to reduce the fanout drastically, e.g. redefine `CALLS_50()` to only emit three calls, because `50^7` possible paths is far beyond the verifier\u2019s liveness-analysis limit. But the smallest semantic-preserving fix is to remove `static` from the helper subprograms.",
+  "must_mention": [
+    "The failure is verifier liveness complexity, not runtime recursion",
+    "Many call paths or distinct FP offsets drive the limit",
+    "The fix is to simplify the call/argument pattern"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only increases a runtime loop bound",
+    "Adds packet or memory bounds checks",
+    "Suggests releasing a resource"
+  ]
+}

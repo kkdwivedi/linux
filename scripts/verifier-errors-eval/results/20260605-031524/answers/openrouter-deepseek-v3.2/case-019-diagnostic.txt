@@ -1,0 +1,22 @@
+The verifier rejects the program because it contains a recursive call from `helper_a` to itself, forming a cycle in the call graph. BPF requires an acyclic call graph to bound stack depth and ensure termination of analysis.
+
+The intended behavior increments `r1` four times (from 0 to 4) and returns `r0 = 1` to the caller. The recursion can be replaced with a loop in `helper_a` that preserves the same register state: `r1` becomes 4 and `r0` remains 1 after the first increment.
+
+Replace the `helper_a` function with the following implementation to eliminate the recursive call:
+
+```c
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+	r1 += 1;					\
+	r0 = r1;					\
+l0_%=:	if r1 >= 4 goto l1_%=;				\
+	r1 += 1;					\
+	goto l0_%=;					\
+l1_%=:	exit;						\
+"	::: __clobber_all);
+}
+```
+
+This change removes the `call helper_a` instruction and uses a conditional loop to increment `r1` until it reaches 4, then exits. The call graph becomes acyclic (entry → helper_a), satisfying the verifier's requirements while maintaining the original register effects.

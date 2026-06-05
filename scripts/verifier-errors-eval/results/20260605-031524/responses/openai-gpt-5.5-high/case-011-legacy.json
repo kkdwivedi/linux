@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier is rejecting the program because `ptr2` is reserved but not released on the successful path.\n\nAfter these two calls:\n\n```c\nbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\nbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n```\n\nthe verifier tracks two outstanding ringbuf references:\n\n```text\nrefs=1,3\n```\n\nOn the `!sample` path, both are discarded, so that path is fine:\n\n```c\nbpf_ringbuf_discard_dynptr(&ptr1, 0);\nbpf_ringbuf_discard_dynptr(&ptr2, 0);\n```\n\nBut on the success path, only `ptr1` is submitted:\n\n```c\nbpf_ringbuf_submit_dynptr(&ptr1, 0);\nreturn 0;\n```\n\nThat releases reference `id=1`, but `ptr2`\u2019s reference `id=3` is still live at program exit:\n\n```text\n32: call bpf_ringbuf_submit_dynptr#199   ; refs=3\n34: exit\nUnreleased reference id=3 alloc_insn=14\nBPF_EXIT instruction in main prog would lead to reference leak\n```\n\nEvery ringbuf dynptr reserved with `bpf_ringbuf_reserve_dynptr()` must be either submitted or discarded on every exit path.\n\nSmallest likely fix: discard `ptr2` on the success path as well.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -25,6 +25,7 @@ int entry(void *ctx)\n \t}\n \n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n \n \treturn 0;\n }\n```\n\nEquivalently, discarding `ptr2` before submitting `ptr1` should also satisfy the verifier:\n\n```c\nbpf_ringbuf_discard_dynptr(&ptr2, 0);\nbpf_ringbuf_submit_dynptr(&ptr1, 0);\n```\n\nThe important part is that both `ptr1` and `ptr2` are released on the non-NULL `sample` path.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-high/case-011-legacy.txt",
+    "case_id": "case-011",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-high",
+    "prompt_bytes": 3372,
+    "prompt_path": "public/case-011/prompt_legacy.md",
+    "prompt_sha256": "762b0c608dbde5c1090172be3b10e7e17988b9698301148bebea627aedc1c8f8",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-high/case-011-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "239a1d39-e4a8-48a9-a640-f907bc4360ff",
+    "started_at": "2026-06-05T03:15:56+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00663,
+    "output_cost_usd": 0.09273,
+    "total_cost_usd": 0.09936
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1326,
+    "output_tokens": 3091,
+    "raw_usage": {
+      "input_tokens": 1326,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 3091,
+      "output_tokens_details": {
+        "reasoning_tokens": 2588
+      },
+      "total_tokens": 4417
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 2588,
+    "total_tokens": 4417
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629420,
+    "created_at": 1780629356,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0c092c82977e5d09006a223f6cd0cc81a2982967b90a9b18cd",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0c092c82977e5d09006a223f6db48c81a2a68f532ef3ae240a",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier is rejecting the program because `ptr2` is reserved but not released on the successful path.\n\nAfter these two calls:\n\n```c\nbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\nbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n```\n\nthe verifier tracks two outstanding ringbuf references:\n\n```text\nrefs=1,3\n```\n\nOn the `!sample` path, both are discarded, so that path is fine:\n\n```c\nbpf_ringbuf_discard_dynptr(&ptr1, 0);\nbpf_ringbuf_discard_dynptr(&ptr2, 0);\n```\n\nBut on the success path, only `ptr1` is submitted:\n\n```c\nbpf_ringbuf_submit_dynptr(&ptr1, 0);\nreturn 0;\n```\n\nThat releases reference `id=1`, but `ptr2`\u2019s reference `id=3` is still live at program exit:\n\n```text\n32: call bpf_ringbuf_submit_dynptr#199   ; refs=3\n34: exit\nUnreleased reference id=3 alloc_insn=14\nBPF_EXIT instruction in main prog would lead to reference leak\n```\n\nEvery ringbuf dynptr reserved with `bpf_ringbuf_reserve_dynptr()` must be either submitted or discarded on every exit path.\n\nSmallest likely fix: discard `ptr2` on the success path as well.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -25,6 +25,7 @@ int entry(void *ctx)\n \t}\n \n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n \n \treturn 0;\n }\n```\n\nEquivalently, discarding `ptr2` before submitting `ptr1` should also satisfy the verifier:\n\n```c\nbpf_ringbuf_discard_dynptr(&ptr2, 0);\nbpf_ringbuf_submit_dynptr(&ptr1, 0);\n```\n\nThe important part is that both `ptr1` and `ptr2` are released on the non-NULL `sample` path.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0c092c82977e5d09006a223fa671d481a2af8280fc9a9473dd",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1326,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 3091,
+      "output_tokens_details": {
+        "reasoning_tokens": 2588
+      },
+      "total_tokens": 4417
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

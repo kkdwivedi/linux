@@ -1,0 +1,24 @@
+## Explanation of the Failure
+
+The verifier rejects the program because `helper_a()` is a **sleepable global function** (it calls `bpf_copy_from_user`, which may sleep) and it is called **inside an IRQ-disabled region** (between `bpf_local_irq_save` and `bpf_local_irq_restore`). IRQ-disabled code must not invoke operations that can sleep.
+
+The first diagnostic line (`arg#0 reference type('UNKNOWN ') size cannot be determined: -22`) is a side-effect of verifying `helper_a` as a global function with `bpf_copy_from_user(…, NULL)`, but the hard failure is the context-safety check.
+
+## Fix
+
+The smallest change is to move the `helper_a(0)` call **outside** the critical section, as the verifier itself suggests:
+
+```c
+SEC("?syscall")
+int entry(void *ctx)
+{
+	unsigned long flags;
+
+	bpf_local_irq_save(&flags);
+	bpf_local_irq_restore(&flags);
+	helper_a(0);          /* moved after the IRQ-disabled region */
+	return 0;
+}
+```
+
+By calling `helper_a(0)` after `bpf_local_irq_restore`, no IRQ-disabled region is active when the sleepable global function is invoked, so the context-safety check passes.

@@ -1,0 +1,130 @@
+{
+  "answer_text": "The failure is because `helper_a(sk, 0)` eventually calls `bpf_skb_pull_data()`. That helper is packet-mutating: it can reallocate/linearize/change the skb data area, so the verifier invalidates all packet pointers and their previous bounds checks after the call.\n\nBefore the call, `p` is valid:\n\n```c\nint *p = (void *)(long)sk->data;\n\nif ((void *)(p + 1) > (void *)(long)sk->data_end)\n        return TCX_DROP;\n```\n\nThe verifier records `R7=pkt(r=4)` after the bounds check. But after:\n\n```c\nhelper_a(sk, 0);\n```\n\nthe old packet pointer in `R7` is no longer trusted and becomes a scalar. Then:\n\n```c\n*p = 42;\n```\n\ntries to dereference that invalidated pointer:\n\n```text\n10: (63) *(u32 *)(r7 +0) = r1\nR7 invalid mem access 'scalar'\n```\n\nThe fix is to reload `sk->data`/`sk->data_end` and redo the bounds check after the helper call, before using `p`.\n\nSmallest source-level fix:\n\n```diff\n SEC(\"tc\")\n int entry(struct __sk_buff *sk)\n {\n \tint *p = (void *)(long)sk->data;\n\n \tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n \t\treturn TCX_DROP;\n \thelper_a(sk, 0);\n+\n+\tp = (void *)(long)sk->data;\n+\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n+\t\treturn TCX_DROP;\n+\n \t*p = 42;\n \treturn TCX_PASS;\n }\n```\n\nThe first check becomes redundant from the verifier\u2019s perspective, but keeping it is the smallest behavioral change. A cleaner equivalent version would move the bounds check to after `helper_a()`.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-medium/case-015-legacy.txt",
+    "case_id": "case-015",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-medium",
+    "prompt_bytes": 1984,
+    "prompt_path": "public/case-015/prompt_legacy.md",
+    "prompt_sha256": "dc0fc1e91b61bdf915966f9cbe5ae652d8b1776a8af859d12e6cd23d52604af2",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-medium/case-015-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "359f47b1-b507-4d10-940d-b9093914accb",
+    "started_at": "2026-06-05T03:15:40+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.003995,
+    "output_cost_usd": 0.05919,
+    "total_cost_usd": 0.063185
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 799,
+    "output_tokens": 1973,
+    "raw_usage": {
+      "input_tokens": 799,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1973,
+      "output_tokens_details": {
+        "reasoning_tokens": 1552
+      },
+      "total_tokens": 2772
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 1552,
+    "total_tokens": 2772
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629392,
+    "created_at": 1780629340,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0038c9d282391c83006a223f5c85748192b26b3095c64a4d90",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0038c9d282391c83006a223f5d24348192873d0adbfd08568e",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is because `helper_a(sk, 0)` eventually calls `bpf_skb_pull_data()`. That helper is packet-mutating: it can reallocate/linearize/change the skb data area, so the verifier invalidates all packet pointers and their previous bounds checks after the call.\n\nBefore the call, `p` is valid:\n\n```c\nint *p = (void *)(long)sk->data;\n\nif ((void *)(p + 1) > (void *)(long)sk->data_end)\n        return TCX_DROP;\n```\n\nThe verifier records `R7=pkt(r=4)` after the bounds check. But after:\n\n```c\nhelper_a(sk, 0);\n```\n\nthe old packet pointer in `R7` is no longer trusted and becomes a scalar. Then:\n\n```c\n*p = 42;\n```\n\ntries to dereference that invalidated pointer:\n\n```text\n10: (63) *(u32 *)(r7 +0) = r1\nR7 invalid mem access 'scalar'\n```\n\nThe fix is to reload `sk->data`/`sk->data_end` and redo the bounds check after the helper call, before using `p`.\n\nSmallest source-level fix:\n\n```diff\n SEC(\"tc\")\n int entry(struct __sk_buff *sk)\n {\n \tint *p = (void *)(long)sk->data;\n\n \tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n \t\treturn TCX_DROP;\n \thelper_a(sk, 0);\n+\n+\tp = (void *)(long)sk->data;\n+\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n+\t\treturn TCX_DROP;\n+\n \t*p = 42;\n \treturn TCX_PASS;\n }\n```\n\nThe first check becomes redundant from the verifier\u2019s perspective, but keeping it is the smallest behavioral change. A cleaner equivalent version would move the bounds check to after `helper_a()`.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0038c9d282391c83006a223f88f1a08192bc6ef0376c6a4737",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 799,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1973,
+      "output_tokens_details": {
+        "reasoning_tokens": 1552
+      },
+      "total_tokens": 2772
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

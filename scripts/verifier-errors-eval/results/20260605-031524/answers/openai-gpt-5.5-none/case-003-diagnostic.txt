@@ -1,0 +1,72 @@
+The program stores the context pointer `r1` on the stack:
+
+```asm
+*(u64*)(r10 - 8) = r1;
+```
+
+At that point the verifier knows stack slot `fp-8..fp-1` contains a spilled `ctx` pointer:
+
+```text
+fp-8=ctx()
+```
+
+But then the program overwrites one byte inside that 8-byte spilled pointer:
+
+```asm
+r0 = 0x23;
+*(u8*)(r10 - 7) = r0;
+```
+
+That byte write partially corrupts the stack slot. The verifier can no longer treat the 8 bytes at `r10 - 8` as a valid spilled pointer. The log shows this transition:
+
+```text
+2: (73) *(u8 *)(r10 -7) = r0          ; ... fp-8=mmmmmmmm
+```
+
+`mmmmmmmm` means the slot is now generic/misc stack bytes, not a tracked pointer spill.
+
+So when the program reloads the 8 bytes:
+
+```asm
+r0 = *(u64*)(r10 - 8);
+```
+
+the verifier gives `r0` type `scalar()` instead of `ctx()`:
+
+```text
+3: (79) r0 = *(u64 *)(r10 -8)         ; R0=scalar()
+```
+
+Then this dereference fails:
+
+```asm
+r0 = *(u64*)(r0 + 8);
+```
+
+because `r0` is now just an unknown scalar integer, not a pointer:
+
+```text
+R0 invalid mem access 'scalar'
+```
+
+The smallest fix is to avoid partially overwriting the spilled pointer. If the byte store is not essential, remove it. If the test needs to keep a byte store, write to a different stack slot that does not overlap the spilled pointer, e.g. `r10 - 9`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -7,7 +7,7 @@ __naked void entry(void)
+ 	asm volatile ("					\
+ 	*(u64*)(r10 - 8) = r1;				\
+ 	r0 = 0x23;					\
+-	*(u8*)(r10 - 7) = r0;				\
++	*(u8*)(r10 - 9) = r0;				\
+ 	r0 = *(u64*)(r10 - 8);				\
+ 	r0 = *(u64*)(r0 + 8);				\
+ 	exit;						\
+```
+
+With this change, the spilled pointer at `r10 - 8` remains intact, so the verifier should be able to reload it as a `ctx` pointer and allow the subsequent load from `r0 + 8`, assuming offset `8` is a valid context access for this socket program type.

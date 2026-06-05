@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Replace bpf_ktime_get_coarse_ns with bpf_ktime_get_ns if that satisfies the program's requirements and is allowed.",
+    "Change the program type/section to one where the helper is allowed."
+  ],
+  "canonical_fix": "Use a helper allowed for this program type, such as an allowed time helper with suitable semantics, or move the logic to a program type/attach point where bpf_ktime_get_coarse_ns is permitted.",
+  "case_id": "case-006",
+  "category": "Policy",
+  "difficulty": "easy",
+  "expected_explanation": "The program type used by this case is not allowed to call bpf_ktime_get_coarse_ns. This is a helper policy/program-type compatibility failure, not a register or memory proof failure.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-glm-5.1-high/case-006-diagnostic.txt",
+    "case_id": "case-006",
+    "model": "z-ai/glm-5.1",
+    "profile": "openrouter-glm-5.1-high",
+    "prompt_bytes": 1849,
+    "prompt_path": "public/case-006/prompt_diagnostic.md",
+    "prompt_sha256": "0c351f7275500308d5dd7e77f65459b6d00560f51ba8d1d768a521650bb1de73",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-glm-5.1-high/case-006-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "3389ab4e-48df-418d-a5d1-32570e5e7e35",
+    "started_at": "2026-06-05T03:21:21+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Verifier Failure Explanation\n\nThe program is declared as `SEC(\"kprobe\")`, which creates a `BPF_PROG_TYPE_KPROBE` program. The verifier rejects the call to `bpf_ktime_get_coarse_ns` because this helper is **not allowed for the kprobe program type** \u2014 it's restricted to program types like `tracing`, `lsm`, `iter`, and `perf_event`.\n\nThe error message confirms this:\n> \"program of this type cannot use helper bpf_ktime_get_coarse_ns#160\"\n\n## Minimal Fix\n\nThe smallest change is to replace `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns`, which **is** allowed for kprobe programs:\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"kprobe\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_ns];\t\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_ns)\n\t: __clobber_all);\n}\n```\n\n**Why this works:** `bpf_ktime_get_ns` (helper ID 5) is one of the most broadly available BPF helpers and is permitted for `BPF_PROG_TYPE_KPROBE`. It returns a similar nanosecond timestamp (just with finer granularity instead of coarse). This preserves the program type and structure while using a compatible helper.\n\n**Alternative fix** (if the test specifically needs `bpf_ktime_get_coarse_ns`): Change `SEC(\"kprobe\")` to a compatible program type such as `SEC(\"fentry\")` with an appropriate kernel function target, but that requires more extensive changes.",
+  "must_mention": [
+    "Helper is forbidden for this program type",
+    "The fix is to use an allowed helper or compatible program type"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds register initialization around the helper call",
+    "Treats it as a GPL license issue",
+    "Suggests a bounds or NULL check"
+  ]
+}

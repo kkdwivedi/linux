@@ -1,0 +1,124 @@
+{
+  "answer_text": "The verifier is rejecting the program because of **stack usage across nested BPF-to-BPF calls**.\n\nEach of these helpers allocates:\n\n```c\nvolatile char buf[MAX_STACK] = {};\n```\n\nwith:\n\n```c\n#define MAX_STACK 260\n```\n\nBPF stack is limited, and the verifier also checks the **combined stack depth of active call chains**. The failing chain is effectively:\n\n```text\nentry -> helper_c -> helper_b -> helper_a\n```\n\n`helper_c` has a 260-byte local buffer, and `helper_b` also has a 260-byte local buffer. With compiler alignment/spill overhead, their combined active stack usage is reported as:\n\n```text\ncombined stack size of 3 calls is 544. Too large\n```\n\nThe limit is 512 bytes, so 544 exceeds it.\n\n`helper_d` is reported safe:\n\n```text\nFunc#4 ('helper_d') is safe for any args that match its prototype\n```\n\nThe failure is not due to argument types or pointer safety. It is purely stack depth.\n\nThe smallest likely source-level fix is to reduce the per-function buffer size so that the combined stack usage of the deepest call chain stays below 512 bytes. Since the verifier reports 544 bytes with `MAX_STACK = 260`, reducing `MAX_STACK` to 240 should leave enough room for alignment overhead:\n\n```diff\n-#define MAX_STACK 260\n+#define MAX_STACK 240\n```\n\nComplete patch:\n\n```diff\ndiff --git a/test.c b/test.c\nindex 0000000..1111111 100644\n--- a/test.c\n+++ b/test.c\n@@ -1,7 +1,7 @@\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n \n-#define MAX_STACK 260\n+#define MAX_STACK 240\n \n static __attribute__((noinline))\n int helper_a(int val, struct __sk_buff *skb)\n```\n\nWhy this should satisfy the verifier:\n\n- The deepest problematic chain contains stack-using functions `helper_c` and `helper_b`.\n- With `MAX_STACK = 260`, their combined stack plus alignment is 544 bytes.\n- Reducing each buffer by 20 bytes should reduce the active combined usage by about 40 bytes.\n- That brings the expected combined stack usage to roughly 504 bytes, below the 512-byte verifier limit.\n\nIf this is intended to remain a stress test near the stack limit, `MAX_STACK = 240` is a conservative minimal-style adjustment.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-none/case-013-legacy.txt",
+    "case_id": "case-013",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-none",
+    "prompt_bytes": 1649,
+    "prompt_path": "public/case-013/prompt_legacy.md",
+    "prompt_sha256": "4d1d466cfe05bcf610e895dd892a6a1aa50e76dc1045f63dfca8de2da264bd35",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-none/case-013-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "none"
+    },
+    "run_id": "32cb2dda-bc99-4dbb-a12e-74aeb377d83c",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.002735,
+    "output_cost_usd": 0.01584,
+    "total_cost_usd": 0.018575
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 547,
+    "output_tokens": 528,
+    "raw_usage": {
+      "input_tokens": 547,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 528,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 1075
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1075
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629336,
+    "created_at": 1780629324,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0f5939868cf638e0006a223f4cdf1081a0aa26ebc82c232448",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier is rejecting the program because of **stack usage across nested BPF-to-BPF calls**.\n\nEach of these helpers allocates:\n\n```c\nvolatile char buf[MAX_STACK] = {};\n```\n\nwith:\n\n```c\n#define MAX_STACK 260\n```\n\nBPF stack is limited, and the verifier also checks the **combined stack depth of active call chains**. The failing chain is effectively:\n\n```text\nentry -> helper_c -> helper_b -> helper_a\n```\n\n`helper_c` has a 260-byte local buffer, and `helper_b` also has a 260-byte local buffer. With compiler alignment/spill overhead, their combined active stack usage is reported as:\n\n```text\ncombined stack size of 3 calls is 544. Too large\n```\n\nThe limit is 512 bytes, so 544 exceeds it.\n\n`helper_d` is reported safe:\n\n```text\nFunc#4 ('helper_d') is safe for any args that match its prototype\n```\n\nThe failure is not due to argument types or pointer safety. It is purely stack depth.\n\nThe smallest likely source-level fix is to reduce the per-function buffer size so that the combined stack usage of the deepest call chain stays below 512 bytes. Since the verifier reports 544 bytes with `MAX_STACK = 260`, reducing `MAX_STACK` to 240 should leave enough room for alignment overhead:\n\n```diff\n-#define MAX_STACK 260\n+#define MAX_STACK 240\n```\n\nComplete patch:\n\n```diff\ndiff --git a/test.c b/test.c\nindex 0000000..1111111 100644\n--- a/test.c\n+++ b/test.c\n@@ -1,7 +1,7 @@\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n \n-#define MAX_STACK 260\n+#define MAX_STACK 240\n \n static __attribute__((noinline))\n int helper_a(int val, struct __sk_buff *skb)\n```\n\nWhy this should satisfy the verifier:\n\n- The deepest problematic chain contains stack-using functions `helper_c` and `helper_b`.\n- With `MAX_STACK = 260`, their combined stack plus alignment is 544 bytes.\n- Reducing each buffer by 20 bytes should reduce the active combined usage by about 40 bytes.\n- That brings the expected combined stack usage to roughly 504 bytes, below the 512-byte verifier limit.\n\nIf this is intended to remain a stress test near the stack limit, `MAX_STACK = 240` is a conservative minimal-style adjustment.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0f5939868cf638e0006a223f4dbbb881a0abc647881ea54fb0",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "none",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 547,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 528,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 1075
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

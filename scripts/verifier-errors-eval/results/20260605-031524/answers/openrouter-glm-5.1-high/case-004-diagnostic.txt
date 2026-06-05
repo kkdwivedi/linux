@@ -1,0 +1,35 @@
+## Explanation
+
+The verifier failure occurs because `helper_a` is a `__noinline` (global) function. In the BPF verifier's global function analysis, pointer arguments are conservatively typed as `mem_or_null` — meaning the verifier assumes the pointer *might* be NULL. When the function dereferences `s->x` without first checking that `s` is not NULL, the verifier rejects the program as it cannot prove the dereference is safe.
+
+## Fix
+
+Add a NULL check before dereferencing `s`:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+struct Item {
+	int x;
+};
+
+__noinline int helper_a(const struct Item *s)
+{
+	if (!s)
+		return 0;
+	return bpf_get_prandom_u32() < s->x;
+}
+
+SEC("cgroup_skb/ingress")
+int entry(struct __sk_buff *skb)
+{
+	const struct Item s = {.x = skb->len};
+
+	helper_a(&s);
+
+	return 1;
+}
+```
+
+The `if (!s) return 0;` check tells the verifier that on the path reaching `s->x`, `s` is guaranteed non-NULL. After the check, the verifier promotes the register type from `mem_or_null` to `mem`, allowing the dereference. This is the smallest source-level change that satisfies the verifier's requirement.

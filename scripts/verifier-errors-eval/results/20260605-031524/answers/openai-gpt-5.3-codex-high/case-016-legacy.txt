@@ -1,0 +1,36 @@
+`bpf_sk_lookup_tcp()` returns a **referenced socket pointer** (`sock_or_null`).  
+After that call, verifier tracks a live ref (`id=2`).
+
+In your program, this path exists:
+
+1. call `bpf_sk_lookup_tcp` (ref may be acquired)
+2. `if r6 == 0 goto l1`
+3. `exit`  ← for `r6 != 0` path, exits without checking/releasing `r0`
+
+So verifier reports:
+
+- `Unreleased reference id=2`
+- `BPF_EXIT ... lead to reference leak`
+
+### Smallest likely fix
+
+Make the `r6 != 0` path jump to the existing cleanup block (`l1`) instead of exiting directly.
+
+```diff
+@@
+-   if r6 == 0 goto l1_%=;                \
+-   exit;                                 \
++   if r6 == 0 goto l1_%=;                \
++   goto l1_%=;                           \
+ l1_%=: if r0 == 0 goto l2_%=;            \
+    r1 = r0;                              \
+    call %[bpf_sk_release];               \
+ l2_%=: exit;                             \
+```
+
+This way, **all paths** after `bpf_sk_lookup_tcp` go through:
+
+- `if r0 == 0` skip release
+- else `bpf_sk_release(r0)`
+
+and then exit, satisfying ref-tracking.

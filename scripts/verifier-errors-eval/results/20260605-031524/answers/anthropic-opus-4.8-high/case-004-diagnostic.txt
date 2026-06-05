@@ -1,0 +1,30 @@
+## Explanation
+
+When you mark a function `__noinline`, the BPF verifier treats it as a **global (subprog) function** and verifies it **in isolation**, independent of its caller.
+
+For such functions, the verifier cannot see what argument `entry()` actually passes. A scalar/pointer argument that points to memory is given the type **`PTR_TO_MEM_OR_NULL`** — i.e. the verifier assumes the caller *might* pass NULL. (Notice the log: `R1=mem_or_null(id=1,sz=4)` on entry to `helper_a`.)
+
+Because the pointer may be NULL on entry, dereferencing it (`r2 = *(u32 *)(r6 + 0)` for `s->x`) is rejected:
+
+```
+R6 invalid mem access 'mem_or_null'
+```
+
+The fact that the *real* caller passes the address of an on-stack object (`&s`, which is never NULL) is irrelevant here, since the subprog is checked on its own.
+
+## Fix
+
+Add an explicit NULL check at the top of `helper_a()` and only dereference on the non-NULL path. This narrows `s` from `mem_or_null` to `mem` for the verifier.
+
+```c
+__noinline int helper_a(const struct Item *s)
+{
+	if (!s)
+		return 0;
+	return bpf_get_prandom_u32() < s->x;
+}
+```
+
+After the `if (!s) return 0;`, the verifier knows `s` is `PTR_TO_MEM` (non-null) on the path reaching `s->x`, so the load is provably safe and verification succeeds.
+
+(An alternative, if the project's libbpf/kernel supports it, is to annotate the parameter with the `__arg_nonnull` tag so the verifier requires callers to pass non-NULL and treats it as non-null inside the subprog. But the in-function NULL check is the smallest, most portable change.)

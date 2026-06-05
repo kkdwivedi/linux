@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Reduce CALLS_50 fan-out or the number of helper layers.",
+    "Pass a stable non-FP-derived argument pattern when possible.",
+    "Replace the generated call tree with a simpler bounded loop or less duplicated call structure."
+  ],
+  "canonical_fix": "Reduce the number of distinct call paths or argument patterns reaching the subprograms, for example by reducing fan-out/depth, consolidating calls, or avoiding many distinct FP-offset arguments.",
+  "case_id": "case-020",
+  "category": "Verifier Limit",
+  "difficulty": "hard",
+  "expected_explanation": "The program creates an enormous number of distinct bpf2bpf call paths and frame-pointer-derived argument patterns. Liveness analysis exceeds its complexity limit while recomputing subprogram liveness across those paths.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-deepseek-v3.2/case-020-diagnostic.txt",
+    "case_id": "case-020",
+    "model": "deepseek/deepseek-v3.2",
+    "profile": "openrouter-deepseek-v3.2",
+    "prompt_bytes": 4110,
+    "prompt_path": "public/case-020/prompt_diagnostic.md",
+    "prompt_sha256": "cb7344658f86bd080c64c73a9c8ee3095a7de5b045356c00872dce60afb5bfb8",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-deepseek-v3.2/case-020-diagnostic.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "964fdff3-e6e9-47c7-86cc-f8896a702985",
+    "started_at": "2026-06-05T03:20:47+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier fails because the liveness analysis complexity limit (10001 calls) is exceeded. This occurs due to the enormous number of distinct call paths and argument patterns reaching `helper_g`. Each macro `CALLS_10` generates 10 calls with different stack offsets (8, 16, ..., 80), leading to unique argument patterns for each call. Combined with the deep call chain (50 calls per level across 6 levels), the verifier must analyze liveness for each distinct pattern, exceeding the limit.\n\nThe fix reduces argument pattern diversity by making all calls use the same stack offset. This ensures each helper is invoked with a uniform argument pattern, allowing the verifier to reuse liveness analysis results across calls.\n\n**Patch:**\n```diff\n--- original.c\n+++ fixed.c\n@@ -4,8 +4,8 @@\n \n #define CALL_AT(fn, off) \"r1 = r10;\" \"r1 += -\" #off \";\" \"call \" #fn \";\"\n #define CALLS_10(fn) \\\n-\tCALL_AT(fn, 8) CALL_AT(fn, ns, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n\n-\tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n+\tCALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) \\\n+\tCALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8) CALL_AT(fn, 8)\n #define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n```\n\nThis edit replaces the varying offsets in `CALLS_10` with a constant offset (8), ensuring all 50 calls per level use the same argument pattern. The change preserves the total number of calls and the call graph structure while eliminating pattern diversity, which should satisfy the verifier's liveness analysis limits.",
+  "must_mention": [
+    "The failure is verifier liveness complexity, not runtime recursion",
+    "Many call paths or distinct FP offsets drive the limit",
+    "The fix is to simplify the call/argument pattern"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only increases a runtime loop bound",
+    "Adds packet or memory bounds checks",
+    "Suggests releasing a resource"
+  ]
+}

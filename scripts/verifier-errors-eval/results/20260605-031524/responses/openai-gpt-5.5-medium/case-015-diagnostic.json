@@ -1,0 +1,130 @@
+{
+  "answer_text": "The failure is because `p` is a packet-data pointer derived from `sk->data` and validated against `sk->data_end`, but then the program calls:\n\n```c\nhelper_a(sk, 0);\n```\n\n`helper_a()` calls `helper_b()`, which calls `bpf_skb_pull_data()`. The verifier treats `bpf_skb_pull_data()` as a helper that may move or reallocate packet data. Therefore, all previously derived packet pointers are invalidated after the call, even if the length argument is `0`.\n\nSo after this call, the verifier no longer considers `p` / `r7` to be a valid packet pointer:\n\n```text\ninvalidated: R7: packet data may have moved; previous value was pkt at offset 0\n...\nR7 invalid mem access 'scalar'\n```\n\nThe earlier bounds check does not help anymore because it happened before the helper call.\n\nThe smallest fix is to reload `sk->data` and `sk->data_end` after `helper_a(sk, 0)` and redo the bounds check before dereferencing `p`.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..1111111 100644\n--- a/case.c\n+++ b/case.c\n@@ -14,11 +14,13 @@ __noinline long helper_a(struct __sk_buff *sk, __u32 len)\n SEC(\"tc\")\n int entry(struct __sk_buff *sk)\n {\n-\tint *p = (void *)(long)sk->data;\n+\tint *p;\n \n+\thelper_a(sk, 0);\n+\n+\tp = (void *)(long)sk->data;\n \tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n \t\treturn TCX_DROP;\n-\thelper_a(sk, 0);\n \t*p = 42;\n \treturn TCX_PASS;\n }\n```\n\nThis satisfies the verifier because the pointer used for `*p = 42` is now derived and bounds-checked after the potentially packet-moving helper call.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-medium/case-015-diagnostic.txt",
+    "case_id": "case-015",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-medium",
+    "prompt_bytes": 3663,
+    "prompt_path": "public/case-015/prompt_diagnostic.md",
+    "prompt_sha256": "f4ee93633090707b3340ee048a1cd9c29849370062dafdfa25c31c23d9df8821",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-medium/case-015-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "ee08945a-bd1f-4a0a-bde3-49afba297537",
+    "started_at": "2026-06-05T03:15:40+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.005955,
+    "output_cost_usd": 0.02874,
+    "total_cost_usd": 0.034695000000000004
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1191,
+    "output_tokens": 958,
+    "raw_usage": {
+      "input_tokens": 1191,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 958,
+      "output_tokens_details": {
+        "reasoning_tokens": 516
+      },
+      "total_tokens": 2149
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 516,
+    "total_tokens": 2149
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629362,
+    "created_at": 1780629340,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_05ec79914ec90b90006a223f5c8c7881a28f8c9d4f0b8c9aeb",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_05ec79914ec90b90006a223f5d3b8c81a2b8ebb65b3f5785ba",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is because `p` is a packet-data pointer derived from `sk->data` and validated against `sk->data_end`, but then the program calls:\n\n```c\nhelper_a(sk, 0);\n```\n\n`helper_a()` calls `helper_b()`, which calls `bpf_skb_pull_data()`. The verifier treats `bpf_skb_pull_data()` as a helper that may move or reallocate packet data. Therefore, all previously derived packet pointers are invalidated after the call, even if the length argument is `0`.\n\nSo after this call, the verifier no longer considers `p` / `r7` to be a valid packet pointer:\n\n```text\ninvalidated: R7: packet data may have moved; previous value was pkt at offset 0\n...\nR7 invalid mem access 'scalar'\n```\n\nThe earlier bounds check does not help anymore because it happened before the helper call.\n\nThe smallest fix is to reload `sk->data` and `sk->data_end` after `helper_a(sk, 0)` and redo the bounds check before dereferencing `p`.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..1111111 100644\n--- a/case.c\n+++ b/case.c\n@@ -14,11 +14,13 @@ __noinline long helper_a(struct __sk_buff *sk, __u32 len)\n SEC(\"tc\")\n int entry(struct __sk_buff *sk)\n {\n-\tint *p = (void *)(long)sk->data;\n+\tint *p;\n \n+\thelper_a(sk, 0);\n+\n+\tp = (void *)(long)sk->data;\n \tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n \t\treturn TCX_DROP;\n-\thelper_a(sk, 0);\n \t*p = 42;\n \treturn TCX_PASS;\n }\n```\n\nThis satisfies the verifier because the pointer used for `*p = 42` is now derived and bounds-checked after the potentially packet-moving helper call.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_05ec79914ec90b90006a223f6abecc81a2a617f5d5b778909f",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1191,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 958,
+      "output_tokens_details": {
+        "reasoning_tokens": 516
+      },
+      "total_tokens": 2149
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

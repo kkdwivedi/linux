@@ -1,0 +1,65 @@
+{
+  "answer_text": "I'll analyze this verifier failure and propose a fix.\n\n## Verifier Failure Explanation\n\nThe verifier rejects the program with the error:\n```\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\nThe issue is that `bpf_ktime_get_coarse_ns` (helper #160) is **not available for `kprobe` programs**. This helper was introduced later and has restricted program type availability. Looking at the kernel's helper availability, `bpf_ktime_get_coarse_ns` is typically available for:\n- `BPF_PROG_TYPE_CGROUP_SKB`\n- `BPF_PROG_TYPE_CGROUP_SOCK`\n- `BPF_PROG_TYPE_CGROUP_SOCK_ADDR`\n- `BPF_PROG_TYPE_SOCK_OPS`\n- `BPF_PROG_TYPE_SK_SKB`\n- `BPF_PROG_TYPE_SK_MSG`\n- etc.\n\nBut **NOT** for `BPF_PROG_TYPE_KPROBE`.\n\nHowever, `bpf_ktime_get_ns` (the older, finer-grained timing helper) **is** available for kprobe programs. This is a common compatibility issue when eBPF code is ported between different program types.\n\n## The Fix\n\nReplace `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns`, which is the traditional helper available for kprobe programs.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"kprobe\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_ns];\t\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_ns)\n\t: __clobber_all);\n}\n```\n\n## Changes Made\n\n| Aspect | Before | After |\n|--------|--------|-------|\n| Helper call | `bpf_ktime_get_coarse_ns` | `bpf_ktime_get_ns` |\n| Constraint operand | `__imm(bpf_ktime_get_coarse_ns)` | `__imm(bpf_ktime_get_ns)` |\n\n## Why This Works\n\n- `bpf_ktime_get_ns` has been available since early eBPF versions and is supported across virtually all program types including kprobes\n- The only semantic difference is that `bpf_ktime_get_ns` provides nanosecond precision (typically using the kernel's high-resolution timer), while `bpf_ktime_get_coarse_ns` uses a coarser but faster timestamp source. For most kprobe use cases, this difference is acceptable\n- The calling convention is identical (both return `u64` in `r0` with no arguments), so no other assembly changes are needed",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-no-thinking/case-006-legacy.txt",
+    "case_id": "case-006",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-no-thinking",
+    "prompt_bytes": 1056,
+    "prompt_path": "public/case-006/prompt_legacy.md",
+    "prompt_sha256": "120f6abe2c1570fcf1f340a5df8b99d8138acdc6e56cef9bda9d3f882cdbea64",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-no-thinking/case-006-legacy.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "disabled"
+    },
+    "run_id": "e33b09bd-6f6f-45bf-ace2-10d779f9bc1c",
+    "started_at": "2026-06-05T03:18:00+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00037429999999999994,
+    "output_cost_usd": 0.002184,
+    "total_cost_usd": 0.0025583000000000003
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 394,
+    "output_tokens": 546,
+    "raw_usage": {
+      "completion_tokens": 546,
+      "prompt_tokens": 394,
+      "total_tokens": 940
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 940
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+          "content": "I'll analyze this verifier failure and propose a fix.\n\n## Verifier Failure Explanation\n\nThe verifier rejects the program with the error:\n```\nprogram of this type cannot use helper bpf_ktime_get_coarse_ns#160\n```\n\nThe issue is that `bpf_ktime_get_coarse_ns` (helper #160) is **not available for `kprobe` programs**. This helper was introduced later and has restricted program type availability. Looking at the kernel's helper availability, `bpf_ktime_get_coarse_ns` is typically available for:\n- `BPF_PROG_TYPE_CGROUP_SKB`\n- `BPF_PROG_TYPE_CGROUP_SOCK`\n- `BPF_PROG_TYPE_CGROUP_SOCK_ADDR`\n- `BPF_PROG_TYPE_SOCK_OPS`\n- `BPF_PROG_TYPE_SK_SKB`\n- `BPF_PROG_TYPE_SK_MSG`\n- etc.\n\nBut **NOT** for `BPF_PROG_TYPE_KPROBE`.\n\nHowever, `bpf_ktime_get_ns` (the older, finer-grained timing helper) **is** available for kprobe programs. This is a common compatibility issue when eBPF code is ported between different program types.\n\n## The Fix\n\nReplace `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns`, which is the traditional helper available for kprobe programs.\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC(\"license\") = \"GPL\";\n\nSEC(\"kprobe\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tcall %[bpf_ktime_get_ns];\t\t\t\\\n\tr0 = 0;\t\t\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_ktime_get_ns)\n\t: __clobber_all);\n}\n```\n\n## Changes Made\n\n| Aspect | Before | After |\n|--------|--------|-------|\n| Helper call | `bpf_ktime_get_coarse_ns` | `bpf_ktime_get_ns` |\n| Constraint operand | `__imm(bpf_ktime_get_coarse_ns)` | `__imm(bpf_ktime_get_ns)` |\n\n## Why This Works\n\n- `bpf_ktime_get_ns` has been available since early eBPF versions and is supported across virtually all program types including kprobes\n- The only semantic difference is that `bpf_ktime_get_ns` provides nanosecond precision (typically using the kernel's high-resolution timer), while `bpf_ktime_get_coarse_ns` uses a coarser but faster timestamp source. For most kprobe use cases, this difference is acceptable\n- The calling convention is identical (both return `u64` in `r0` with no arguments), so no other assembly changes are needed",
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1780629480,
+    "id": "chatcmpl-6a223fe8421a6aa92e2a38e6",
+    "model": "kimi-k2.6",
+    "object": "chat.completion",
+    "usage": {
+      "completion_tokens": 546,
+      "prompt_tokens": 394,
+      "total_tokens": 940
+    }
+  },
+  "reasoning_content": ""
+}

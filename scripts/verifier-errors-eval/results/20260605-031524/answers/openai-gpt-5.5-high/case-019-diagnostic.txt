@@ -1,0 +1,41 @@
+The verifier rejects this before normal instruction/range analysis because the subprogram call graph contains a direct cycle:
+
+```text
+entry -> helper_a
+helper_a -> helper_a
+```
+
+Even though the source appears to bound the recursion with:
+
+```asm
+r1 += 1;
+if r1 < 4 goto l0;
+```
+
+the verifier does not allow recursive bpf-to-bpf calls at all. It requires the subprogram call graph to be acyclic so stack depth and analysis remain bounded.
+
+The smallest source-level fix is to rewrite the self-call as an explicit bounded loop inside `helper_a`. The logic is equivalent for the current program: starting with `r1 = 0`, increment `r1` until it reaches `4`, then return.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -13,12 +13,11 @@ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+ 	asm volatile ("					\
++l0_%=:							\
+ 	r1 += 1;					\
+ 	r0 = r1;					\
+ 	if r1 < 4 goto l0_%=;				\
+ 	exit;						\
+-l0_%=:	call helper_a;					\
+-	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+After this change, `helper_a` no longer contains a bpf-to-bpf call to itself, so the call graph is acyclic. The verifier should then analyze the backward jump as a bounded loop: `r1` is incremented each iteration and the loop exits once `r1 >= 4`.

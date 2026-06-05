@@ -1,0 +1,68 @@
+{
+  "acceptable_fixes": [
+    "Replace slice_len with sizeof(buffer) or sizeof(*hdr) at the call site.",
+    "Add if (slice_len > sizeof(buffer)) return ...; before bpf_dynptr_slice.",
+    "Clamp or mask slice_len so the verifier proves it cannot exceed the stack buffer."
+  ],
+  "canonical_fix": "Make the slice length verifier-bounded to the fallback buffer size before the call, or pass a compile-time constant size that is no larger than the buffer.",
+  "case_id": "case-007",
+  "category": "Memory Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The dynptr slice fallback buffer is stack memory, but the length comes from a variable global value with no verifier-proven upper bound. The verifier cannot prove the memory/length pair stays within the fallback buffer.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-high/case-007-legacy.txt",
+    "case_id": "case-007",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-high",
+    "prompt_bytes": 2451,
+    "prompt_path": "public/case-007/prompt_legacy.md",
+    "prompt_sha256": "355b71d58706779cd79777d59818b81169ae16aba7b018cfa236b8e7b6e1cca7",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-high/case-007-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "72338c7d-f8e4-4902-afcc-d8598b92a61a",
+    "started_at": "2026-06-05T04:09:58+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Explanation of Verifier Failure\n\nThe verifier rejects the program at instruction 16 (`bpf_dynptr_slice`) because the `len` argument (R4) is loaded from a global variable (`slice_len`), which the verifier treats as an unbounded scalar:\n\n```\n11: (61) r4 = *(u32 *)(r1 +0)   ; R4=scalar(smin=0,smax=umax=0xffffffff,...)\n...\nR4 unbounded memory access, use 'var &= const' or 'if (var < const)'\n```\n\n`bpf_dynptr_slice` requires that the `len` parameter be a **bounded compile-time constant** so the verifier can statically validate that the local buffer (`R3`, pointing to `buffer` on the stack) is large enough to hold the requested slice. Since `slice_len` is a global variable, the verifier cannot determine its value at verification time and therefore rejects it.\n\n## Fix\n\nReplace the global variable `slice_len` with the compile-time constant `sizeof(*hdr)` directly in the `bpf_dynptr_slice` call:\n\n```diff\n-\thdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);\n+\thdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(*hdr));\n```\n\nThis makes the length argument a known constant (`sizeof(struct ethhdr)`), allowing the verifier to confirm the stack buffer is exactly large enough and that the memory access is valid.\n\nThe global variable `slice_len` (and its declaration) can also be removed if it's no longer needed:\n\n```diff\n-__u32 slice_len = sizeof(struct ethhdr);\n```",
+  "must_mention": [
+    "R4/length is variable or unbounded",
+    "The fallback buffer has fixed stack size",
+    "Verifier needs a length upper bound before the call"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks the returned hdr pointer",
+    "Increases unrelated ringbuf size",
+    "Changes the dynptr source but leaves variable length unbounded"
+  ]
+}

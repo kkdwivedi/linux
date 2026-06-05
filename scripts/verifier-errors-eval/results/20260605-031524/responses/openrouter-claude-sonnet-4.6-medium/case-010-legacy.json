@@ -1,0 +1,118 @@
+{
+  "answer_text": "## Explanation of the Verifier Failure\n\nThe failure is in `helper_b`:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\nThe expression `skb + 1` performs pointer arithmetic on the BPF context pointer (`struct __sk_buff *`). Pointer arithmetic increments by `sizeof(struct __sk_buff)` = 192 bytes, producing a **modified context pointer** with offset 192. The BPF verifier tracks this as `ctx(imm=192)`.\n\nThe verifier log shows the problem clearly:\n```\n21: (07) r6 += 192                    ; R6=ctx(imm=192)\n...\n23: (bf) r2 = r6                      ; R2=ctx(imm=192)\n24: (85) call pc+2\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\nThe BPF verifier disallows passing a modified (offset) context pointer as an argument to any function. Only the original, unmodified context pointer may be passed.\n\n## Fix\n\nRemove the `+ 1` offset from the `skb` pointer in `helper_b`:\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -16,7 +16,7 @@ int helper_a(struct __sk_buff *skb)\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n```\n\nThis passes the original, unmodified context pointer to `helper_c`, which the verifier accepts.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-sonnet-4.6-medium/case-010-legacy.txt",
+    "case_id": "case-010",
+    "model": "anthropic/claude-sonnet-4.6",
+    "profile": "openrouter-claude-sonnet-4.6-medium",
+    "prompt_bytes": 2233,
+    "prompt_path": "public/case-010/prompt_legacy.md",
+    "prompt_sha256": "42cb94c19ecff9212d01b745ca76ad135db7dce4e6c15eefc8d6cb8a521dd385",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-sonnet-4.6-medium/case-010-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "36e4ed71-1613-41d8-b614-fcd37ed457ab",
+    "started_at": "2026-06-05T03:18:45+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.002988,
+    "output_cost_usd": 0.01149,
+    "total_cost_usd": 0.014478000000000001
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 996,
+    "output_tokens": 766,
+    "raw_usage": {
+      "completion_tokens": 766,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 170
+      },
+      "cost": 0.014478,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.01149,
+        "upstream_inference_cost": 0.014478,
+        "upstream_inference_prompt_cost": 0.002988
+      },
+      "is_byok": false,
+      "prompt_tokens": 996,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1762
+    },
+    "reasoning_content_chars": 647,
+    "reasoning_tokens": 170,
+    "total_tokens": 1762
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation of the Verifier Failure\n\nThe failure is in `helper_b`:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\nThe expression `skb + 1` performs pointer arithmetic on the BPF context pointer (`struct __sk_buff *`). Pointer arithmetic increments by `sizeof(struct __sk_buff)` = 192 bytes, producing a **modified context pointer** with offset 192. The BPF verifier tracks this as `ctx(imm=192)`.\n\nThe verifier log shows the problem clearly:\n```\n21: (07) r6 += 192                    ; R6=ctx(imm=192)\n...\n23: (bf) r2 = r6                      ; R2=ctx(imm=192)\n24: (85) call pc+2\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\nThe BPF verifier disallows passing a modified (offset) context pointer as an argument to any function. Only the original, unmodified context pointer may be passed.\n\n## Fix\n\nRemove the `+ 1` offset from the `skb` pointer in `helper_b`:\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -16,7 +16,7 @@ int helper_a(struct __sk_buff *skb)\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n```\n\nThis passes the original, unmodified context pointer to `helper_c`, which the verifier accepts.",
+          "reasoning": "The verifier error occurs in `helper_b` at line 19:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\nThe problem is `skb + 1`. This performs pointer arithmetic on the `skb` context pointer, creating `skb + 1` which is an offset context pointer (`ctx(imm=192)` - offset by 192 bytes, which is `sizeof(struct __sk_buff) = 192`). The BPF verifier does not allow passing a modified context pointer to another function.\n\nThe fix is simple: change `skb + 1` to just `skb` in `helper_b`. \n\nThe `+ 1` appears to be a deliberate bug in the test case. I need to remove it from the call to `helper_c`, passing the unmodified context pointer instead.",
+          "reasoning_details": [
+            {
+              "format": "anthropic-claude-v1",
+              "index": 0,
+              "signature": "EtUICmcIDhACGAIqQE3zzoOQM0NEyS7t7FElAB7X0KBgskZpzyWtQnra6N4/KsnrH7SHr86WvHjFyEPJkQ4skmL/ofOk/K1uzosoKeYyEWNsYXVkZS1zb25uZXQtNC02OABCCHRoaW5raW5nEgzz+azeJ5fI3Xyqk3AaDMZGncLRkBkxcG/z4iIwoAaTqzWojqE04LdMe1uREBPaD/ANFx+snUGjCJVBsC+Wi/coArinlAjIdNXZqA72KpsH2ZZ3tg0IVOolzhGNVHdWnjaxowbXwKAloquF8e6dd/CAUf86c0lNNv4gkb6inT1T4gNoPTh+s93bma+bWXKS/0JCMnM1QEYQ9IJWVLXkWxFP6lBX5c7ZLbw1MFE0Cu7iU0M9+cQ8+I1qRjaRaE1bphDhMyperM1BQ2ML7PHuewT72MsSlGBb6Zz6pmbUpSU/ppMBgXdWfA0Rd6KFBmX+kpqQ9JSCSrQxibWgf+i5W0PXhBPgsy/iunkjvWRS/kpUppA8MYFOrshkrUo+MmQeSNC7xbTJ1hVvIgdUx/85bjQYpUwjBUMYY49T4ZxkOmpKY5Et3Z7hYpduJrpRJS0t07lmLl91t/j6qAl1jTn775A7DDm6GrKs57ly7CFLZVE0P/1diWp52NKJAmppRFcFrfDgf+rJjA7XLYF16c5DZFs106wbJ/65S/GscxilASx7qgH+JesimVz3sa9WFAn+O44eL7fuHbwC9EkTHQQtFFw738csCeBMp++6mkzj7bf1X/aNXq8VC7Z1AfJEwVl+uQD16WZNHzD3DMaFlZup7RE3mtJGKiE67M7p/n9PDr+DUBfjeDMz1egAxRhm3Q6pZCj13xInWaV3E61W2eQrSy8Wk4PHdCzwQDCoKEt+9sAdISPgfVB8QAXDcr3E9qTXCNnWeg5nL6ftuiQpaJmkeIPCPkBhySmuZYZMu8Uj5gAY2NUieS/pzmfA1RFm1O2FHFJVVLzlUuS12Ckq5GEtVvYqsCEuzNWTTAmZFzQZ1tvtLCFFUnH6wHmFT/8+mfyKIRpqjELlt7OfmvXKG6vnSN3neMCRe4xs75wPJx2Umn4ErzN2UhdwOoVqMKv9sBNVCW8eeMjLKNcyOy7djZL/BpiJHvX/Y+OqWcIbsyCbGdlgFCOY8cTqsIBqBjy3XdLQyERbp7qSL7G+iJCbFzQuGiNPxiguhvfMDT6CyDGdHTohVCOogO6WDR4pMgE5aKbBGdJxLe7uC7VTlAFaHK4E1SWrZ088lN8JNjZPHla6t4/Hxga/taaTXUhD/ZqxZ4zJPWIk3PmGsvvP5Vp+kx5xcbqJv79qcBtZ0fwhzm8hzKF0rVKfvdk20ifF/vw8dlE0moYIGCEo7S9/veudXZkoj0ODOOaocxJN3FJy6/gADLf9ehFTsz7C+gBPsLEy9oQXa9tK2DzViZuapZ+p1+jGBLmb23yC5iGz+JLYG/OUT6fLzYS4VsLTRU0vUPEYAQ==",
+              "text": "The verifier error occurs in `helper_b` at line 19:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\nThe problem is `skb + 1`. This performs pointer arithmetic on the `skb` context pointer, creating `skb + 1` which is an offset context pointer (`ctx(imm=192)` - offset by 192 bytes, which is `sizeof(struct __sk_buff) = 192`). The BPF verifier does not allow passing a modified context pointer to another function.\n\nThe fix is simple: change `skb + 1` to just `skb` in `helper_b`. \n\nThe `+ 1` appears to be a deliberate bug in the test case. I need to remove it from the call to `helper_c`, passing the unmodified context pointer instead.",
+              "type": "reasoning.text"
+            }
+          ],
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629526,
+    "id": "gen-1780629525-62FlklHd8VJ6UhewLYSe",
+    "model": "anthropic/claude-4.6-sonnet-20260217",
+    "object": "chat.completion",
+    "provider": "Google",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 766,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 170
+      },
+      "cost": 0.014478,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.01149,
+        "upstream_inference_cost": 0.014478,
+        "upstream_inference_prompt_cost": 0.002988
+      },
+      "is_byok": false,
+      "prompt_tokens": 996,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1762
+    }
+  },
+  "reasoning_content": "The verifier error occurs in `helper_b` at line 19:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\nThe problem is `skb + 1`. This performs pointer arithmetic on the `skb` context pointer, creating `skb + 1` which is an offset context pointer (`ctx(imm=192)` - offset by 192 bytes, which is `sizeof(struct __sk_buff) = 192`). The BPF verifier does not allow passing a modified context pointer to another function.\n\nThe fix is simple: change `skb + 1` to just `skb` in `helper_b`. \n\nThe `+ 1` appears to be a deliberate bug in the test case. I need to remove it from the call to `helper_c`, passing the unmodified context pointer instead."
+}

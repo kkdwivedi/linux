@@ -1,0 +1,130 @@
+{
+  "answer_text": "`r3` comes from map data (`*(u32 *)(r0 + 0)`), so verifier treats it as **0..0xffffffff**.  \nThen `r1 = map_value + r3` becomes a pointer with unbounded offset, and you pass it as destination to `bpf_probe_read_kernel(..., size=1, ...)`.\n\nFor helper calls that write to memory, verifier must prove:\n\n`offset + size <= map_value_size` \u2192 here `offset + 1 <= 48`.\n\nIt can\u2019t, so it rejects at the helper call.\n\n### Smallest likely fix\nAdd an explicit bounds check on `r3` before `r1 += r3`.\n\n```diff\n@@ SEC(\"tracepoint\")\n \tasm volatile (\"\t\t\t\t\t\\\n \tr2 = r10;\t\t\t\t\t\\\n \tr2 += -8;\t\t\t\t\t\\\n \tr1 = 0;\t\t\t\t\t\t\\\n \t*(u64*)(r2 + 0) = r1;\t\t\t\t\\\n \tr1 = %[map_a] ll;\t\t\t\t\\\n \tcall %[bpf_map_lookup_elem];\t\t\t\\\n \tif r0 == 0 goto l0_%=;\t\t\t\t\\\n \tr1 = r0;\t\t\t\t\t\\\n \tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n+\tif r3 > 47 goto l0_%=;\t\t\t\t\\\n \tr1 += r3;\t\t\t\t\t\\\n \tr2 = 1;\t\t\t\t\t\t\\\n \tr3 = 0;\t\t\t\t\t\t\\\n \tcall %[bpf_probe_read_kernel];\t\t\t\\\n l0_%=:\texit;\t\t\t\t\t\t\\\n \"\t:\n```\n\nThis gives verifier a safe upper bound (`r3 <= 47`), so `r1` stays within the 48-byte map value for a 1-byte write.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-014-diagnostic.txt",
+    "case_id": "case-014",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 4492,
+    "prompt_path": "public/case-014/prompt_diagnostic.md",
+    "prompt_sha256": "ac5a2ab54da5cf45e897928788b3ed66a0aaeb6499aac9a13e24b90fac12b24c",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-014-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "cad338e2-7ebe-45ab-b605-9ccdfb50ba35",
+    "started_at": "2026-06-05T03:16:55+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00257775,
+    "output_cost_usd": 0.020286,
+    "total_cost_usd": 0.02286375
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1473,
+    "output_tokens": 1449,
+    "raw_usage": {
+      "input_tokens": 1473,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1449,
+      "output_tokens_details": {
+        "reasoning_tokens": 1061
+      },
+      "total_tokens": 2922
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 1061,
+    "total_tokens": 2922
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629436,
+    "created_at": 1780629415,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_038829f8409707ee006a223fa7c200819ebdb672a8c9130e10",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_038829f8409707ee006a223fa81d08819ea7ea9df79093764f",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "`r3` comes from map data (`*(u32 *)(r0 + 0)`), so verifier treats it as **0..0xffffffff**.  \nThen `r1 = map_value + r3` becomes a pointer with unbounded offset, and you pass it as destination to `bpf_probe_read_kernel(..., size=1, ...)`.\n\nFor helper calls that write to memory, verifier must prove:\n\n`offset + size <= map_value_size` \u2192 here `offset + 1 <= 48`.\n\nIt can\u2019t, so it rejects at the helper call.\n\n### Smallest likely fix\nAdd an explicit bounds check on `r3` before `r1 += r3`.\n\n```diff\n@@ SEC(\"tracepoint\")\n \tasm volatile (\"\t\t\t\t\t\\\n \tr2 = r10;\t\t\t\t\t\\\n \tr2 += -8;\t\t\t\t\t\\\n \tr1 = 0;\t\t\t\t\t\t\\\n \t*(u64*)(r2 + 0) = r1;\t\t\t\t\\\n \tr1 = %[map_a] ll;\t\t\t\t\\\n \tcall %[bpf_map_lookup_elem];\t\t\t\\\n \tif r0 == 0 goto l0_%=;\t\t\t\t\\\n \tr1 = r0;\t\t\t\t\t\\\n \tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n+\tif r3 > 47 goto l0_%=;\t\t\t\t\\\n \tr1 += r3;\t\t\t\t\t\\\n \tr2 = 1;\t\t\t\t\t\t\\\n \tr3 = 0;\t\t\t\t\t\t\\\n \tcall %[bpf_probe_read_kernel];\t\t\t\\\n l0_%=:\texit;\t\t\t\t\t\t\\\n \"\t:\n```\n\nThis gives verifier a safe upper bound (`r3 <= 47`), so `r1` stays within the 48-byte map value for a 1-byte write.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_038829f8409707ee006a223fb817cc819eaa69b8256719c261",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1473,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1449,
+      "output_tokens_details": {
+        "reasoning_tokens": 1061
+      },
+      "total_tokens": 2922
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

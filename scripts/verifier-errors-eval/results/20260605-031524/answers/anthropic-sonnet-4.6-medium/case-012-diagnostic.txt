@@ -1,0 +1,16 @@
+The verifier rejects calling `helper_a()` inside an IRQ-disabled region because `helper_a` is a sleepable global function (it calls `bpf_copy_from_user`, which can sleep), and sleeping is not allowed with IRQs disabled.
+
+The fix is to move the `helper_a(0)` call outside the IRQ-disabled critical section:
+
+```c
+SEC("?syscall")
+int entry(void *ctx)
+{
+	unsigned long flags;
+
+	helper_a(0);
+	bpf_local_irq_save(&flags);
+	bpf_local_irq_restore(&flags);
+	return 0;
+}
+```

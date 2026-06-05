@@ -1,0 +1,37 @@
+The verifier is rejecting this because of a **context mismatch**:
+
+- `bpf_preempt_disable()` enters a non-preemptible region.
+- `bpf_copy_from_user()` is a **sleepable helper**.
+- Sleepable helpers are forbidden while preemption is disabled.
+
+So this sequence is invalid:
+
+```c
+bpf_preempt_disable();
+bpf_copy_from_user(...);   // may sleep -> rejected here
+bpf_preempt_enable();
+```
+
+### Smallest likely fix
+
+Remove the preempt-disable critical section around `bpf_copy_from_user` (or move the helper call outside it).  
+In this program, the minimal meaningful change is to remove those two calls.
+
+#### Patch
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -7,10 +7,8 @@ SEC("?fentry.s/sys_getpgid")
+ int entry(void *ctx)
+ {
+ 	u32 data;
+ 
+-	bpf_preempt_disable();
+ 	bpf_copy_from_user(&data, sizeof(data), NULL);
+-	bpf_preempt_enable();
+ 	return 0;
+ }
+```
+
+This should satisfy the verifier’s “Execution Context Safety” rule for this failure.

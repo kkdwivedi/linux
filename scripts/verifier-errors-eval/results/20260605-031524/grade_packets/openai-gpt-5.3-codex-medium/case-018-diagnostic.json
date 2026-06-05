@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Swap the two unlock calls on the success path.",
+    "Avoid taking lock_b while lock_a is still held if nesting is unnecessary."
+  ],
+  "canonical_fix": "On the path where both locks are held, call bpf_res_spin_unlock(&lock_b) before bpf_res_spin_unlock(&lock_a).",
+  "case_id": "case-018",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program acquires lock_a and then lock_b, but releases lock_a before lock_b on the success path. Nested resource spin locks must be unlocked in last-in, first-out order.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-medium/case-018-diagnostic.txt",
+    "case_id": "case-018",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-medium",
+    "prompt_bytes": 2550,
+    "prompt_path": "public/case-018/prompt_diagnostic.md",
+    "prompt_sha256": "b2c0e6d8199078791c9358d84b560ed1081e0fd58d1a492ad2d0272f131fa115",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-medium/case-018-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "22873645-80e6-44a1-83c0-5a055bdd3424",
+    "started_at": "2026-06-05T03:16:37+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "`lock_a` is acquired first, then `lock_b`.  \nSo unlocks must be **LIFO**: `lock_b` first, then `lock_a`.\n\nIn your source, success path does:\n\n```c\nbpf_res_spin_unlock(&lock_a);\nbpf_res_spin_unlock(&lock_b);\n```\n\nThat is out of order. The verifier log confirms that after `bpf_res_spin_lock(&lock_b)`, the next unlock it sees is `lock_a`, which violates nested lock ordering.\n\n### Smallest likely fix\n\nSwap the two unlocks in the normal path.\n\n```diff\n SEC(\"?tc\")\n int entry(struct __sk_buff *ctx)\n {\n \tif (bpf_res_spin_lock(&lock_a))\n \t\treturn 0;\n \tif (bpf_res_spin_lock(&lock_b)) {\n \t\tbpf_res_spin_unlock(&lock_a);\n \t\treturn 0;\n \t}\n-\tbpf_res_spin_unlock(&lock_a);\n-\tbpf_res_spin_unlock(&lock_b);\n+\tbpf_res_spin_unlock(&lock_b);\n+\tbpf_res_spin_unlock(&lock_a);\n \treturn 0;\n }\n```\n\nThis preserves behavior and satisfies verifier lock lifetime rules (release nested locks in reverse acquisition order).",
+  "must_mention": [
+    "lock_b was acquired after lock_a",
+    "Unlock order must be LIFO",
+    "The success path unlocks the wrong lock first"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Changes only the error path where lock_b acquisition fails",
+    "Drops one unlock and leaks a held lock",
+    "Confuses spin lock order with IRQ flag variable order"
+  ]
+}

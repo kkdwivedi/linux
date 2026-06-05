@@ -1,0 +1,46 @@
+## What the verifier is complaining about
+
+`bpf_res_spin_lock`/`bpf_res_spin_unlock` require **strict LIFO (nested) ordering**: the lock acquired most recently must be released first. The verifier tracks the acquisition order and rejects any unlock that isn't the innermost held lock — that's the `bpf_res_spin_unlock cannot be out of order` message.
+
+Trace what the verifier explored (the fall-through, i.e. *both* locks acquired):
+
+```
+acquire lock_a        (insn 2)
+acquire lock_b        (insn 6)   -> held order: a, then b
+unlock  lock_a        (insn 10)  -> ERROR: must unlock b first
+```
+
+In the success path your code does:
+
+```c
+bpf_res_spin_unlock(&lock_a);   /* wrong: a was acquired first */
+bpf_res_spin_unlock(&lock_b);
+```
+
+Since `lock_b` was the last one taken, it must be released *before* `lock_a`. Unlocking `lock_a` while `lock_b` is still held is out-of-order, hence the rejection.
+
+(The error branch, where `bpf_res_spin_lock(&lock_b)` *fails* and you unlock only `lock_a`, is correct — only `lock_a` is held there.)
+
+## Fix
+
+Swap the two final unlocks so they release in reverse (LIFO) order:
+
+```c
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+```
+
+Full corrected tail:
+
+```c
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+```
+
+This satisfies the verifier's requirement that nested res_spin_locks be released in reverse order of acquisition.

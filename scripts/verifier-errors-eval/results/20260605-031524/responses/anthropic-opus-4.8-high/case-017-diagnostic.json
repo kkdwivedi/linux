@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nThe verifier enforces that nested IRQ-disabled regions created with `bpf_local_irq_save()` must be undone in **LIFO (last-in, first-out)** order. The code saves `flags1` then `flags2`, so `flags2` is the most recently acquired IRQ state and must be restored first.\n\nThe program instead restores `flags1` first:\n\n```c\nbpf_local_irq_save(&flags1);    // acquires id=1\nbpf_local_irq_save(&flags2);    // acquires id=2  (active/top of stack)\nbpf_local_irq_restore(&flags1); // tries to release id=1  <-- out of order\nbpf_local_irq_restore(&flags2);\n```\n\nThe verifier expects the next restore to release `id=2` (acquired at insn 7), but it sees a restore of `flags1` (id=1), hence:\n\n```\ncannot restore irq state out of order, expected id=2 acquired at insn_idx=7\n```\n\n## Fix\n\nSwap the two restore calls so flags are released in reverse order of acquisition:\n\n```c\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);\n\tbpf_local_irq_restore(&flags1);\n\treturn 0;\n}\n```\n\nThis satisfies the LIFO requirement: `flags2` (last saved) is restored first, then `flags1`.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-017-diagnostic.txt",
+    "case_id": "case-017",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 2781,
+    "prompt_path": "public/case-017/prompt_diagnostic.md",
+    "prompt_sha256": "675d45e8a367c50d949964d5e150f18c1e043733cbcf9e98094409311c602ad9",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-017-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "ffe61b89-9a58-4d69-8b90-eda715dc3365",
+    "started_at": "2026-06-05T03:17:44+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00671,
+    "output_cost_usd": 0.013875,
+    "total_cost_usd": 0.020585
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1342,
+    "output_tokens": 555,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1342,
+      "output_tokens": 555,
+      "output_tokens_details": {
+        "thinking_tokens": 37
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1897
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "EqACCmMIDhgCKkC/C2rivJsU4azlTLphnDA3U4GlPXxTQXPW6rvlHOwOTNjyKDo+1Vac7zWpBjuoE2cqeBzHcO0r8XZU+YMMW/wTMg9jbGF1ZGUtb3B1cy00LTg4AEIIdGhpbmtpbmcSDAORQHCLLvM/hguD5hoM6aKiVrP46eBh95mXIjDwsKT8M1vGUH0urJz7TgU0kSt+/7oafxtfFpK/dsIr9/vr4DE41lf+zriQmvTFS1cqa0CHvitPgUehrcZlbp6+HHsUJpDKW/u5QVOy1zBHxxUp5h9FwOs7WcKjL5he2l6BQqAemShfZRmUO6AkeLeKnN12pWNPSjNACTqB1ljLSt2jhRb/AC2S8p+4z6GEpk69seDSX8y28uzPVwWEGAE=",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nThe verifier enforces that nested IRQ-disabled regions created with `bpf_local_irq_save()` must be undone in **LIFO (last-in, first-out)** order. The code saves `flags1` then `flags2`, so `flags2` is the most recently acquired IRQ state and must be restored first.\n\nThe program instead restores `flags1` first:\n\n```c\nbpf_local_irq_save(&flags1);    // acquires id=1\nbpf_local_irq_save(&flags2);    // acquires id=2  (active/top of stack)\nbpf_local_irq_restore(&flags1); // tries to release id=1  <-- out of order\nbpf_local_irq_restore(&flags2);\n```\n\nThe verifier expects the next restore to release `id=2` (acquired at insn 7), but it sees a restore of `flags1` (id=1), hence:\n\n```\ncannot restore irq state out of order, expected id=2 acquired at insn_idx=7\n```\n\n## Fix\n\nSwap the two restore calls so flags are released in reverse order of acquisition:\n\n```c\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tunsigned long flags1, flags2;\n\n\tbpf_local_irq_save(&flags1);\n\tbpf_local_irq_save(&flags2);\n\tbpf_local_irq_restore(&flags2);\n\tbpf_local_irq_restore(&flags1);\n\treturn 0;\n}\n```\n\nThis satisfies the LIFO requirement: `flags2` (last saved) is restored first, then `flags1`.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01AxrSDFg8RF45AGYPdEUCdN",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1342,
+      "output_tokens": 555,
+      "output_tokens_details": {
+        "thinking_tokens": 37
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

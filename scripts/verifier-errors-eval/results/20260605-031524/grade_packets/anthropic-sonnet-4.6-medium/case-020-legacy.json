@@ -1,0 +1,68 @@
+{
+  "acceptable_fixes": [
+    "Reduce CALLS_50 fan-out or the number of helper layers.",
+    "Pass a stable non-FP-derived argument pattern when possible.",
+    "Replace the generated call tree with a simpler bounded loop or less duplicated call structure."
+  ],
+  "canonical_fix": "Reduce the number of distinct call paths or argument patterns reaching the subprograms, for example by reducing fan-out/depth, consolidating calls, or avoiding many distinct FP-offset arguments.",
+  "case_id": "case-020",
+  "category": "Verifier Limit",
+  "difficulty": "hard",
+  "expected_explanation": "The program creates an enormous number of distinct bpf2bpf call paths and frame-pointer-derived argument patterns. Liveness analysis exceeds its complexity limit while recomputing subprogram liveness across those paths.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-medium/case-020-legacy.txt",
+    "case_id": "case-020",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-medium",
+    "prompt_bytes": 6158,
+    "prompt_path": "public/case-020/prompt_legacy.md",
+    "prompt_sha256": "cecfa6936349490d4b7bd2b0131df3ba133333894cfcdcc4438f6f6f0196b689",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-medium/case-020-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "8856b407-df10-46be-be9a-54cbce7325ff",
+    "started_at": "2026-06-05T04:06:14+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Explanation of the Failure\n\nThe verifier error is:\n```\nliveness analysis exceeded complexity limit (10001 calls)\n```\n\nThe call graph has **8 levels deep** (entry \u2192 helper_a \u2192 helper_b \u2192 \u2026 \u2192 helper_g), with **50 calls per level**. The BPF verifier's liveness analysis does not effectively memoize across distinct call-site contexts \u2014 because each `CALL_AT` sets `r1` to a different stack offset, every call site represents a distinct register state, so the verifier re-analyses the callee for each unique calling context. This results in near-exponential growth: liveness analysis for `helper_g` is triggered once per unique call path from the root, easily exceeding the 10 001-call limit.\n\nRemoving one level of helper functions (dropping `helper_g` and making `helper_f` a leaf) reduces the maximum depth from 8 to 7 frames and eliminates an entire tier of repeated re-analyses, keeping the total liveness work within the verifier's budget.\n\n## Fix\n\nRemove `helper_g` entirely and replace `helper_f`'s body with a simple leaf (no sub-calls):\n\n```c\n__naked __noinline __used\nstatic unsigned long helper_f(void)\n{\n\tasm volatile (\n\t\t\"r0 = 0;\"\n\t\t\"exit;\"\n\t\t::: __clobber_all);\n}\n```\n\n**Patch:**\n\n```diff\n-__naked __noinline __used\n-static unsigned long helper_g(void)\n-{\n-\tasm volatile (\n-\t\t\"r0 = 0;\"\n-\t\t\"exit;\"\n-\t\t::: __clobber_all);\n-}\n-\n __naked __noinline __used\n static unsigned long helper_f(void)\n {\n \tasm volatile (\n-\t\tCALLS_50(helper_g)\n \t\t\"r0 = 0;\"\n \t\t\"exit;\"\n \t\t::: __clobber_all);\n }\n```\n\nThis shrinks the call depth from 8 (entry + a + b + c + d + e + f + g) to 7 (entry + a + b + c + d + e + f), and removes the innermost 50-call fan-out that was causing the liveness analysis to exceed the 10 001-call complexity limit.",
+  "must_mention": [
+    "The failure is verifier liveness complexity, not runtime recursion",
+    "Many call paths or distinct FP offsets drive the limit",
+    "The fix is to simplify the call/argument pattern"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only increases a runtime loop bound",
+    "Adds packet or memory bounds checks",
+    "Suggests releasing a resource"
+  ]
+}

@@ -1,0 +1,52 @@
+## Explanation of the Failure
+
+The verifier enforces **LIFO (last-in, first-out)** ordering for `bpf_res_spin_lock`/`bpf_res_spin_unlock`.
+
+In the original code, `bpf_res_spin_unlock(&lock_a)` is called in **both** the failure branch (inside the `if`) and the success fall-through. The compiler recognizes this and **hoists** the `unlock_a` call unconditionally to right after `lock_b`, before the branch:
+
+```
+lock_b()         ; acquire lock_b (both locks held)
+unlock_a         ; ← hoisted here (out of LIFO order — lock_b is innermost!)
+if failed: return
+unlock_b
+return
+```
+
+The verifier sees `unlock_a` being called while `lock_b` is the most-recently-acquired lock, which violates LIFO.
+
+## Root Cause
+
+The success path unlocks in the wrong order:
+```c
+bpf_res_spin_unlock(&lock_a);  // ← wrong: lock_b was acquired last
+bpf_res_spin_unlock(&lock_b);
+```
+
+Because `unlock_a` is common to both paths, the compiler factors it out before the branch, making it appear before `unlock_b` in the emitted code.
+
+## Fix
+
+Swap the two unlock calls in the success path to follow LIFO order (release `lock_b` first, since it was acquired last):
+
+```c
+--- a/case.c
++++ b/case.c
+@@ -14,7 +14,7 @@ int entry(struct __sk_buff *ctx)
+		return 0;
+	}
+-	bpf_res_spin_unlock(&lock_a);
+ 	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+With this ordering, `unlock_a` appears after `unlock_b` in the success path, so the compiler **cannot** hoist it before the branch (that would change the relative order with `unlock_b`). The generated code will correctly be:
+
+```
+lock_b_result = lock_b();
+if (lock_b_result != 0) { unlock_a; return; }  // only lock_a held — OK
+unlock_b;   // lock_b was innermost — LIFO correct
+unlock_a;
+return;
+```

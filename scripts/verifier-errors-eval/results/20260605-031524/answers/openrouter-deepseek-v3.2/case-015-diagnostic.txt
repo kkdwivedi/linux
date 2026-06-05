@@ -1,0 +1,40 @@
+The verifier error occurs because the packet data pointer `p` (stored in register R7) is invalidated after the helper call `helper_a(sk, 0)`. This helper calls `bpf_skb_pull_data`, which may reallocate or move packet data, causing the verifier to lose track of the pointer's validity. After the call, R7 becomes a scalar integer instead of a valid packet pointer, leading to an "invalid mem access" error when dereferencing `*p`.
+
+The fix is to reload the packet pointer from `sk->data` after the helper call and revalidate the bounds check before writing. This ensures the pointer is fresh and correctly tracked by the verifier.
+
+Here is the minimal patch:
+
+```diff
+ SEC("tc")
+ int entry(struct __sk_buff *sk)
+ {
+-	int *p = (void *)(long)sk->data;
+-
+-	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+-		return TCX_DROP;
+ 	helper_a(sk, 0);
++	int *p = (void *)(long)sk->data;
++	if ((void *)(p + 1) > (void *)(long)sk->data_end)
++		return TCX_DROP;
+ 	*p = 42;
+ 	return TCX_PASS;
+ }
+```
+
+Alternatively, for compatibility with older C standards, declare `p` at the start but assign it after the helper call:
+
+```c
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	int *p;
+	helper_a(sk, 0);
+	p = (void *)(long)sk->data;
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+This change follows the verifier's suggestion to "reload and revalidate the pointer after scalar arithmetic, helper calls, or other operations that can invalidate it."

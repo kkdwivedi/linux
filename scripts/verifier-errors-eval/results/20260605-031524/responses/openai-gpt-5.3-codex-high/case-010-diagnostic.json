@@ -1,0 +1,130 @@
+{
+  "answer_text": "`helper_b()` is passing a **modified context pointer** into `helper_c()`:\n\n```c\nhelper_c(val, skb + 1)\n```\n\nFor `struct __sk_buff *` (PTR_TO_CTX), the verifier requires dereferences to use the original ctx base pointer (offset 0).  \n`skb + 1` becomes ctx pointer with fixed offset `+192` (size of `struct __sk_buff`), and then `helper_c()` dereferences it (`skb->ifindex`), which is rejected:\n\n- `R2=ctx(imm=192)`\n- `dereference of modified ctx ptr ... disallowed`\n\n### Smallest likely fix\nPass the original `skb` pointer unchanged.\n\n#### Patch\n```diff\n@@\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n```\n\nThis keeps `R2` as plain `ctx()` at call time, satisfying verifier rules for ctx dereference in `helper_c()`.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-010-diagnostic.txt",
+    "case_id": "case-010",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 3922,
+    "prompt_path": "public/case-010/prompt_diagnostic.md",
+    "prompt_sha256": "c9975b0bd7d86b4edddce6166024784483798109ab83deeb5185dbddd366cae7",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-010-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "11b6f86e-17f1-4707-9de5-6814502cb231",
+    "started_at": "2026-06-05T03:16:50+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00203175,
+    "output_cost_usd": 0.011228,
+    "total_cost_usd": 0.01325975
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1161,
+    "output_tokens": 802,
+    "raw_usage": {
+      "input_tokens": 1161,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 802,
+      "output_tokens_details": {
+        "reasoning_tokens": 559
+      },
+      "total_tokens": 1963
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 559,
+    "total_tokens": 1963
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629422,
+    "created_at": 1780629410,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_07414e011ee1c4d9006a223fa2f3848192a0679911332829d2",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_07414e011ee1c4d9006a223fa3506881928d564fbbdc5f34f9",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "`helper_b()` is passing a **modified context pointer** into `helper_c()`:\n\n```c\nhelper_c(val, skb + 1)\n```\n\nFor `struct __sk_buff *` (PTR_TO_CTX), the verifier requires dereferences to use the original ctx base pointer (offset 0).  \n`skb + 1` becomes ctx pointer with fixed offset `+192` (size of `struct __sk_buff`), and then `helper_c()` dereferences it (`skb->ifindex`), which is rejected:\n\n- `R2=ctx(imm=192)`\n- `dereference of modified ctx ptr ... disallowed`\n\n### Smallest likely fix\nPass the original `skb` pointer unchanged.\n\n#### Patch\n```diff\n@@\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n```\n\nThis keeps `R2` as plain `ctx()` at call time, satisfying verifier rules for ctx dereference in `helper_c()`.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_07414e011ee1c4d9006a223fab6e048192a0bf71c9fc4cbb36",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1161,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 802,
+      "output_tokens_details": {
+        "reasoning_tokens": 559
+      },
+      "total_tokens": 1963
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

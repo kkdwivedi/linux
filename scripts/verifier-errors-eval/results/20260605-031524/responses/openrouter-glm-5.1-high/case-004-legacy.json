@@ -1,0 +1,117 @@
+{
+  "answer_text": "## Explanation\n\nThe verifier failure occurs at instruction 10 where `s->x` is dereferenced:\n\n```\nR6 invalid mem access 'mem_or_null'\n```\n\nThe pointer `s` has type `mem_or_null(id=1,sz=4)`, meaning the verifier considers it **might be NULL**. When a pointer is passed to a BPF global subprogram (`__noinline`), the verifier cannot propagate the caller's knowledge that the pointer is non-NULL across the function boundary. It conservatively marks the parameter as `mem_or_null`, and refuses to allow dereferencing it without an explicit NULL check.\n\n## Fix\n\nAdd a NULL check in `helper_a` before dereferencing `s`:\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nAfter the `if (!s) return 0;` check, the verifier knows the pointer is non-NULL in the fall-through path, promoting it from `mem_or_null` to `mem`, and the subsequent dereference of `s->x` is allowed.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-glm-5.1-high/case-004-legacy.txt",
+    "case_id": "case-004",
+    "model": "z-ai/glm-5.1",
+    "profile": "openrouter-glm-5.1-high",
+    "prompt_bytes": 1415,
+    "prompt_path": "public/case-004/prompt_legacy.md",
+    "prompt_sha256": "5122475504cbe77965669ffc9de4273ee4a86feb8b73ecbb090ea008b68a08ae",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-glm-5.1-high/case-004-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "5bfce6d0-7ec2-4000-869e-30b9dad92c25",
+    "started_at": "2026-06-05T03:21:18+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00052626,
+    "output_cost_usd": 0.00206668,
+    "total_cost_usd": 0.00259294
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 537,
+    "output_tokens": 671,
+    "raw_usage": {
+      "completion_tokens": 671,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 432
+      },
+      "cost": 0.00275011,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0023485,
+        "upstream_inference_cost": 0.00275011,
+        "upstream_inference_prompt_cost": 0.00040161
+      },
+      "is_byok": false,
+      "prompt_tokens": 537,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 192,
+        "video_tokens": 0
+      },
+      "total_tokens": 1208
+    },
+    "reasoning_content_chars": 1584,
+    "reasoning_tokens": 432,
+    "total_tokens": 1208
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Explanation\n\nThe verifier failure occurs at instruction 10 where `s->x` is dereferenced:\n\n```\nR6 invalid mem access 'mem_or_null'\n```\n\nThe pointer `s` has type `mem_or_null(id=1,sz=4)`, meaning the verifier considers it **might be NULL**. When a pointer is passed to a BPF global subprogram (`__noinline`), the verifier cannot propagate the caller's knowledge that the pointer is non-NULL across the function boundary. It conservatively marks the parameter as `mem_or_null`, and refuses to allow dereferencing it without an explicit NULL check.\n\n## Fix\n\nAdd a NULL check in `helper_a` before dereferencing `s`:\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nAfter the `if (!s) return 0;` check, the verifier knows the pointer is non-NULL in the fall-through path, promoting it from `mem_or_null` to `mem`, and the subsequent dereference of `s->x` is allowed.",
+          "reasoning": "The verifier log shows:\n\n```\n7: R1=mem_or_null(id=1,sz=4) R10=fp0\n...\n10: (61) r2 = *(u32 *)(r6 +0)\nR6 invalid mem access 'mem_or_null'\n```\n\nThe issue is that the pointer `s` passed to `helper_a` is of type `mem_or_null`, meaning it could be NULL. The verifier won't allow dereferencing a pointer that might be NULL without first checking that it's not NULL.\n\nThe `mem_or_null` type comes from the fact that when passing a pointer to a global function (subprogram), the verifier treats it as potentially NULL. This is because global functions in BPF have their own verification context and the verifier doesn't track the null-ness of pointers across function boundaries in the same way.\n\nThe fix is to add a NULL check in `helper_a` before dereferencing `s`:\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nThis will make the verifier see that after the NULL check, `s` is guaranteed to be non-NULL, and the dereference will be allowed.\n\nWait, let me think more carefully. The `mem_or_null` type... In BPF verifier, when a pointer is passed to a global subprogram, it gets the `mem_or_null` type because the verifier can't prove across function boundaries that the pointer is non-NULL. So the solution is to add a null check inside the function.\n\nThe smallest fix would be to add a null check in `helper_a`:\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nThis is the standard pattern for dealing with `mem_or_null` in BPF global functions.",
+          "reasoning_details": [
+            {
+              "format": "unknown",
+              "index": 0,
+              "text": "The verifier log shows:\n\n```\n7: R1=mem_or_null(id=1,sz=4) R10=fp0\n...\n10: (61) r2 = *(u32 *)(r6 +0)\nR6 invalid mem access 'mem_or_null'\n```\n\nThe issue is that the pointer `s` passed to `helper_a` is of type `mem_or_null`, meaning it could be NULL. The verifier won't allow dereferencing a pointer that might be NULL without first checking that it's not NULL.\n\nThe `mem_or_null` type comes from the fact that when passing a pointer to a global function (subprogram), the verifier treats it as potentially NULL. This is because global functions in BPF have their own verification context and the verifier doesn't track the null-ness of pointers across function boundaries in the same way.\n\nThe fix is to add a NULL check in `helper_a` before dereferencing `s`:\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nThis will make the verifier see that after the NULL check, `s` is guaranteed to be non-NULL, and the dereference will be allowed.\n\nWait, let me think more carefully. The `mem_or_null` type... In BPF verifier, when a pointer is passed to a global subprogram, it gets the `mem_or_null` type because the verifier can't prove across function boundaries that the pointer is non-NULL. So the solution is to add a null check inside the function.\n\nThe smallest fix would be to add a null check in `helper_a`:\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nThis is the standard pattern for dealing with `mem_or_null` in BPF global functions.",
+              "type": "reasoning.text"
+            }
+          ],
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "stop"
+      }
+    ],
+    "created": 1780629678,
+    "id": "gen-1780629678-xFNRhpqFVv9yqIoVbaZP",
+    "model": "z-ai/glm-5.1-20260406",
+    "object": "chat.completion",
+    "provider": "DeepInfra",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 671,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 432
+      },
+      "cost": 0.00275011,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.0023485,
+        "upstream_inference_cost": 0.00275011,
+        "upstream_inference_prompt_cost": 0.00040161
+      },
+      "is_byok": false,
+      "prompt_tokens": 537,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 192,
+        "video_tokens": 0
+      },
+      "total_tokens": 1208
+    }
+  },
+  "reasoning_content": "The verifier log shows:\n\n```\n7: R1=mem_or_null(id=1,sz=4) R10=fp0\n...\n10: (61) r2 = *(u32 *)(r6 +0)\nR6 invalid mem access 'mem_or_null'\n```\n\nThe issue is that the pointer `s` passed to `helper_a` is of type `mem_or_null`, meaning it could be NULL. The verifier won't allow dereferencing a pointer that might be NULL without first checking that it's not NULL.\n\nThe `mem_or_null` type comes from the fact that when passing a pointer to a global function (subprogram), the verifier treats it as potentially NULL. This is because global functions in BPF have their own verification context and the verifier doesn't track the null-ness of pointers across function boundaries in the same way.\n\nThe fix is to add a NULL check in `helper_a` before dereferencing `s`:\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nThis will make the verifier see that after the NULL check, `s` is guaranteed to be non-NULL, and the dereference will be allowed.\n\nWait, let me think more carefully. The `mem_or_null` type... In BPF verifier, when a pointer is passed to a global subprogram, it gets the `mem_or_null` type because the verifier can't prove across function boundaries that the pointer is non-NULL. So the solution is to add a null check inside the function.\n\nThe smallest fix would be to add a null check in `helper_a`:\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nThis is the standard pattern for dealing with `mem_or_null` in BPF global functions."
+}

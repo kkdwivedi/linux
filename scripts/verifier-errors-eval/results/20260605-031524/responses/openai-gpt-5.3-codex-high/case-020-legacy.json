@@ -1,0 +1,130 @@
+{
+  "answer_text": "The failure is **not** a normal instruction-safety rejection; it dies during **subprog liveness analysis**:\n\n- Log ends with: `liveness analysis exceeded complexity limit (10001 calls)`\n- `processed 0 insns` confirms it failed before main per-insn verification.\n- Repeated re-analysis of `helper_g` shows call-graph/liveness explosion.\n\n### Why this explodes\n\nEach call site does:\n\n```c\nr1 = r10;\nr1 += -off;   // off varies\ncall helper_x;\n```\n\nSo every nested bpf2bpf call passes a different stack pointer state. With 50 calls per level and 7 levels, liveness keeps revisiting subprogs in many contexts and hits the 10k-call complexity cap.\n\nBut none of these functions actually read arguments; they just call the next subprog and return 0. So passing stack pointers is unnecessary.\n\n---\n\n### Smallest likely fix\n\nMake `CALL_AT` stop passing stack pointers; pass a simple constant arg (or no arg setup).  \nSafest minimal edit: set `r1 = 0` before each call.\n\n```diff\n-#define CALL_AT(fn, off) \"r1 = r10;\" \"r1 += -\" #off \";\" \"call \" #fn \";\"\n+#define CALL_AT(fn, off) \"r1 = 0;\" \"call \" #fn \";\"\n```\n\nThis keeps program structure intact but removes stack-liveness context explosion, which should let verifier liveness converge and pass.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-020-legacy.txt",
+    "case_id": "case-020",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 6158,
+    "prompt_path": "public/case-020/prompt_legacy.md",
+    "prompt_sha256": "cecfa6936349490d4b7bd2b0131df3ba133333894cfcdcc4438f6f6f0196b689",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-020-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "4e2e93ec-7b8e-4f24-acb7-0cfbc93b2f28",
+    "started_at": "2026-06-05T03:17:03+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.0045955,
+    "output_cost_usd": 0.056154,
+    "total_cost_usd": 0.060749500000000005
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 2626,
+    "output_tokens": 4011,
+    "raw_usage": {
+      "input_tokens": 2626,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 4011,
+      "output_tokens_details": {
+        "reasoning_tokens": 3688
+      },
+      "total_tokens": 6637
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 3688,
+    "total_tokens": 6637
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629491,
+    "created_at": 1780629423,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0451e0de1c71a8f6006a223faf89d481a28f8e128e826048a0",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0451e0de1c71a8f6006a223faffc9481a2a938ff8a570dd9c0",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is **not** a normal instruction-safety rejection; it dies during **subprog liveness analysis**:\n\n- Log ends with: `liveness analysis exceeded complexity limit (10001 calls)`\n- `processed 0 insns` confirms it failed before main per-insn verification.\n- Repeated re-analysis of `helper_g` shows call-graph/liveness explosion.\n\n### Why this explodes\n\nEach call site does:\n\n```c\nr1 = r10;\nr1 += -off;   // off varies\ncall helper_x;\n```\n\nSo every nested bpf2bpf call passes a different stack pointer state. With 50 calls per level and 7 levels, liveness keeps revisiting subprogs in many contexts and hits the 10k-call complexity cap.\n\nBut none of these functions actually read arguments; they just call the next subprog and return 0. So passing stack pointers is unnecessary.\n\n---\n\n### Smallest likely fix\n\nMake `CALL_AT` stop passing stack pointers; pass a simple constant arg (or no arg setup).  \nSafest minimal edit: set `r1 = 0` before each call.\n\n```diff\n-#define CALL_AT(fn, off) \"r1 = r10;\" \"r1 += -\" #off \";\" \"call \" #fn \";\"\n+#define CALL_AT(fn, off) \"r1 = 0;\" \"call \" #fn \";\"\n```\n\nThis keeps program structure intact but removes stack-liveness context explosion, which should let verifier liveness converge and pass.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0451e0de1c71a8f6006a223fef1de881a2a8d78581708a24ee",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 2626,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 4011,
+      "output_tokens_details": {
+        "reasoning_tokens": 3688
+      },
+      "total_tokens": 6637
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

@@ -1,0 +1,36 @@
+## Explanation
+
+The verifier failure occurs because the program stores an 8-byte context pointer (`r1`) at `fp-8` (occupying bytes `fp-15` through `fp-8`), then immediately writes a single byte at `fp-7`, which **overlaps** with that 8-byte slot.
+
+When the verifier sees the byte write to `fp-7`, it marks the entire `fp-8` stack slot as `mmmmmmmm` ("mixed" / partially overwritten). On the subsequent `*(u64*)(r10 -8)` load, the verifier can no longer reconstruct a pointer — it returns a plain `scalar()`. Dereferencing a scalar at instruction 4 (`r0 = *(u64 *)(r0 +8)`) is then rejected with `R0 invalid mem access 'scalar'`.
+
+## Fix
+
+Move the byte store to a non-overlapping stack slot (e.g., `fp-16`):
+
+```diff
+-	*(u8*)(r10 - 7) = r0;				\
++	*(u8*)(r10 - 16) = r0;				\
+```
+
+With this change, the 8-byte slot at `fp-8` (covering `fp-15`…`fp-8`) is no longer corrupted by the byte write, so the verifier preserves the `ctx()` type when reading it back, and the pointer dereference on the next instruction is valid.
+
+Full corrected source:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	*(u64*)(r10 - 8) = r1;				\
+	r0 = 0x23;					\
+	*(u8*)(r10 - 16) = r0;				\
+	r0 = *(u64*)(r10 - 8);				\
+	r0 = *(u64*)(r0 + 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+```

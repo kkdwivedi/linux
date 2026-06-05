@@ -1,0 +1,38 @@
+## Verifier Failure Explanation
+
+The verifier rejects the program because of a mismatch between the backup buffer size and the requested slice length in `bpf_dynptr_slice`.
+
+- `buffer` is declared as `char buffer[8]` — an 8-byte stack buffer.
+- `bpf_dynptr_slice(&ptr, 0, buffer, 9)` requests a slice of **9** bytes, using `buffer` as the fallback.
+
+The verifier checks that the backup buffer (R3, size derived from the stack slot) can accommodate the requested length (R4=9). Since the buffer is only 8 bytes but the length argument is 9, the verifier reports:
+
+```
+invalid read from stack R3 off -24+8 size 9
+R3 and R4 memory, len pair leads to invalid memory access
+```
+
+The `+8` in `off -24+8` indicates the buffer ends at offset -16 (8 bytes from -24), and a 9-byte read would overflow it.
+
+## Fix
+
+Increase the buffer size to match the requested slice length:
+
+```c
+char buffer[9] = {};
+```
+
+Or equivalently, reduce the slice length to 8:
+
+```c
+data = bpf_dynptr_slice(&ptr, 0, buffer, 8);
+```
+
+The most likely intended fix (smallest change preserving the 9-byte slice intent) is:
+
+```diff
+- char buffer[8] = {};
++ char buffer[9] = {};
+```
+
+This ensures the backup buffer is large enough for the `bpf_dynptr_slice` length argument, satisfying the verifier's memory access check.

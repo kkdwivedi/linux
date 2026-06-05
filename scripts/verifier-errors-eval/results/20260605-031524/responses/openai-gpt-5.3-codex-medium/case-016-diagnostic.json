@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier failure is a **refcount leak** on one control-flow path.\n\n### What happens\n\n- `bpf_sk_lookup_tcp()` (insn 19) returns `R0=sock_or_null` with an owned reference.\n- Right after that, your code does:\n\n```asm\nif r6 == 0 goto l1;\nexit;\n```\n\n- On the `r6 != 0` path, program exits immediately (insn 21) **without calling `bpf_sk_release()`**.\n- Verifier reports: `Unreleased reference id=2 alloc_insn=19`.\n\nSo the bug is not in lookup itself; it\u2019s the early `exit` before the release block.\n\n---\n\n### Smallest likely fix\n\nRemove that early `exit` so both branches flow into the existing `l1` block, which already does:\n\n- `if r0 == 0 goto l2;`\n- `bpf_sk_release(r0);`\n- `exit;`\n\nThat ensures all paths either have no socket or release it before exit.\n\n## Patch\n\n```diff\n@@\n \tr5 = 0;\t\t\t\t\t\t\\\n \tcall %[bpf_sk_lookup_tcp];\t\t\t\\\n \tif r6 == 0 goto l1_%=;\t\t\t\t\\\n-\texit;\t\t\t\t\t\t\\\n l1_%=:\tif r0 == 0 goto l2_%=;\t\t\t\t\\\n \tr1 = r0;\t\t\t\t\t\\\n \tcall %[bpf_sk_release];\t\t\t\t\\\n l2_%=:\texit;\t\t\t\t\t\t\\\n```\n\nThis is the minimal source-level change that should satisfy the verifier\u2019s resource lifetime check.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-medium/case-016-diagnostic.txt",
+    "case_id": "case-016",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-medium",
+    "prompt_bytes": 5484,
+    "prompt_path": "public/case-016/prompt_diagnostic.md",
+    "prompt_sha256": "26bd47d73322ec44031e7eab349344e578529fd97883aba22a22f0b6717c829d",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-medium/case-016-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "56f6fa0a-9334-434c-8ab2-b3bfc147203b",
+    "started_at": "2026-06-05T03:16:35+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0002016,
+    "input_cost_usd": 0.00117775,
+    "output_cost_usd": 0.017654,
+    "total_cost_usd": 0.01903335
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 1152,
+    "input_tokens": 1825,
+    "output_tokens": 1261,
+    "raw_usage": {
+      "input_tokens": 1825,
+      "input_tokens_details": {
+        "cached_tokens": 1152
+      },
+      "output_tokens": 1261,
+      "output_tokens_details": {
+        "reasoning_tokens": 918
+      },
+      "total_tokens": 3086
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 918,
+    "total_tokens": 3086
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629413,
+    "created_at": 1780629395,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_01c4da7c28f0bf41006a223f933e408192b5ce1ca63dfda12b",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_01c4da7c28f0bf41006a223f93c17c8192972cc35618916020",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier failure is a **refcount leak** on one control-flow path.\n\n### What happens\n\n- `bpf_sk_lookup_tcp()` (insn 19) returns `R0=sock_or_null` with an owned reference.\n- Right after that, your code does:\n\n```asm\nif r6 == 0 goto l1;\nexit;\n```\n\n- On the `r6 != 0` path, program exits immediately (insn 21) **without calling `bpf_sk_release()`**.\n- Verifier reports: `Unreleased reference id=2 alloc_insn=19`.\n\nSo the bug is not in lookup itself; it\u2019s the early `exit` before the release block.\n\n---\n\n### Smallest likely fix\n\nRemove that early `exit` so both branches flow into the existing `l1` block, which already does:\n\n- `if r0 == 0 goto l2;`\n- `bpf_sk_release(r0);`\n- `exit;`\n\nThat ensures all paths either have no socket or release it before exit.\n\n## Patch\n\n```diff\n@@\n \tr5 = 0;\t\t\t\t\t\t\\\n \tcall %[bpf_sk_lookup_tcp];\t\t\t\\\n \tif r6 == 0 goto l1_%=;\t\t\t\t\\\n-\texit;\t\t\t\t\t\t\\\n l1_%=:\tif r0 == 0 goto l2_%=;\t\t\t\t\\\n \tr1 = r0;\t\t\t\t\t\\\n \tcall %[bpf_sk_release];\t\t\t\t\\\n l2_%=:\texit;\t\t\t\t\t\t\\\n```\n\nThis is the minimal source-level change that should satisfy the verifier\u2019s resource lifetime check.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_01c4da7c28f0bf41006a223fa173e8819298de157ee7d106b9",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1825,
+      "input_tokens_details": {
+        "cached_tokens": 1152
+      },
+      "output_tokens": 1261,
+      "output_tokens_details": {
+        "reasoning_tokens": 918
+      },
+      "total_tokens": 3086
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

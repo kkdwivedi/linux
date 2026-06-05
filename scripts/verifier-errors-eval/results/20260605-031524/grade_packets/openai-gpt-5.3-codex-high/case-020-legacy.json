@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Reduce CALLS_50 fan-out or the number of helper layers.",
+    "Pass a stable non-FP-derived argument pattern when possible.",
+    "Replace the generated call tree with a simpler bounded loop or less duplicated call structure."
+  ],
+  "canonical_fix": "Reduce the number of distinct call paths or argument patterns reaching the subprograms, for example by reducing fan-out/depth, consolidating calls, or avoiding many distinct FP-offset arguments.",
+  "case_id": "case-020",
+  "category": "Verifier Limit",
+  "difficulty": "hard",
+  "expected_explanation": "The program creates an enormous number of distinct bpf2bpf call paths and frame-pointer-derived argument patterns. Liveness analysis exceeds its complexity limit while recomputing subprogram liveness across those paths.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-020-legacy.txt",
+    "case_id": "case-020",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 6158,
+    "prompt_path": "public/case-020/prompt_legacy.md",
+    "prompt_sha256": "cecfa6936349490d4b7bd2b0131df3ba133333894cfcdcc4438f6f6f0196b689",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-020-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "4e2e93ec-7b8e-4f24-acb7-0cfbc93b2f28",
+    "started_at": "2026-06-05T03:17:03+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "The failure is **not** a normal instruction-safety rejection; it dies during **subprog liveness analysis**:\n\n- Log ends with: `liveness analysis exceeded complexity limit (10001 calls)`\n- `processed 0 insns` confirms it failed before main per-insn verification.\n- Repeated re-analysis of `helper_g` shows call-graph/liveness explosion.\n\n### Why this explodes\n\nEach call site does:\n\n```c\nr1 = r10;\nr1 += -off;   // off varies\ncall helper_x;\n```\n\nSo every nested bpf2bpf call passes a different stack pointer state. With 50 calls per level and 7 levels, liveness keeps revisiting subprogs in many contexts and hits the 10k-call complexity cap.\n\nBut none of these functions actually read arguments; they just call the next subprog and return 0. So passing stack pointers is unnecessary.\n\n---\n\n### Smallest likely fix\n\nMake `CALL_AT` stop passing stack pointers; pass a simple constant arg (or no arg setup).  \nSafest minimal edit: set `r1 = 0` before each call.\n\n```diff\n-#define CALL_AT(fn, off) \"r1 = r10;\" \"r1 += -\" #off \";\" \"call \" #fn \";\"\n+#define CALL_AT(fn, off) \"r1 = 0;\" \"call \" #fn \";\"\n```\n\nThis keeps program structure intact but removes stack-liveness context explosion, which should let verifier liveness converge and pass.",
+  "must_mention": [
+    "The failure is verifier liveness complexity, not runtime recursion",
+    "Many call paths or distinct FP offsets drive the limit",
+    "The fix is to simplify the call/argument pattern"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only increases a runtime loop bound",
+    "Adds packet or memory bounds checks",
+    "Suggests releasing a resource"
+  ]
+}

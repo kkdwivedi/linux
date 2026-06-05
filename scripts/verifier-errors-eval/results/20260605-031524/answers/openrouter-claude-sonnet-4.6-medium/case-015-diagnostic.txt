@@ -1,0 +1,29 @@
+## Explanation
+
+After calling `helper_a(sk, 0)` → `helper_b` → `bpf_skb_pull_data`, the verifier invalidates **all packet data pointers** because `bpf_skb_pull_data` can reallocate/move packet data in memory. At that point `R7` (which holds `p`, the old `sk->data` pointer) becomes a plain scalar, so the subsequent `*p = 42` dereference fails.
+
+The fix is to **reload `sk->data` into `p` and re-validate the bounds** after the helper call, before dereferencing the pointer.
+
+## Patch
+
+```c
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	int *p = (void *)(long)sk->data;
+
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	helper_a(sk, 0);
+
+	/* Reload and re-validate: bpf_skb_pull_data may have moved packet data */
+	p = (void *)(long)sk->data;
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+After the helper call, `p` is reloaded from `sk->data` (giving the verifier a fresh `pkt()` pointer) and the bounds check `(void *)(p + 1) > (void *)(long)sk->data_end` is repeated, which makes `p` a validated `pkt(r=4)` pointer again. The verifier then accepts the `*p = 42` store.

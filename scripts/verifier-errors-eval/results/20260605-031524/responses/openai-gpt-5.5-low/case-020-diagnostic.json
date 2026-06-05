@@ -1,0 +1,130 @@
+{
+  "answer_text": "The failure is not due to an invalid instruction or unsafe memory access. The program is valid in principle, but it creates an enormous BPF-to-BPF call fan-out.\n\nEach function calls the next one 50 times:\n\n```c\nentry -> helper_a -> helper_b -> ... -> helper_g\n```\n\nThere are 7 call levels before reaching `helper_g`, so the verifier can end up considering an enormous number of distinct call paths, roughly:\n\n```text\n50^7\n```\n\nEach call also passes a different stack-derived value in `r1`:\n\n```asm\nr1 = r10;\nr1 += -8;\ncall helper_x;\n...\nr1 = r10;\nr1 += -80;\ncall helper_x;\n```\n\nEven though the callees do not actually use `r1`, the verifier still has to perform liveness propagation through those call paths. The log shows repeated re-analysis of `helper_g` until the verifier hits:\n\n```text\nliveness analysis exceeded complexity limit (10001 calls)\n```\n\nSo the verifier rejects the program because the liveness-analysis complexity limit is exceeded.\n\nThe smallest reliable source-level fix is to reduce the fan-out. Since the limit is 10001, keeping 50 calls per level is far too much. A uniform fan-out of 3 gives:\n\n```text\n3^7 = 2187\n```\n\nwhich should stay below the liveness limit. A fan-out of 4 would already be:\n\n```text\n4^7 = 16384\n```\n\nwhich is likely still too high.\n\nA minimal patch is therefore to redefine `CALLS_50()` to emit only three calls.\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..1111111 100644\n--- a/case.c\n+++ b/case.c\n@@ -5,7 +5,7 @@\n #define CALLS_10(fn) \\\n \tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n \tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n+#define CALLS_50(fn) CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)\n \n __naked __noinline __used\n static unsigned long helper_g(void)\n```\n\nThis keeps the structure of the test intact \u2014 nested BPF-to-BPF calls with different stack-pointer arguments \u2014 but reduces the number of distinct call paths enough that the verifier should no longer exceed its liveness-analysis limit.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-low/case-020-diagnostic.txt",
+    "case_id": "case-020",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-low",
+    "prompt_bytes": 4110,
+    "prompt_path": "public/case-020/prompt_diagnostic.md",
+    "prompt_sha256": "cb7344658f86bd080c64c73a9c8ee3095a7de5b045356c00872dce60afb5bfb8",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-low/case-020-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "low"
+    },
+    "run_id": "ac6a3422-365e-4bdc-8076-2a736dae0aaf",
+    "started_at": "2026-06-05T03:15:34+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00724,
+    "output_cost_usd": 0.04941,
+    "total_cost_usd": 0.056650000000000006
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1448,
+    "output_tokens": 1647,
+    "raw_usage": {
+      "input_tokens": 1448,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1647,
+      "output_tokens_details": {
+        "reasoning_tokens": 1034
+      },
+      "total_tokens": 3095
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 1034,
+    "total_tokens": 3095
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629376,
+    "created_at": 1780629334,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0d97a4097ca1d474006a223f56bfb8819fa0002278bff878b1",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0d97a4097ca1d474006a223f5753bc819f85476f63430dbe1a",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is not due to an invalid instruction or unsafe memory access. The program is valid in principle, but it creates an enormous BPF-to-BPF call fan-out.\n\nEach function calls the next one 50 times:\n\n```c\nentry -> helper_a -> helper_b -> ... -> helper_g\n```\n\nThere are 7 call levels before reaching `helper_g`, so the verifier can end up considering an enormous number of distinct call paths, roughly:\n\n```text\n50^7\n```\n\nEach call also passes a different stack-derived value in `r1`:\n\n```asm\nr1 = r10;\nr1 += -8;\ncall helper_x;\n...\nr1 = r10;\nr1 += -80;\ncall helper_x;\n```\n\nEven though the callees do not actually use `r1`, the verifier still has to perform liveness propagation through those call paths. The log shows repeated re-analysis of `helper_g` until the verifier hits:\n\n```text\nliveness analysis exceeded complexity limit (10001 calls)\n```\n\nSo the verifier rejects the program because the liveness-analysis complexity limit is exceeded.\n\nThe smallest reliable source-level fix is to reduce the fan-out. Since the limit is 10001, keeping 50 calls per level is far too much. A uniform fan-out of 3 gives:\n\n```text\n3^7 = 2187\n```\n\nwhich should stay below the liveness limit. A fan-out of 4 would already be:\n\n```text\n4^7 = 16384\n```\n\nwhich is likely still too high.\n\nA minimal patch is therefore to redefine `CALLS_50()` to emit only three calls.\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..1111111 100644\n--- a/case.c\n+++ b/case.c\n@@ -5,7 +5,7 @@\n #define CALLS_10(fn) \\\n \tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n \tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n+#define CALLS_50(fn) CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)\n \n __naked __noinline __used\n static unsigned long helper_g(void)\n```\n\nThis keeps the structure of the test intact \u2014 nested BPF-to-BPF calls with different stack-pointer arguments \u2014 but reduces the number of distinct call paths enough that the verifier should no longer exceed its liveness-analysis limit.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0d97a4097ca1d474006a223f769204819f92e710d2672e1342",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "low",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1448,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1647,
+      "output_tokens_details": {
+        "reasoning_tokens": 1034
+      },
+      "total_tokens": 3095
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

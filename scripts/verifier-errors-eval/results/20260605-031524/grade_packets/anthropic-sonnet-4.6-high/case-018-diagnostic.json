@@ -1,0 +1,67 @@
+{
+  "acceptable_fixes": [
+    "Swap the two unlock calls on the success path.",
+    "Avoid taking lock_b while lock_a is still held if nesting is unnecessary."
+  ],
+  "canonical_fix": "On the path where both locks are held, call bpf_res_spin_unlock(&lock_b) before bpf_res_spin_unlock(&lock_a).",
+  "case_id": "case-018",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program acquires lock_a and then lock_b, but releases lock_a before lock_b on the success path. Nested resource spin locks must be unlocked in last-in, first-out order.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-high/case-018-diagnostic.txt",
+    "case_id": "case-018",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-high",
+    "prompt_bytes": 2550,
+    "prompt_path": "public/case-018/prompt_diagnostic.md",
+    "prompt_sha256": "b2c0e6d8199078791c9358d84b560ed1081e0fd58d1a492ad2d0272f131fa115",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-high/case-018-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "9cb13830-7e44-42d4-a9ed-7f7a8ffaaa14",
+    "started_at": "2026-06-05T04:17:51+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation of the Failure\n\nThe verifier enforces **LIFO (last-in, first-out)** ordering for `bpf_res_spin_lock`/`bpf_res_spin_unlock` pairs. Looking at the verifier log's generated instructions:\n\n```\ninsn 6:  call bpf_res_spin_lock(&lock_b)   \u2190 lock_b acquired (last)\ninsn 7:  w6 = w0                           \u2190 save result\ninsn 8-9: r1 = &lock_a\ninsn 10: call bpf_res_spin_unlock(&lock_a) \u2190 UNLOCK lock_a FIRST \u2192 ERROR\ninsn 11: if w6 != 0 goto ...               \u2190 then check lock_b result\n```\n\nThe compiler optimized the code by **hoisting** the common `bpf_res_spin_unlock(&lock_a)` call (which appeared in both the error-path and the fall-through path) to *before* the conditional check on lock_b's return value. The result is that `lock_a` is unlocked while `lock_b` is still the most recently acquired lock \u2014 a LIFO violation.\n\nThe root cause in the source is that the success-path unlocks are in the wrong order:\n```c\nbpf_res_spin_unlock(&lock_a);  // acquired FIRST \u2014 must be released LAST\nbpf_res_spin_unlock(&lock_b);  // acquired SECOND \u2014 must be released FIRST\n```\n\nBecause `unlock(&lock_a)` appears identically in both the `if` body and the fall-through, the compiler hoists it unconditionally.\n\n## Fix\n\nSwap the unlock order in the success path to LIFO order (`lock_b` first, then `lock_a`). This also prevents the compiler from hoisting `unlock(&lock_a)` before `unlock(&lock_b)`.\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -12,7 +12,7 @@ int entry(struct __sk_buff *ctx)\n \t\treturn 0;\n \t}\n-\tbpf_res_spin_unlock(&lock_a);\n \tbpf_res_spin_unlock(&lock_b);\n+\tbpf_res_spin_unlock(&lock_a);\n \treturn 0;\n }\n```\n\n### Result\n\nWith this change the code correctly follows LIFO in both paths:\n- **Error path** (`lock_b` failed \u2192 not held): only `lock_a` was acquired, so `unlock(&lock_a)` is correct.\n- **Success path**: `lock_b` was acquired last, so `unlock(&lock_b)` \u2192 `unlock(&lock_a)` is correct LIFO order.\n\nBecause the two occurrences of `unlock(&lock_a)` now appear in *different relative positions* (before return in the error path vs. *after* `unlock(&lock_b)` in the success path), the compiler cannot hoist them to a common location before the branch, eliminating the verifier error.",
+  "must_mention": [
+    "lock_b was acquired after lock_a",
+    "Unlock order must be LIFO",
+    "The success path unlocks the wrong lock first"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Changes only the error path where lock_b acquisition fails",
+    "Drops one unlock and leaks a held lock",
+    "Confuses spin lock order with IRQ flag variable order"
+  ]
+}

@@ -1,0 +1,72 @@
+The failure is caused by `slice_len` being a mutable global variable.
+
+Although it is initialized to `sizeof(struct ethhdr)`, it lives in `.data`, so the verifier cannot treat it as the constant value `14`. In the log:
+
+```text
+11: r4 = *(u32 *)(r1 +0)
+R4=scalar(smin=0,smax=umax=0xffffffff)
+```
+
+`R4` is the fourth argument to `bpf_dynptr_slice()` — the buffer length. The verifier sees it as an arbitrary `u32`, from `0` to `UINT_MAX`.
+
+But the third argument is:
+
+```c
+buffer
+```
+
+which is only:
+
+```c
+char buffer[sizeof(*hdr)];
+```
+
+i.e. 14 bytes on the stack.
+
+So the helper call effectively looks to the verifier like:
+
+```c
+bpf_dynptr_slice(&ptr, 0, stack_buffer_14_bytes, unknown_len_up_to_UINT_MAX);
+```
+
+That violates the helper contract: the memory/length pair must describe memory that is valid for the full requested length. Since `slice_len` might be larger than the stack buffer, verification fails.
+
+The smallest robust fix is to copy `slice_len` into a local variable, bound-check it against the stack buffer size, and pass that checked local variable to the helper.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -14,13 +14,17 @@ SEC("?tc")
+ int entry(struct __sk_buff *skb)
+ {
+ 	struct bpf_dynptr ptr;
+ 	struct ethhdr *hdr;
+ 	char buffer[sizeof(*hdr)] = {};
++	__u32 len = slice_len;
+ 
+ 	bpf_dynptr_from_skb(skb, 0, &ptr);
+ 
+-	hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
++	if (len > sizeof(buffer))
++		return SK_DROP;
++
++	hdr = bpf_dynptr_slice(&ptr, 0, buffer, len);
+ 	if (!hdr)
+ 		return SK_DROP;
+ 
+ 	return SK_PASS;
+ }
+```
+
+Why this should satisfy the verifier:
+
+- `len` is loaded once from the mutable global.
+- The branch `if (len > sizeof(buffer)) return SK_DROP;` constrains the surviving path to `len <= 14`.
+- `buffer` is a 14-byte initialized stack object.
+- Therefore the verifier can prove that the `(buffer, len)` memory/length pair is valid for `bpf_dynptr_slice()`.
+
+An even smaller semantic change would be to replace `slice_len` with `sizeof(buffer)` directly, but if the test intentionally wants to keep `slice_len` as a runtime global, the bounds-check version is the appropriate verifier-friendly fix.

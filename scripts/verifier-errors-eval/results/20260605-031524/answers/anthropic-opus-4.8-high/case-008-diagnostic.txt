@@ -1,0 +1,24 @@
+## Explanation
+
+`bpf_dynptr_slice(&ptr, 0, buffer, 9)` is called with:
+- R3 = `buffer`, a local stack array of **8 bytes**
+- R4 = **9**, the requested length
+
+`bpf_dynptr_slice` treats R3/R4 as a memory/length pair. When the requested data does not lie contiguously in the dynptr's backing memory, the helper copies into the supplied `buffer`, so `buffer` must be at least as large as the length argument. Here you ask for 9 bytes but `buffer` is only 8 bytes:
+
+```
+invalid read from stack R3 off -24+8 size 9
+```
+
+The verifier sees the read would extend one byte past the end of the 8‑byte stack object (`fp-24 .. fp-16` is 8 bytes), so it rejects the call.
+
+## Fix
+
+Make the length match (or not exceed) the size of `buffer`. The smallest change is to request 8 bytes instead of 9:
+
+```c
+-	data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
++	data = bpf_dynptr_slice(&ptr, 0, buffer, 8);
+```
+
+Alternatively, enlarge the buffer to at least 9 bytes (e.g. `char buffer[16] = {};`). Either way the paired length stays within the bounds of the backing stack object, satisfying the verifier's memory/length contract.

@@ -1,0 +1,18 @@
+The verifier error "bpf_res_spin_unlock cannot be out of order" occurs because spin locks must be unlocked in the reverse order of acquisition. The program acquires `lock_a` first, then `lock_b`, but unlocks `lock_a` before `lock_b` in the success path. This violates the verifier's requirement for strict LIFO (last-in-first-out) ordering.
+
+**Fix:** Swap the two unlock calls in the success path to release `lock_b` before `lock_a`. The error path (where `lock_b` fails) already correctly unlocks only `lock_a`.
+
+**Patch:**
+```diff
+--- original.c
++++ fixed.c
+@@ -9,7 +9,7 @@ int entry(struct __sk_buff *ctx)
+ 		bpf_res_spin_unlock(&lock_a);
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+ 	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```

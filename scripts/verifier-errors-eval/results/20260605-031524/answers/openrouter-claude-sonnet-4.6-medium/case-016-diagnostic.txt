@@ -1,0 +1,68 @@
+## Verifier Failure Analysis
+
+The problem is a **socket reference leak** on one exit path:
+
+1. `bpf_sk_lookup_tcp` acquires a socket reference (id=2) and returns it in `r0`.
+2. At instruction 20: `if r6 == 0 goto l1` — when `r6 != 0` (mark is non-zero), the branch is **not taken**.
+3. At instruction 21: `exit` — the program exits with the socket reference still held (never released).
+
+The path when `r6 != 0` goes directly to `exit` without checking `r0` or calling `bpf_sk_release`, causing the resource lifetime violation.
+
+## Root Cause
+
+The early-exit logic:
+```asm
+if r6 == 0 goto l1_%=;   # skip early-exit if mark is 0
+exit;                      # BUG: exits without releasing socket from lookup
+l1_%=: if r0 == 0 goto l2_%=;
+r1 = r0;
+call %[bpf_sk_release];
+l2_%=: exit;
+```
+Both branches (r6 == 0 and r6 != 0) ultimately need the same cleanup: release the socket if non-null, then exit. The `r6`-based early exit is redundant and skips the release.
+
+## Fix
+
+Remove the incorrect early-exit branch (`if r6 == 0 goto l1; exit;`) and eliminate the now-unused `l1` label, letting all paths fall through to the proper socket release:
+
+```diff
+-	if r6 == 0 goto l1_%=;				\
+-	exit;						\
+-l1_%=:	if r0 == 0 goto l2_%=;				\
++	if r0 == 0 goto l2_%=;				\
+```
+
+### Complete fixed inline asm:
+
+```c
+	asm volatile ("					\
+	r2 = *(u32*)(r1 + %[data]);			\
+	r3 = *(u32*)(r1 + %[data_end]);			\
+	r0 = r2;					\
+	r0 += 16;					\
+	if r0 <= r3 goto l0_%=;				\
+	exit;						\
+l0_%=:	r6 = *(u32*)(r2 + %[mark]);			\
+	r2 = 0;						\
+	*(u32*)(r10 -8) = r2;				\
+	*(u64*)(r10 -16) = r2;				\
+	*(u64*)(r10 -24) = r2;				\
+	*(u64*)(r10 -32) = r2;				\
+	*(u64*)(r10 -40) = r2;				\
+	*(u64*)(r10 -48) = r2;				\
+	r2 = r10;					\
+	r2 += -48;					\
+	r3 = 36;					\
+	r4 = 0;						\
+	r5 = 0;						\
+	call %[bpf_sk_lookup_tcp];			\
+	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+"	:
+```
+
+Now every code path through the program either:
+- Never acquires a socket (early `exit` before the call, when packet is too short), or  
+- Acquires a socket via `bpf_sk_lookup_tcp` and then properly releases it (if non-null) before exiting.

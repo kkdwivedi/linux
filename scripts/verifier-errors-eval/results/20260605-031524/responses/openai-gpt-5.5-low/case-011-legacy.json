@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier failure is a reference leak.\n\n`bpf_ringbuf_reserve_dynptr()` creates a ringbuf dynptr reference that must be released on every exit path, either with:\n\n- `bpf_ringbuf_submit_dynptr()`, or\n- `bpf_ringbuf_discard_dynptr()`.\n\nYour program reserves two dynptrs:\n\n```c\nbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\nbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n```\n\nOn the `!sample` path, both are discarded:\n\n```c\nbpf_ringbuf_discard_dynptr(&ptr1, 0);\nbpf_ringbuf_discard_dynptr(&ptr2, 0);\nreturn 0;\n```\n\nBut on the success path, only `ptr1` is submitted:\n\n```c\nbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\nreturn 0;\n```\n\n`ptr2` remains unreleased. That matches the verifier error:\n\n```text\nUnreleased reference id=3 alloc_insn=14\nBPF_EXIT instruction in main prog would lead to reference leak\n```\n\n`alloc_insn=14` is the second `bpf_ringbuf_reserve_dynptr()` call, i.e. `ptr2`.\n\nThe smallest fix is to release `ptr2` on the success path as well. Since the program never uses `ptr2`, discard it before returning.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..1111111 100644\n--- a/case.c\n+++ b/case.c\n@@ -26,6 +26,7 @@ int entry(void *ctx)\n \t}\n \n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n \n \treturn 0;\n }\n```\n\nAlternatively, if `ptr2` is not needed for the test, the even smaller logical cleanup is to remove the second reservation entirely. But if the test intentionally wants two dynptr reservations, then discarding `ptr2` on the success path is the minimal verifier-satisfying source change.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-low/case-011-legacy.txt",
+    "case_id": "case-011",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-low",
+    "prompt_bytes": 3372,
+    "prompt_path": "public/case-011/prompt_legacy.md",
+    "prompt_sha256": "762b0c608dbde5c1090172be3b10e7e17988b9698301148bebea627aedc1c8f8",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-low/case-011-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "low"
+    },
+    "run_id": "b7ea4b89-5a07-4852-8405-e75a3c7e931f",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00663,
+    "output_cost_usd": 0.02328,
+    "total_cost_usd": 0.02991
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1326,
+    "output_tokens": 776,
+    "raw_usage": {
+      "input_tokens": 1326,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 776,
+      "output_tokens_details": {
+        "reasoning_tokens": 296
+      },
+      "total_tokens": 2102
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 296,
+    "total_tokens": 2102
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629342,
+    "created_at": 1780629324,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0833db1a91b83b98006a223f4ce7b4819c8ba6fac8618d1a2d",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0833db1a91b83b98006a223f4dc3b4819c9e0419dbde828c7c",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier failure is a reference leak.\n\n`bpf_ringbuf_reserve_dynptr()` creates a ringbuf dynptr reference that must be released on every exit path, either with:\n\n- `bpf_ringbuf_submit_dynptr()`, or\n- `bpf_ringbuf_discard_dynptr()`.\n\nYour program reserves two dynptrs:\n\n```c\nbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);\nbpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);\n```\n\nOn the `!sample` path, both are discarded:\n\n```c\nbpf_ringbuf_discard_dynptr(&ptr1, 0);\nbpf_ringbuf_discard_dynptr(&ptr2, 0);\nreturn 0;\n```\n\nBut on the success path, only `ptr1` is submitted:\n\n```c\nbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\nreturn 0;\n```\n\n`ptr2` remains unreleased. That matches the verifier error:\n\n```text\nUnreleased reference id=3 alloc_insn=14\nBPF_EXIT instruction in main prog would lead to reference leak\n```\n\n`alloc_insn=14` is the second `bpf_ringbuf_reserve_dynptr()` call, i.e. `ptr2`.\n\nThe smallest fix is to release `ptr2` on the success path as well. Since the program never uses `ptr2`, discard it before returning.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..1111111 100644\n--- a/case.c\n+++ b/case.c\n@@ -26,6 +26,7 @@ int entry(void *ctx)\n \t}\n \n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n \n \treturn 0;\n }\n```\n\nAlternatively, if `ptr2` is not needed for the test, the even smaller logical cleanup is to remove the second reservation entirely. But if the test intentionally wants two dynptr reservations, then discarding `ptr2` on the success path is the minimal verifier-satisfying source change.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0833db1a91b83b98006a223f569a38819cbc45d35e7e3b0c70",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "low",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1326,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 776,
+      "output_tokens_details": {
+        "reasoning_tokens": 296
+      },
+      "total_tokens": 2102
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

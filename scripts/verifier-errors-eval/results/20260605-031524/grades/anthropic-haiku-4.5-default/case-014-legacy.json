@@ -1,0 +1,36 @@
+{
+  "grade": {
+    "graded_at": "2026-06-05T04:55:01+00:00",
+    "graded_by": "local-codex",
+    "missing": [],
+    "problems": [
+      "Correct cause",
+      "but concrete bounds check is off by one and verifier-insufficient."
+    ],
+    "repair_summary": "Manual audit: bound check if r3 > 48 leaves offset 48 reachable for a 1-byte access in a 48-byte object.",
+    "score": 2,
+    "strengths": [],
+    "success": false,
+    "verdict": "Manual audit: bound check if r3 > 48 leaves offset 48 reachable for a 1-byte access in a 48-byte object."
+  },
+  "meta": {
+    "answer_text_path": "answers/anthropic-haiku-4.5-default/case-014-legacy.txt",
+    "case_id": "case-014",
+    "model": "claude-haiku-4-5",
+    "profile": "anthropic-haiku-4.5-default",
+    "prompt_bytes": 2516,
+    "prompt_path": "public/case-014/prompt_legacy.md",
+    "prompt_sha256": "5f09191198944721d81d22840eb8d1d26f07b6ac8add806cab2dfef9c5fd1103",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-haiku-4.5-default/case-014-legacy.json",
+    "reasoning_profile": {
+      "note": "Haiku 4.5 has extended thinking, but the Anthropic effort parameter is not documented for Haiku.",
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "13fb497b-fd2b-4cc6-be4d-56dc384cbbcf",
+    "started_at": "2026-06-05T04:22:44+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  }
+}

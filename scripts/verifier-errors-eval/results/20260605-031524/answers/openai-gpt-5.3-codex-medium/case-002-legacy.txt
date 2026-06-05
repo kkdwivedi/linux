@@ -1,0 +1,32 @@
+The verifier error is a classic **refcounted kptr leak**:
+
+- `bpf_cpumask_create()` returns a ref-tracked object (`trusted_ptr_or_null_bpf_cpumask`, `id=2`).
+- In `make_object()`, the failure path correctly releases it.
+- But on the success path, `make_object()` returns the live reference.
+- In `entry()`, that returned `cpumask` is never released before `exit`.
+
+So verifier reports:
+
+- `Unreleased reference id=2 alloc_insn=0`
+- `BPF_EXIT instruction in main prog would lead to reference leak`
+
+### Smallest fix
+
+Release the object in `entry()` when non-NULL.
+
+```diff
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+ 	struct bpf_cpumask *cpumask;
+ 
+ 	cpumask = make_object();
+ 	__sink(cpumask);
++	if (cpumask)
++		bpf_cpumask_release(cpumask);
+ 
+ 	return 0;
+ }
+```
+
+This balances the reference on all paths and should satisfy the verifier.

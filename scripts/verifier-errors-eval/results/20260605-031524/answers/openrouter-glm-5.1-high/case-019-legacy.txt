@@ -1,0 +1,33 @@
+## Verifier Failure Explanation
+
+The BPF verifier rejects the program with:
+
+```
+recursive call from helper_a() to helper_a()
+```
+
+The `helper_a` function contains `call helper_a` — a direct recursive call. The BPF verifier **prohibits recursion** entirely, as it cannot bound the stack depth of recursive programs. This is a hard rejection at the call-graph validation stage, before any instruction-level analysis.
+
+## Fix
+
+Replace the recursive call with a **backward jump** (loop). The original logic increments `r1` and, if `r1 < 4`, recurses to increment again. A simple loop achieves the same result without recursion:
+
+```c
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l1_%=:	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l1_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+**What changed:**
+- Added label `l1_%=:` before `r1 += 1;` as the loop target.
+- Changed `if r1 < 4 goto l0_%=;` to `if r1 < 4 goto l1_%=;` so it loops back instead of falling through to a recursive call.
+- Removed the `l0_%=:` label, the `call helper_a;`, and the second `exit;`.
+
+The loop is bounded (r1 starts at 0 from the caller and increments by 1 each iteration until r1 ≥ 4), so the verifier will accept it. The functional result is identical: r1 (and r0) end up at 4.

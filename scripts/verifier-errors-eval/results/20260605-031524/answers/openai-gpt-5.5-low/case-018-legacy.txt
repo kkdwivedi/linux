@@ -1,0 +1,78 @@
+The verifier failure is caused by unlocking the resource spin locks in the wrong order.
+
+The program does:
+
+```c
+bpf_res_spin_lock(&lock_a);
+bpf_res_spin_lock(&lock_b);
+
+bpf_res_spin_unlock(&lock_a);
+bpf_res_spin_unlock(&lock_b);
+```
+
+That is FIFO unlock order. The verifier expects resource locks to be released in strict LIFO order: the most recently acquired lock must be unlocked first.
+
+So after acquiring:
+
+1. `lock_a`
+2. `lock_b`
+
+the valid release order is:
+
+1. `lock_b`
+2. `lock_a`
+
+The verifier log shows the failure exactly at the first unlock after both locks are held:
+
+```text
+10: call bpf_res_spin_unlock
+bpf_res_spin_unlock cannot be out of order
+```
+
+At that point, the verifier knows `lock_b` is the innermost/currently-top resource lock, but the program tries to unlock `lock_a`.
+
+Smallest fix: swap the final two unlock calls.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -13,8 +13,8 @@ int entry(struct __sk_buff *ctx)
+ 		bpf_res_spin_unlock(&lock_a);
+ 		return 0;
+ 	}
+-	bpf_res_spin_unlock(&lock_a);
+ 	bpf_res_spin_unlock(&lock_b);
++	bpf_res_spin_unlock(&lock_a);
+ 	return 0;
+ }
+```
+
+Resulting program:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+struct bpf_res_spin_lock lock_a __hidden SEC(".data.A");
+struct bpf_res_spin_lock lock_b __hidden SEC(".data.B");
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```
+
+The failure branch for `lock_b` is already correct: if acquiring `lock_b` fails, only `lock_a` is held, so unlocking `lock_a` there is valid.

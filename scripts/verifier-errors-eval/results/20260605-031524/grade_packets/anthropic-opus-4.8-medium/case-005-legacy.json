@@ -1,0 +1,67 @@
+{
+  "acceptable_fixes": [
+    "Call bpf_preempt_enable() before bpf_copy_from_user and avoid re-entering the critical section unnecessarily.",
+    "Use a non-sleepable helper if one is semantically appropriate."
+  ],
+  "canonical_fix": "Move bpf_copy_from_user outside the bpf_preempt_disable/bpf_preempt_enable region, or re-enable preemption before calling it.",
+  "case_id": "case-005",
+  "category": "Execution Context Safety",
+  "difficulty": "easy",
+  "expected_explanation": "bpf_copy_from_user is sleepable, but the program calls it while preemption is disabled. The verifier rejects sleepable operations inside a non-preemptible region.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-005-legacy.txt",
+    "case_id": "case-005",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 1399,
+    "prompt_path": "public/case-005/prompt_legacy.md",
+    "prompt_sha256": "09ecaba7e5e77a1dc6657b7ce0f5a2f8e64d1673f8b7b61af5daff8054d00e3f",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-005-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "cf7b5c0c-3665-4b1b-b6e6-c064e500efd2",
+    "started_at": "2026-06-05T03:17:12+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Explanation\n\nThe program runs in a sleepable context (`fentry.s/`). Inside it you bracket a call with `bpf_preempt_disable()` / `bpf_preempt_enable()`, which marks the code in between as **non-preemptible**.\n\n`bpf_copy_from_user()` is a **sleepable** helper \u2014 it may fault/sleep when reading user memory. The verifier forbids calling any sleepable helper while preemption is disabled, hence:\n\n```\nsleepable helper bpf_copy_from_user#148 in non-preemptible region\n```\n\n(The earlier line `arg#0 reference type('UNKNOWN ') size cannot be determined: -22` is unrelated noise from BTF arg checking and is not the failure point.)\n\n## Fix\n\nThe sleepable copy must happen outside the preempt-disabled region. The smallest source-level change is to move the `bpf_copy_from_user()` call out from between `bpf_preempt_disable()`/`bpf_preempt_enable()`:\n\n```c\nSEC(\"?fentry.s/sys_getpgid\")\nint entry(void *ctx)\n{\n\tu32 data;\n\n\tbpf_preempt_disable();\n\tbpf_preempt_enable();\n\n\tbpf_copy_from_user(&data, sizeof(data), NULL);\n\treturn 0;\n}\n```\n\nOr, if the intent is just to exercise something inside the non-preemptible region, replace the sleepable helper with a non-sleepable one (e.g. `bpf_probe_read_user(&data, sizeof(data), NULL)`), which is permitted in a non-preemptible region.\n\nEither change removes the \"sleepable helper in non-preemptible region\" rejection and lets the program verify.",
+  "must_mention": [
+    "The helper may sleep",
+    "Preemption is disabled at the call site",
+    "The critical section must not contain sleepable operations"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks the NULL source pointer",
+    "Removes bpf_preempt_enable and leaves preemption disabled",
+    "Moves the helper deeper into the disabled region"
+  ]
+}

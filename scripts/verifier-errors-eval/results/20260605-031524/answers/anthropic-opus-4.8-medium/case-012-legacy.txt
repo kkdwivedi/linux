@@ -1,0 +1,46 @@
+## What the verifier is complaining about
+
+There are two related things in the log, but the fatal one is the last line:
+
+```
+sleepable global function helper_a() called in IRQ-disabled region
+```
+
+`helper_a()` is a **global** (`__noinline`, non-`static`, externally visible) function. Global subprograms are verified independently, and the verifier propagates a "sleepable" property to them: because `helper_a()` (transitively) calls `bpf_copy_from_user()`, which may sleep, `helper_a()` is marked as a *sleepable* global function.
+
+`bpf_local_irq_save()` / `bpf_local_irq_restore()` open a non-preemptible, IRQ-disabled critical section. Inside such a region you are **not allowed to call anything that may sleep** — neither sleepable helpers/kfuncs nor a sleepable global function. So the call
+
+```c
+bpf_local_irq_save(&flags);
+helper_a(0);          /* <-- sleepable global func in IRQ-disabled region */
+bpf_local_irq_restore(&flags);
+```
+
+is rejected.
+
+(The first line, `arg#0 reference type('UNKNOWN ') size cannot be determined`, comes from independently checking `helper_a` with the `NULL`/typeless argument to `bpf_copy_from_user`; it’s noise relative to the hard error, which is the IRQ-region rule.)
+
+## Smallest fix
+
+Do not invoke anything that can sleep inside the IRQ-disabled section. The minimal source change is to move the `helper_a()` call out of the `bpf_local_irq_save()`/`bpf_local_irq_restore()` window:
+
+```c
+SEC("?syscall")
+int entry(void *ctx)
+{
+	unsigned long flags;
+
+	helper_a(0);
+	bpf_local_irq_save(&flags);
+	bpf_local_irq_restore(&flags);
+	return 0;
+}
+```
+
+Now the sleepable global function is called outside the critical section, and nothing sleepable remains between save and restore, so the IRQ-region check passes.
+
+### Why other "obvious" tweaks don't help
+- Making `helper_a` `static` doesn’t fix it: it would be inlined/traced with `i == 0`, so the `if (!i)` branch is taken and `bpf_copy_from_user()` (a sleepable helper) still ends up being reachable inside the IRQ-disabled region.
+- Keeping the call inside the region but trying to dodge the branch is fragile; the only robust fix that satisfies the verifier’s rule is to keep the sleepable call outside the `irq_save`/`irq_restore` pair.
+
+If the test’s intent is specifically to exercise something *inside* the IRQ-disabled region, replace `helper_a(0)` with a non-sleepable operation; but to make this exact program pass with the smallest edit, relocating the `helper_a(0)` call before `bpf_local_irq_save()` is sufficient.

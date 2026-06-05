@@ -1,0 +1,38 @@
+## Verifier Failure Analysis
+
+**Root cause of the shown error:**
+
+The sequence stores `r1` (a ctx pointer) as a full 8-byte value at `fp-8`, which occupies the byte range **[fp-8 … fp-1]**. The next instruction then writes a single byte to `fp-7`, which *falls within that same 8-byte range*. The verifier marks the entire 8-byte slot as containing modified/unknown bytes (`mmmmmmmm`), and when the slot is reloaded at instruction 3, the ctx pointer is lost — `R0` becomes a generic `scalar()` instead of `ctx()`. Dereferencing a scalar at instruction 4 is illegal.
+
+**Secondary issue (would surface after fixing the first):**
+
+Even after restoring `R0 = ctx()`, `*(u64*)(r0 + 8)` would fail because `struct __sk_buff` offset 8 is the `mark` field (`__u32`). The socket-filter context-access checker (`bpf_skb_is_valid_access`) rejects a width-8 read for a width-4 field.
+
+## Fix
+
+Two minimal edits are required:
+
+1. Move the byte write from `r10 - 7` to `r10 - 9`, so it no longer overlaps the 8-byte ctx-pointer slot at `fp-8`.
+2. Change the context read from `*(u64*)` to `*(u32*)` to match the 4-byte `mark` field.
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -8,8 +8,8 @@ __naked void entry(void)
+ {
+ 	asm volatile ("					\
+ 	*(u64*)(r10 - 8) = r1;				\
+ 	r0 = 0x23;					\
+-	*(u8*)(r10 - 7) = r0;				\
++	*(u8*)(r10 - 9) = r0;				\
+ 	r0 = *(u64*)(r10 - 8);				\
+-	r0 = *(u64*)(r0 + 8);				\
++	r0 = *(u32*)(r0 + 8);				\
+ 	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+**Why this works:**
+- `fp-9` is outside the 8-byte slot `[fp-8 … fp-1]`, so the ctx pointer stored there remains intact; reloading `fp-8` gives `R0 = ctx()`.
+- `*(u32*)(r0 + 8)` is a valid 4-byte read of `struct __sk_buff::mark`, which `bpf_skb_is_valid_access` accepts for socket programs.

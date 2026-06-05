@@ -1,0 +1,45 @@
+The verifier error "R1 unbounded memory access" occurs because the program uses an untrusted offset from a map value to compute a memory address without bounds checking. Specifically:
+
+1. The program reads an offset value `r3` from the map value (`struct value`)
+2. It computes `r1 = r0 + r3` (where `r0` is the map value pointer)
+3. It passes `r1` to `bpf_probe_read_kernel()`
+4. Since `r3` can be up to 0xFFFFFFFF (per verifier log), this could point outside the map value's 48-byte boundary
+
+The minimal fix adds a bounds check after reading the offset but before pointer arithmetic:
+
+```c
+SEC("tracepoint")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = 0;						\
+	*(u64*)(r2 + 0) = r1;				\
+	r1 = %[map_a] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l0_%=;				\
+	r3 = *(u32*)(r0 + 0);				\
+	if r3 > 47 goto l0_%=;				\  // Bounds check added here
+	r1 = r0;					\
+	r1 += r3;					\
+	r2 = 1;						\
+	r3 = 0;						\
+	call %[bpf_probe_read_kernel];			\
+l0_%=:	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm(bpf_probe_read_kernel),
+	  __imm_addr(map_a)
+	: __clobber_all);
+}
+```
+
+Key changes:
+1. Added `if r3 > 47 goto l0_%=;` after reading the offset
+2. Uses 47 as the upper bound because:
+   - Map value size is 48 bytes (4-byte offset + 44-byte data array)
+   - We're reading 1 byte, so maximum safe offset is 47 (0-indexed)
+3. Reuses existing `l0_%=` label for clean exit on invalid offset
+
+This ensures the verifier can prove the memory access is always within bounds when `bpf_probe_read_kernel()` is called. The offset check restricts `r3` to 0-47, making `r1` point within the [map_value, map_value+47] range for safe 1-byte access.

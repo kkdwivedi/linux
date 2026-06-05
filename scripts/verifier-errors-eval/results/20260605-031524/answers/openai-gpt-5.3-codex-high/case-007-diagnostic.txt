@@ -1,0 +1,25 @@
+`bpf_dynptr_slice()` takes a `(ptr,len)` pair for the destination buffer (`R3`,`R4` here).  
+In your program:
+
+- `R3` = `buffer` on stack (14 bytes: `sizeof(struct ethhdr)`),
+- `R4` = `slice_len`, loaded from `.data` map (`case.data`), so verifier sees it as **unbounded u32**.
+
+Even though initialized to 14 in C, a non-const global is mutable at runtime, so verifier cannot assume 14.  
+That means helper could write past stack buffer, so it rejects the call.
+
+### Smallest likely fix
+
+Pass a compile-time bounded length (the actual buffer size) instead of mutable global:
+
+```diff
+@@
+-__u32 slice_len = sizeof(struct ethhdr);
++__u32 slice_len = sizeof(struct ethhdr);
+@@
+-	hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
++	hdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+```
+
+(You can also remove `slice_len` entirely afterward.)
+
+This makes `R4` a known constant (`14`), matching stack object bounds, so verifier should accept the helper call.

@@ -1,0 +1,130 @@
+{
+  "answer_text": "The program fails because it acquires two `bpf_res_spin_lock`s in this order:\n\n1. `lock_a`\n2. `lock_b`\n\nbut on the successful path it releases them in this order:\n\n1. `lock_a`\n2. `lock_b`\n\nThe verifier tracks held resource locks and requires them to be released in LIFO/reverse-acquisition order. After `lock_b` is acquired, the top currently-held lock is `lock_b`, so trying to unlock `lock_a` first is considered out-of-order:\n\n```text\n10: call bpf_res_spin_unlock\nbpf_res_spin_unlock cannot be out of order\n```\n\nThe failure is at:\n\n```c\nbpf_res_spin_unlock(&lock_a);\nbpf_res_spin_unlock(&lock_b);\n```\n\nbecause `lock_b` is still held when `lock_a` is unlocked.\n\nThe smallest fix is to swap the two unlocks on the successful path:\n\n```diff\n SEC(\"?tc\")\n int entry(struct __sk_buff *ctx)\n {\n \tif (bpf_res_spin_lock(&lock_a))\n \t\treturn 0;\n \tif (bpf_res_spin_lock(&lock_b)) {\n \t\tbpf_res_spin_unlock(&lock_a);\n \t\treturn 0;\n \t}\n-\tbpf_res_spin_unlock(&lock_a);\n \tbpf_res_spin_unlock(&lock_b);\n+\tbpf_res_spin_unlock(&lock_a);\n \treturn 0;\n }\n```\n\nWith that change, the successful path becomes:\n\n```c\nlock_a;\nlock_b;\nunlock_b;\nunlock_a;\n```\n\nwhich satisfies the verifier\u2019s required lock-release ordering. The failure path for `lock_b` remains correct because only `lock_a` is held there.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-medium/case-018-legacy.txt",
+    "case_id": "case-018",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-medium",
+    "prompt_bytes": 1656,
+    "prompt_path": "public/case-018/prompt_legacy.md",
+    "prompt_sha256": "f85594106276b08f72d5a03ad0c0892a8771dbe55514dd329b7aff0246cc5b64",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-medium/case-018-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "1fb64142-54ce-4481-b26c-9bc0ab21b9ad",
+    "started_at": "2026-06-05T03:15:43+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00326,
+    "output_cost_usd": 0.02622,
+    "total_cost_usd": 0.02948
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 652,
+    "output_tokens": 874,
+    "raw_usage": {
+      "input_tokens": 652,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 874,
+      "output_tokens_details": {
+        "reasoning_tokens": 516
+      },
+      "total_tokens": 1526
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 516,
+    "total_tokens": 1526
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629363,
+    "created_at": 1780629343,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_088cf9389bec78ef006a223f5f38288191a3bf213f8a7708eb",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_088cf9389bec78ef006a223f5ff7a08191958d1875390c4719",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The program fails because it acquires two `bpf_res_spin_lock`s in this order:\n\n1. `lock_a`\n2. `lock_b`\n\nbut on the successful path it releases them in this order:\n\n1. `lock_a`\n2. `lock_b`\n\nThe verifier tracks held resource locks and requires them to be released in LIFO/reverse-acquisition order. After `lock_b` is acquired, the top currently-held lock is `lock_b`, so trying to unlock `lock_a` first is considered out-of-order:\n\n```text\n10: call bpf_res_spin_unlock\nbpf_res_spin_unlock cannot be out of order\n```\n\nThe failure is at:\n\n```c\nbpf_res_spin_unlock(&lock_a);\nbpf_res_spin_unlock(&lock_b);\n```\n\nbecause `lock_b` is still held when `lock_a` is unlocked.\n\nThe smallest fix is to swap the two unlocks on the successful path:\n\n```diff\n SEC(\"?tc\")\n int entry(struct __sk_buff *ctx)\n {\n \tif (bpf_res_spin_lock(&lock_a))\n \t\treturn 0;\n \tif (bpf_res_spin_lock(&lock_b)) {\n \t\tbpf_res_spin_unlock(&lock_a);\n \t\treturn 0;\n \t}\n-\tbpf_res_spin_unlock(&lock_a);\n \tbpf_res_spin_unlock(&lock_b);\n+\tbpf_res_spin_unlock(&lock_a);\n \treturn 0;\n }\n```\n\nWith that change, the successful path becomes:\n\n```c\nlock_a;\nlock_b;\nunlock_b;\nunlock_a;\n```\n\nwhich satisfies the verifier\u2019s required lock-release ordering. The failure path for `lock_b` remains correct because only `lock_a` is held there.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_088cf9389bec78ef006a223f6d14148191838976539063d576",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 652,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 874,
+      "output_tokens_details": {
+        "reasoning_tokens": 516
+      },
+      "total_tokens": 1526
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

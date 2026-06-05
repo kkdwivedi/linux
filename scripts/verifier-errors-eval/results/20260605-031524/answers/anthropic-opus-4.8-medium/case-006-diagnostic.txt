@@ -1,0 +1,38 @@
+## Explanation
+
+The verifier rejects the program because `bpf_ktime_get_coarse_ns()` is **not in the allowed helper set for `BPF_PROG_TYPE_KPROBE`**.
+
+`bpf_ktime_get_coarse_ns()` is intentionally restricted: it reads a coarse timestamp that is only updated under certain conditions and is not safe/permitted from arbitrary NMI/interrupt contexts such as kprobes. The kprobe program type's helper-allow check (`kprobe_prog_func_proto`) does not expose this helper, so the call fails the policy check at load time:
+
+```
+program of this type cannot use helper bpf_ktime_get_coarse_ns#160
+```
+
+This is a program-type/helper compatibility error, not a data-flow or safety error.
+
+## Fix
+
+Use a time helper that *is* permitted for kprobe programs. `bpf_ktime_get_ns()` is allowed for tracing/kprobe program types and provides equivalent functionality.
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("kprobe")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_ns];			\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+```
+
+This is the smallest change: swap `bpf_ktime_get_coarse_ns` → `bpf_ktime_get_ns` (in both the `call` and the `__imm(...)` operand). 
+
+Alternatively, if the intent is to test `bpf_ktime_get_coarse_ns()` specifically, change the program type to one that allows it (e.g. `SEC("tc")`/`BPF_PROG_TYPE_SCHED_CLS` or a socket filter), which would satisfy the helper policy.

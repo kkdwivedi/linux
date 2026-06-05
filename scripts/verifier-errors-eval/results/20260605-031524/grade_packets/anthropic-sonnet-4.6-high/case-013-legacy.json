@@ -1,0 +1,68 @@
+{
+  "acceptable_fixes": [
+    "Lower MAX_STACK enough that the nested helper frames fit within 512 bytes.",
+    "Move large buffers out of nested helpers or reuse a smaller/shared buffer in a verifier-accepted way.",
+    "Restructure calls so helper_b and helper_c are not simultaneously on the stack with large local buffers."
+  ],
+  "canonical_fix": "Reduce stack use along the nested call chain or shorten the call chain so the combined stack depth is at or below the verifier limit.",
+  "case_id": "case-013",
+  "category": "Verifier Limit",
+  "difficulty": "medium",
+  "expected_explanation": "The call chain entry -> helper_c -> helper_b uses more than the verifier's combined call-stack depth limit. The large per-function stack buffers accumulate across nested bpf2bpf calls.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-sonnet-4.6-high/case-013-legacy.txt",
+    "case_id": "case-013",
+    "model": "claude-sonnet-4-6",
+    "profile": "anthropic-sonnet-4.6-high",
+    "prompt_bytes": 1649,
+    "prompt_path": "public/case-013/prompt_legacy.md",
+    "prompt_sha256": "4d1d466cfe05bcf610e895dd892a6a1aa50e76dc1045f63dfca8de2da264bd35",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-sonnet-4.6-high/case-013-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "3779e169-ec58-4fa9-b3ad-6b3244abdeb8",
+    "started_at": "2026-06-05T04:12:30+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Explanation of the Failure\n\nThe BPF verifier enforces a **512-byte limit on the combined stack depth** across a call chain. The error:\n\n```\ncombined stack size of 3 calls is 544. Too large\n```\n\nmeans the deepest call chain (counting 3 call instructions = 4 stack frames) exceeds 512 bytes.\n\nThe deepest chain is:\n\n```\nentry \u2192 helper_c \u2192 helper_b \u2192 helper_a\n```\n\nFrame breakdown:\n| Function   | Stack frame |\n|------------|-------------|\n| `entry`    | ~24 bytes (3 callee-saved registers: r6, r7, r8 for skb + accumulators) |\n| `helper_c` | 260 bytes (`MAX_STACK`) |\n| `helper_b` | 260 bytes (`MAX_STACK`) |\n| `helper_a` | 0 bytes (no locals) |\n| **Total**  | **544 bytes** |\n\n544 > 512 \u2192 rejected.\n\nTo stay within the limit:\n```\n24 + X + X + 0 \u2264 512  \u2192  X \u2264 244\n```\n\n## Fix\n\nReduce `MAX_STACK` from `260` to `240`, giving a comfortable margin (504 bytes total):\n\n```diff\n-#define MAX_STACK 260\n+#define MAX_STACK 240\n```\n\nWith `MAX_STACK = 240`:\n- Deepest chain: 24 + 240 + 240 + 0 = **504 bytes** \u2264 512 \u2713  \n- All other chains are shallower and also pass.",
+  "must_mention": [
+    "Combined call-chain stack depth exceeds the verifier limit",
+    "Large local buffers in nested helpers are the cause",
+    "Fix must reduce stack usage or call depth"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds bounds checks around skb fields",
+    "Changes helper return arithmetic only",
+    "Reduces stack in a helper not on the reported call chain while leaving the chain over limit"
+  ]
+}

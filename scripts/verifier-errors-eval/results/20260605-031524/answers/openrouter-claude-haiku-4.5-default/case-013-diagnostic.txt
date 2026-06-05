@@ -1,0 +1,32 @@
+## Explanation of the Verifier Failure
+
+The BPF verifier is rejecting this program because the combined stack usage across nested function calls exceeds the 512-byte limit.
+
+**Call chain analysis:**
+- `entry()` calls `helper_c()`
+- `helper_c()` calls `helper_b()`
+- `helper_b()` calls `helper_a()`
+
+**Stack usage per function:**
+- Each of `helper_a`, `helper_b`, `helper_c`, and `helper_d` allocates a `volatile char buf[MAX_STACK]` where `MAX_STACK = 260` bytes
+- The deepest call chain is: `entry` → `helper_c` (260 bytes) → `helper_b` (260 bytes) → `helper_a` (0 bytes, no local array)
+- Total: 260 + 260 + 24 (frame overhead) = 544 bytes, exceeding the 512-byte limit
+
+## Proposed Fix
+
+The simplest fix is to **reduce `MAX_STACK` from 260 to a smaller value** that keeps the combined stack within limits. Since we have 3 nested calls with ~24 bytes overhead each, we need:
+
+```
+3 * MAX_STACK + ~72 ≤ 512
+MAX_STACK ≤ 146
+```
+
+**Patch:**
+
+```c
+#define MAX_STACK 140
+```
+
+This reduces the per-function stack allocation from 260 to 140 bytes, bringing the combined stack to approximately 3×140 + 72 = 492 bytes, which is under the 512-byte limit.
+
+**Why this works:** The verifier tracks the maximum combined stack depth across all possible call chains. By reducing the buffer size in each function, we reduce the cumulative stack pressure without changing the program logic or call structure.

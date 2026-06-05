@@ -1,0 +1,23 @@
+## Explanation of the Failure
+
+The verifier validates `__noinline` functions independently of their call sites. When it validates `helper_a`, it sees the parameter `s` as `mem_or_null` — a pointer that *could* be NULL — because the callee is checked for all possible callers. Since `helper_a` immediately dereferences `s->x` without a NULL check, the verifier rejects it at instruction 10:
+
+```
+10: (61) r2 = *(u32 *)(r6 +0)
+R6 invalid mem access 'mem_or_null'
+```
+
+## Fix
+
+Add a NULL guard at the start of `helper_a` so the verifier knows the pointer is non-NULL before the dereference:
+
+```c
+__noinline int helper_a(const struct Item *s)
+{
+	if (!s)
+		return 0;
+	return bpf_get_prandom_u32() < s->x;
+}
+```
+
+After the `if (!s) return 0;` check, the verifier narrows the type of `s` from `mem_or_null` to a valid `mem` pointer, allowing the subsequent dereference `s->x` to pass verification.

@@ -1,0 +1,35 @@
+The verifier is rejecting this because of **context pointer arithmetic**:
+
+```c
+helper_c(val, skb + 1)
+```
+
+`skb` is a `PTR_TO_CTX` (`struct __sk_buff *`).  
+For this pointer type, you can’t shift it (`+ 1`, which becomes `+192` bytes here) and then pass it to a function that dereferences it as a context object (`helper_c` reads `skb->ifindex`).
+
+From log:
+
+- `r6 += 192` → modified ctx pointer
+- passed as arg to `helper_c`
+- inside `helper_c`, dereference would be on modified ctx ptr
+- verifier error: `dereference of modified ctx ptr ... disallowed`
+
+So the smallest fix is to pass the **original ctx pointer** unchanged.
+
+### Minimal patch
+
+```diff
+diff --git a/case.c b/case.c
+index 1111111..2222222 100644
+--- a/case.c
++++ b/case.c
+@@ -16,7 +16,7 @@ int helper_c(int val, struct __sk_buff *skb);
+ __attribute__((noinline))
+ int helper_b(int val, struct __sk_buff *skb)
+ {
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+ }
+```
+
+That should satisfy verifier type rules for context pointers.

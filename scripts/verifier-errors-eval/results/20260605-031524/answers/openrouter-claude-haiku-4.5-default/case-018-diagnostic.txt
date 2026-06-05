@@ -1,0 +1,44 @@
+## Explanation of the Verifier Failure
+
+The BPF verifier enforces **LIFO (Last-In-First-Out) lock ordering** for resource locks. The error occurs because:
+
+1. `lock_a` is acquired first (instruction 0-2)
+2. `lock_b` is acquired second (instruction 4-6)
+3. In the error path (when `bpf_res_spin_lock(&lock_b)` succeeds), the code attempts to unlock `lock_a` (instruction 10)
+4. However, `lock_b` is still held, violating LIFO ordering
+
+The verifier requires that locks be released in reverse order of acquisition. Since `lock_b` was acquired after `lock_a`, it must be released before `lock_a`.
+
+## The Fix
+
+The smallest fix is to swap the unlock order in the error path:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+struct bpf_res_spin_lock lock_a __hidden SEC(".data.A");
+struct bpf_res_spin_lock lock_b __hidden SEC(".data.B");
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	if (bpf_res_spin_lock(&lock_a))
+		return 0;
+	if (bpf_res_spin_lock(&lock_b)) {
+		bpf_res_spin_unlock(&lock_b);
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```
+
+**Changes:**
+- Line 184 (in error path): Change `bpf_res_spin_unlock(&lock_a)` to `bpf_res_spin_unlock(&lock_b)`
+- Line 185 (in error path): Add `bpf_res_spin_unlock(&lock_a)` after
+- Lines 188-189 (success path): Swap the unlock order to match LIFO (unlock `lock_b` first, then `lock_a`)
+
+This ensures locks are always released in reverse order of acquisition, satisfying the verifier's resource lifetime safety requirements.

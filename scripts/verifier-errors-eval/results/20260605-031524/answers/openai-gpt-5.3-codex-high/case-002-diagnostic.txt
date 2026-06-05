@@ -1,0 +1,35 @@
+The verifier error is a classic **owned reference leak**.
+
+### Why it fails
+
+- `bpf_cpumask_create()` returns an owned `struct bpf_cpumask *` reference.
+- In `make_object()`, that reference is only released on the error branch (`!bpf_cpumask_empty(...)`), but on success it is returned to caller.
+- In `entry()`, you store/use it (`__sink(cpumask)`) and then exit without releasing it.
+- Verifier sees an exit path where reference `id=2` is still live:
+
+> `Unreleased reference id=2 alloc_insn=0`
+
+So lifetime rules require a `bpf_cpumask_release()` before every program exit path that still owns it.
+
+---
+
+### Smallest likely fix
+
+Release the object in `entry()` when non-NULL.
+
+```diff
+ SEC("tp_btf/task_newtask")
+ int BPF_PROG(entry, struct task_struct *task, u64 flags)
+ {
+ 	struct bpf_cpumask *cpumask;
+
+ 	cpumask = make_object();
+ 	__sink(cpumask);
++	if (cpumask)
++		bpf_cpumask_release(cpumask);
+
+ 	return 0;
+ }
+```
+
+This preserves behavior and satisfies verifier resource lifetime tracking.

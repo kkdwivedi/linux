@@ -1,0 +1,25 @@
+The verifier error indicates that the `bpf_ktime_get_coarse_ns` helper is not allowed for the `kprobe` program type. The helper is restricted by the BPF verifier's policy for this specific program type.
+
+The smallest fix is to replace the disallowed helper with `bpf_ktime_get_ns`, which is permitted for kprobe programs and provides similar functionality (nanosecond timestamp, though with potentially higher precision). This change requires updating both the inline assembly placeholder and the helper macro.
+
+Here is the patch:
+
+```diff
+--- a.c
++++ b.c
+@@ -8,10 +8,10 @@
+ __naked void entry(void)
+ {
+ 	asm volatile ("					\
+-	call %[bpf_ktime_get_coarse_ns];		\
++	call %[bpf_ktime_get_ns];			\
+ 	r0 = 0;						\
+ 	exit;						\
+ "	:
+-	: __imm(bpf_ktime_get_coarse_ns)
++	: __imm(bpf_ktime_get_ns)
+ 	: __clobber_all);
+ }
+```
+
+This change replaces the helper while preserving the program's structure. The `bpf_ktime_get_ns` helper is widely allowed across BPF program types, including kprobe, and should pass verification. Note that the program still returns 0 after the helper call, which may be intentional for the test case.

@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier error is a classic **refcounted kptr leak**:\n\n- `bpf_cpumask_create()` returns a ref-tracked object (`trusted_ptr_or_null_bpf_cpumask`, `id=2`).\n- In `make_object()`, the failure path correctly releases it.\n- But on the success path, `make_object()` returns the live reference.\n- In `entry()`, that returned `cpumask` is never released before `exit`.\n\nSo verifier reports:\n\n- `Unreleased reference id=2 alloc_insn=0`\n- `BPF_EXIT instruction in main prog would lead to reference leak`\n\n### Smallest fix\n\nRelease the object in `entry()` when non-NULL.\n\n```diff\n SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n \tstruct bpf_cpumask *cpumask;\n \n \tcpumask = make_object();\n \t__sink(cpumask);\n+\tif (cpumask)\n+\t\tbpf_cpumask_release(cpumask);\n \n \treturn 0;\n }\n```\n\nThis balances the reference on all paths and should satisfy the verifier.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-medium/case-002-legacy.txt",
+    "case_id": "case-002",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-medium",
+    "prompt_bytes": 2521,
+    "prompt_path": "public/case-002/prompt_legacy.md",
+    "prompt_sha256": "b1009b27b63c85152af26046b06f483efc378f604fa60de5cb0fdda6b91ed858",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-medium/case-002-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "c032253f-7017-45c1-adcb-855db669484b",
+    "started_at": "2026-06-05T03:16:15+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00168,
+    "output_cost_usd": 0.008778,
+    "total_cost_usd": 0.010457999999999999
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 960,
+    "output_tokens": 627,
+    "raw_usage": {
+      "input_tokens": 960,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 627,
+      "output_tokens_details": {
+        "reasoning_tokens": 374
+      },
+      "total_tokens": 1587
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 374,
+    "total_tokens": 1587
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629385,
+    "created_at": 1780629376,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0866673cff0e8b55006a223f800fe081a3801443fc51b397a3",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0866673cff0e8b55006a223f8089dc81a3ad02490fbcae8eae",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier error is a classic **refcounted kptr leak**:\n\n- `bpf_cpumask_create()` returns a ref-tracked object (`trusted_ptr_or_null_bpf_cpumask`, `id=2`).\n- In `make_object()`, the failure path correctly releases it.\n- But on the success path, `make_object()` returns the live reference.\n- In `entry()`, that returned `cpumask` is never released before `exit`.\n\nSo verifier reports:\n\n- `Unreleased reference id=2 alloc_insn=0`\n- `BPF_EXIT instruction in main prog would lead to reference leak`\n\n### Smallest fix\n\nRelease the object in `entry()` when non-NULL.\n\n```diff\n SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n \tstruct bpf_cpumask *cpumask;\n \n \tcpumask = make_object();\n \t__sink(cpumask);\n+\tif (cpumask)\n+\t\tbpf_cpumask_release(cpumask);\n \n \treturn 0;\n }\n```\n\nThis balances the reference on all paths and should satisfy the verifier.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0866673cff0e8b55006a223f86d10c81a387447b709c57fbda",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 960,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 627,
+      "output_tokens_details": {
+        "reasoning_tokens": 374
+      },
+      "total_tokens": 1587
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

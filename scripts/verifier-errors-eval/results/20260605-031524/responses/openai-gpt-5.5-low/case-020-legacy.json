@@ -1,0 +1,130 @@
+{
+  "answer_text": "The program is not rejected because `helper_g()` itself is invalid. `helper_g()` is trivial:\n\n```text\n1064: r0 = 0\n1065: exit\n```\n\nThe failure is due to verifier liveness-analysis complexity:\n\n```text\nliveness analysis exceeded complexity limit (10001 calls)\nprocessed 0 insns ...\n```\n\nThis test creates a very wide and deep static subprogram call graph:\n\n```text\nentry -> helper_a -> helper_b -> helper_c -> helper_d -> helper_e -> helper_f -> helper_g\n```\n\nand every level calls the next helper 50 times. During liveness analysis the verifier recursively analyzes callees through many call paths. Even though each callee is simple, the number of call-path visits explodes combinatorially. The log shows the verifier repeatedly re-analyzing `helper_g` at depth 7 until it hits the hard liveness complexity limit of 10001 calls.\n\nSo the smallest source-level repair is to reduce the fanout enough that the recursive liveness walk stays below the limit. Reducing the per-level fanout from 50 to 3 should be safely below the 10001-call cap for a depth-7 chain.\n\nA minimal patch would be:\n\n```diff\ndiff --git a/test.c b/test.c\nindex 0000000..0000000 100644\n--- a/test.c\n+++ b/test.c\n@@ -6,7 +6,8 @@\n \tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n \tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n+#define CALLS_3(fn) CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)\n+#define CALLS_50(fn) CALLS_3(fn)\n```\n\nThis keeps the same structure of the test \u2014 a deep chain of subprogram calls with stack-pointer arguments \u2014 but avoids generating enough call-path combinations to exceed the verifier\u2019s liveness-analysis complexity limit.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-low/case-020-legacy.txt",
+    "case_id": "case-020",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-low",
+    "prompt_bytes": 6158,
+    "prompt_path": "public/case-020/prompt_legacy.md",
+    "prompt_sha256": "cecfa6936349490d4b7bd2b0131df3ba133333894cfcdcc4438f6f6f0196b689",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-low/case-020-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "low"
+    },
+    "run_id": "0d50ab15-c84b-4394-9527-3fa5ee13191f",
+    "started_at": "2026-06-05T03:15:34+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.01313,
+    "output_cost_usd": 0.04593,
+    "total_cost_usd": 0.05906
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 2626,
+    "output_tokens": 1531,
+    "raw_usage": {
+      "input_tokens": 2626,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1531,
+      "output_tokens_details": {
+        "reasoning_tokens": 1026
+      },
+      "total_tokens": 4157
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 1026,
+    "total_tokens": 4157
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629383,
+    "created_at": 1780629334,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0ba84dc7c2be9c5b006a223f569b90819caee0e707602d68d8",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0ba84dc7c2be9c5b006a223f574e9c819c996bf8eec7b252cf",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The program is not rejected because `helper_g()` itself is invalid. `helper_g()` is trivial:\n\n```text\n1064: r0 = 0\n1065: exit\n```\n\nThe failure is due to verifier liveness-analysis complexity:\n\n```text\nliveness analysis exceeded complexity limit (10001 calls)\nprocessed 0 insns ...\n```\n\nThis test creates a very wide and deep static subprogram call graph:\n\n```text\nentry -> helper_a -> helper_b -> helper_c -> helper_d -> helper_e -> helper_f -> helper_g\n```\n\nand every level calls the next helper 50 times. During liveness analysis the verifier recursively analyzes callees through many call paths. Even though each callee is simple, the number of call-path visits explodes combinatorially. The log shows the verifier repeatedly re-analyzing `helper_g` at depth 7 until it hits the hard liveness complexity limit of 10001 calls.\n\nSo the smallest source-level repair is to reduce the fanout enough that the recursive liveness walk stays below the limit. Reducing the per-level fanout from 50 to 3 should be safely below the 10001-call cap for a depth-7 chain.\n\nA minimal patch would be:\n\n```diff\ndiff --git a/test.c b/test.c\nindex 0000000..0000000 100644\n--- a/test.c\n+++ b/test.c\n@@ -6,7 +6,8 @@\n \tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n \tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n+#define CALLS_3(fn) CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24)\n+#define CALLS_50(fn) CALLS_3(fn)\n```\n\nThis keeps the same structure of the test \u2014 a deep chain of subprogram calls with stack-pointer arguments \u2014 but avoids generating enough call-path combinations to exceed the verifier\u2019s liveness-analysis complexity limit.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0ba84dc7c2be9c5b006a223f7d5844819ca24788fcef517639",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "low",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 2626,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1531,
+      "output_tokens_details": {
+        "reasoning_tokens": 1026
+      },
+      "total_tokens": 4157
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

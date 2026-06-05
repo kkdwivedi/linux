@@ -1,0 +1,24 @@
+## Verifier Failure Explanation
+
+The verifier rejects the program because `helper_a(0)` is called **inside** an IRQ-disabled critical section (between `bpf_local_irq_save` and `bpf_local_irq_restore`). The function `helper_a` is classified as **sleepable** because it contains a call to `bpf_copy_from_user`, which may sleep. Sleepable operations are forbidden in IRQ-disabled regions since they could deadlock or cause undefined behavior if the scheduler is entered while IRQs are disabled.
+
+## Fix
+
+Move `helper_a(0)` **outside** the IRQ-disabled critical section. The simplest change is to call it after `bpf_local_irq_restore`:
+
+```c
+SEC("?syscall")
+int entry(void *ctx)
+{
+	unsigned long flags;
+
+	bpf_local_irq_save(&flags);
+	bpf_local_irq_restore(&flags);
+	helper_a(0);
+	return 0;
+}
+```
+
+This satisfies the verifier because the sleepable function call no longer occurs within the IRQ-disabled region. The critical section is empty (just save/restore), and `helper_a` is called only after IRQs are re-enabled.
+
+Alternatively, moving `helper_a(0)` **before** `bpf_local_irq_save` would also work. Note that simply changing the argument (e.g., `helper_a(1)`) would **not** fix this, because the verifier considers the function sleepable based on the presence of `bpf_copy_from_user` in any reachable path, regardless of the runtime argument value.

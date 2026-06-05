@@ -1,0 +1,68 @@
+{
+  "acceptable_fixes": [
+    "Add bpf_ringbuf_discard_dynptr(&ptr2, 0) before the final return.",
+    "Submit ptr2 too, if the program actually initializes and intends to publish it.",
+    "Restructure cleanup so both ptr1 and ptr2 are released on all exits after reservation."
+  ],
+  "canonical_fix": "Submit or discard ptr2 on every path after it is reserved, including the path where ptr1 is submitted successfully.",
+  "case_id": "case-011",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The program reserves two ringbuf dynptrs. On the success path it submits/releases only ptr1 and returns while ptr2 is still live.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-011-legacy.txt",
+    "case_id": "case-011",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 3372,
+    "prompt_path": "public/case-011/prompt_legacy.md",
+    "prompt_sha256": "762b0c608dbde5c1090172be3b10e7e17988b9698301148bebea627aedc1c8f8",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-011-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "2ee13f92-1072-417c-b498-0e75b2ca952c",
+    "started_at": "2026-06-05T03:17:37+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## What the verifier is complaining about\n\nThe key line is at the end:\n\n```\nUnreleased reference id=3 alloc_insn=14\nBPF_EXIT instruction in main prog would lead to reference leak\n```\n\n`bpf_ringbuf_reserve_dynptr()` is an acquire function: each successful call creates a \"reference\" that the verifier tracks and that **must** be released on every path that reaches `exit` (via `bpf_ringbuf_submit_dynptr()` or `bpf_ringbuf_discard_dynptr()`).\n\nIn this program two dynptrs are reserved:\n\n- `ptr1` \u2192 reference id=1/2 (alloc at insn 7)\n- `ptr2` \u2192 reference id=3 (alloc at insn 14)\n\nThe error/`!sample` path correctly discards both `ptr1` and `ptr2`. But the **success path** only does:\n\n```c\nbpf_ringbuf_submit_dynptr(&ptr1, 0);\nreturn 0;\n```\n\nIt releases `ptr1` but never releases `ptr2`. So on the fall-through path to `exit` (insns 29\u201334), reference id=3 (`ptr2`) is still held \u2192 reference leak.\n\n(The `arg#0 reference type('UNKNOWN ') ... -22` line at the very top is just an unrelated/benign log artifact from BTF arg resolution, not the cause of rejection.)\n\n## Smallest fix\n\nRelease `ptr2` on the success path too. Add a discard (or submit) of `ptr2` before returning from the success branch:\n\n```c\n\tsample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));\n\tif (!sample) {\n\t\tbpf_ringbuf_discard_dynptr(&ptr1, 0);\n\t\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n\t\treturn 0;\n\t}\n\n\tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n\tbpf_ringbuf_discard_dynptr(&ptr2, 0);   /* <-- add this */\n\n\treturn 0;\n```\n\n### Patch\n\n```diff\n \tbpf_ringbuf_submit_dynptr(&ptr1, 0);\n+\tbpf_ringbuf_discard_dynptr(&ptr2, 0);\n \n \treturn 0;\n```\n\nThis guarantees that on **every** path that reaches `exit`, both acquired dynptr references are released, satisfying the verifier's reference-tracking requirement.\n\n(Either `bpf_ringbuf_discard_dynptr(&ptr2, 0)` or `bpf_ringbuf_submit_dynptr(&ptr2, 0)` works to clear the reference; discard is the natural choice since `ptr2` was never used.)",
+  "must_mention": [
+    "The second dynptr reservation is leaked",
+    "Every reserved dynptr must be submitted or discarded",
+    "The successful ptr1 path still needs ptr2 cleanup"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only releases ptr1",
+    "Adds cleanup only in the !sample branch, which already releases both",
+    "Calls a non-dynptr ringbuf cleanup API on the dynptr"
+  ]
+}

@@ -1,0 +1,34 @@
+`bpf_dynptr_slice()` takes `(ptr, offset, buffer, len)`.  
+In your program, `len` is `slice_len`, which is a **global writable variable**:
+
+```c
+__u32 slice_len = sizeof(struct ethhdr);
+```
+
+For BPF, that lives in `.data` (a map value), so verifier treats it as runtime scalar `0..U32_MAX`, not as compile-time constant 14.  
+Then you pass it with a stack buffer of fixed size `sizeof(*hdr)` (14 bytes), and verifier rejects:
+
+- `R4 unbounded memory access`
+- `R3 and R4 memory, len pair leads to invalid memory access`
+
+So even though initialized to 14 in C, verifier cannot assume it stays 14.
+
+## Smallest likely fix
+
+Pass a compile-time bounded length (or explicitly bound `slice_len` before call).  
+Minimal edit: use `sizeof(buffer)` in the helper call.
+
+### Patch
+
+```diff
+@@
+-__u32 slice_len = sizeof(struct ethhdr);
++__u32 slice_len = sizeof(struct ethhdr);
+@@
+-	hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
++	hdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(buffer));
+```
+
+(You can optionally remove `slice_len` afterwards since it becomes unused.)
+
+This gives verifier a known safe `len` matching stack buffer size, so the memory/len pair check should pass.

@@ -1,0 +1,30 @@
+## Explanation
+
+`helper_a()` is defined as a **global** (non-`static`) function. In the BPF verifier, global functions are verified independently of their callers and are treated as **sleepable** subprograms — the verifier conservatively assumes a global function may sleep, because it does not know the calling context when it verifies the function in isolation.
+
+Your `entry` program opens an IRQ-disabled critical section with `bpf_local_irq_save()`. Code inside such a region must not call anything that may sleep. Because `helper_a()` is a sleepable global function, calling it between `bpf_local_irq_save()` and `bpf_local_irq_restore()` is rejected:
+
+```
+sleepable global function helper_a() called in IRQ-disabled region
+```
+
+Note the actual body of `helper_a()` never runs `bpf_copy_from_user()` for `i == 0`, but that's irrelevant: the restriction is on the *call to a global function*, not on whether that path is taken at runtime.
+
+## Fix
+
+Make the helper a **static** function. Static (non-global) subprograms are verified inline in the context of their caller, inheriting its execution-context state, so they are not treated as standalone sleepable global functions. The IRQ-disabled check then validates the helper's actual body against the current context.
+
+```c
+static int __noinline helper_a(int i)
+{
+	char data[8];
+
+	if (!i)
+		bpf_copy_from_user(data, sizeof(data), NULL);
+	return i;
+}
+```
+
+The single-word change `int __noinline` → `static int __noinline` is the smallest source-level fix.
+
+(Of course, if `bpf_copy_from_user()` could actually be reached inside the critical section it would still fail — but here, with the static helper inlined into the caller's verification, the verifier sees that the `i == 0` argument makes the `bpf_copy_from_user()` branch dead, so the program verifies.)

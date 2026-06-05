@@ -1,0 +1,67 @@
+{
+  "acceptable_fixes": [
+    "Swap the two unlock calls on the success path.",
+    "Avoid taking lock_b while lock_a is still held if nesting is unnecessary."
+  ],
+  "canonical_fix": "On the path where both locks are held, call bpf_res_spin_unlock(&lock_b) before bpf_res_spin_unlock(&lock_a).",
+  "case_id": "case-018",
+  "category": "Resource Lifetime Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program acquires lock_a and then lock_b, but releases lock_a before lock_b on the success path. Nested resource spin locks must be unlocked in last-in, first-out order.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-018-legacy.txt",
+    "case_id": "case-018",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 1656,
+    "prompt_path": "public/case-018/prompt_legacy.md",
+    "prompt_sha256": "f85594106276b08f72d5a03ad0c0892a8771dbe55514dd329b7aff0246cc5b64",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-018-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "5807792f-15a9-428e-a3c8-2c2d59d04e4d",
+    "started_at": "2026-06-05T03:17:44+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## What the verifier is complaining about\n\n`bpf_res_spin_lock`/`bpf_res_spin_unlock` are tracked by the verifier as a **stack of held locks**, and they must be released in strict **LIFO (reverse acquisition) order**. The error\n\n```\nbpf_res_spin_unlock cannot be out of order\n```\n\nmeans that on some explored path the verifier sees an unlock of a lock that is *not* the most-recently-acquired one.\n\n## Why it triggers here\n\nAcquisition order in the function is:\n\n1. `lock_a`\n2. `lock_b`\n\nSo the only legal release order is `lock_b` then `lock_a`.\n\nAt the bottom of the function you wrote:\n\n```c\nbpf_res_spin_unlock(&lock_a);   /* releases the OLDER lock first  -> wrong */\nbpf_res_spin_unlock(&lock_b);\n```\n\nBecause the unlock of `lock_a` is common to both the error path and the success path, the compiler hoisted it (insn 8\u201310 in the log) ahead of the `w6` branch check. On the path where `bpf_res_spin_lock(&lock_b)` succeeded, both locks are held, and the first unlock encountered is `lock_a` \u2014 i.e. releasing the older lock while the newer `lock_b` is still held. That is the out\u2011of\u2011order release the verifier rejects.\n\n## The fix\n\nRelease the locks in reverse order of acquisition (`lock_b` first, then `lock_a`):\n\n```c\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n```\n\nFull corrected function:\n\n```c\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tif (bpf_res_spin_lock(&lock_a))\n\t\treturn 0;\n\tif (bpf_res_spin_lock(&lock_b)) {\n\t\tbpf_res_spin_unlock(&lock_a);\n\t\treturn 0;\n\t}\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n\treturn 0;\n}\n```\n\nThe error path is already correct: if `bpf_res_spin_lock(&lock_b)` fails, only `lock_a` is held, so unlocking just `lock_a` is the proper top-of-stack release. With the swap, every path releases locks in strict LIFO order and the verifier is satisfied.",
+  "must_mention": [
+    "lock_b was acquired after lock_a",
+    "Unlock order must be LIFO",
+    "The success path unlocks the wrong lock first"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Changes only the error path where lock_b acquisition fails",
+    "Drops one unlock and leaks a held lock",
+    "Confuses spin lock order with IRQ flag variable order"
+  ]
+}

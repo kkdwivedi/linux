@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Verifier Failure Analysis\n\nThe verifier is rejecting this program with the error: **\"bpf_res_spin_unlock cannot be out of order\"**\n\nThis error occurs because the BPF verifier enforces a strict lock ordering requirement for `bpf_res_spin_lock` and `bpf_res_spin_unlock` calls. Specifically:\n\n1. **Lock A is acquired** at instruction 0\n2. **Lock B is acquired** at instruction 4\n3. **Lock A is unlocked** at instruction 10\n\nThe problem: **Lock A is being unlocked before Lock B is unlocked.** This violates the LIFO (Last-In-First-Out) requirement for nested locks. Locks must be released in the reverse order they were acquired.\n\nThe correct order should be:\n- Acquire Lock A\n- Acquire Lock B\n- **Unlock Lock B** (acquired last, must release first)\n- **Unlock Lock A** (acquired first, must release last)\n\n## Fix\n\nSwap the order of the two `bpf_res_spin_unlock` calls:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nstruct bpf_res_spin_lock lock_a __hidden SEC(\".data.A\");\nstruct bpf_res_spin_lock lock_b __hidden SEC(\".data.B\");\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tif (bpf_res_spin_lock(&lock_a))\n\t\treturn 0;\n\tif (bpf_res_spin_lock(&lock_b)) {\n\t\tbpf_res_spin_unlock(&lock_a);\n\t\treturn 0;\n\t}\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n\treturn 0;\n}\n```\n\n**Change:** Line 16-17 should be:\n```c\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n```\n\nThis ensures locks are released in LIFO order, satisfying the verifier's lock ordering constraint.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-018-legacy.txt",
+    "case_id": "case-018",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 1656,
+    "prompt_path": "public/case-018/prompt_legacy.md",
+    "prompt_sha256": "f85594106276b08f72d5a03ad0c0892a8771dbe55514dd329b7aff0246cc5b64",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-018-legacy.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "c501c7d3-ea48-4e49-8116-1df4c32769c5",
+    "started_at": "2026-06-05T03:19:06+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000818,
+    "output_cost_usd": 0.002655,
+    "total_cost_usd": 0.003473
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 818,
+    "output_tokens": 531,
+    "raw_usage": {
+      "completion_tokens": 531,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.003473,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002655,
+        "upstream_inference_cost": 0.003473,
+        "upstream_inference_prompt_cost": 0.000818
+      },
+      "is_byok": false,
+      "prompt_tokens": 818,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1349
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1349
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Verifier Failure Analysis\n\nThe verifier is rejecting this program with the error: **\"bpf_res_spin_unlock cannot be out of order\"**\n\nThis error occurs because the BPF verifier enforces a strict lock ordering requirement for `bpf_res_spin_lock` and `bpf_res_spin_unlock` calls. Specifically:\n\n1. **Lock A is acquired** at instruction 0\n2. **Lock B is acquired** at instruction 4\n3. **Lock A is unlocked** at instruction 10\n\nThe problem: **Lock A is being unlocked before Lock B is unlocked.** This violates the LIFO (Last-In-First-Out) requirement for nested locks. Locks must be released in the reverse order they were acquired.\n\nThe correct order should be:\n- Acquire Lock A\n- Acquire Lock B\n- **Unlock Lock B** (acquired last, must release first)\n- **Unlock Lock A** (acquired first, must release last)\n\n## Fix\n\nSwap the order of the two `bpf_res_spin_unlock` calls:\n\n```c\n#include <vmlinux.h>\n#include <bpf/bpf_helpers.h>\n\nstruct bpf_res_spin_lock lock_a __hidden SEC(\".data.A\");\nstruct bpf_res_spin_lock lock_b __hidden SEC(\".data.B\");\n\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tif (bpf_res_spin_lock(&lock_a))\n\t\treturn 0;\n\tif (bpf_res_spin_lock(&lock_b)) {\n\t\tbpf_res_spin_unlock(&lock_a);\n\t\treturn 0;\n\t}\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n\treturn 0;\n}\n```\n\n**Change:** Line 16-17 should be:\n```c\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n```\n\nThis ensures locks are released in LIFO order, satisfying the verifier's lock ordering constraint.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629546,
+    "id": "gen-1780629546-VEKDQ66ltEcW4OqpQiiE",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 531,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.003473,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.002655,
+        "upstream_inference_cost": 0.003473,
+        "upstream_inference_prompt_cost": 0.000818
+      },
+      "is_byok": false,
+      "prompt_tokens": 818,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1349
+    }
+  },
+  "reasoning_content": ""
+}

@@ -1,0 +1,42 @@
+`helper_a()` is being verified as a separate subprogram, and its argument `s` is treated conservatively as `mem_or_null` (nullable pointer), not guaranteed non-NULL.
+
+From the log:
+
+- `R1=mem_or_null(...)` on entry to `helper_a`
+- then `r6 = r1`
+- then dereference `*(u32 *)(r6 + 0)` without proving non-NULL
+- verifier rejects: **`R6 invalid mem access 'mem_or_null'`**
+
+So the issue is not `entry()`; it’s that `helper_a()` dereferences a potentially NULL pointer argument without a guard.
+
+### Smallest likely fix
+
+Add a NULL check in `helper_a()` before `s->x` access.
+
+```diff
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+
+ struct Item {
+ 	int x;
+ };
+
+ __noinline int helper_a(const struct Item *s)
+ {
++	if (!s)
++		return 0;
+ 	return bpf_get_prandom_u32() < s->x;
+ }
+
+ SEC("cgroup_skb/ingress")
+ int entry(struct __sk_buff *skb)
+ {
+ 	const struct Item s = {.x = skb->len};
+
+ 	helper_a(&s);
+
+ 	return 1;
+ }
+```
+
+This allows the verifier to refine `s` to non-NULL on the dereference path.

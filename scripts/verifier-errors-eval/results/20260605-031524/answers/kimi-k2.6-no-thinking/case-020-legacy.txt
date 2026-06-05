@@ -1,0 +1,60 @@
+Looking at this eBPF verifier failure, I need to understand what's happening:
+
+## Analysis of the Failure
+
+The verifier log shows:
+- `liveness analysis exceeded complexity limit (10001 calls)`
+- The log shows repeated analysis of `subprog#7 helper_g` at `depth 7`
+
+The program structure creates an enormous call graph:
+- `entry()` calls `helper_a()` 50 times
+- `helper_a()` calls `helper_b()` 50 times
+- `helper_b()` calls `helper_c()` 50 times
+- ...and so on down to `helper_g()`
+
+This creates **50^7 = 78,125,000,000,000** potential call paths, causing the verifier's liveness analysis to exceed its complexity limit of 10,001 calls.
+
+The key insight is that each subprogram is called **50 times in a row** from its caller. The verifier must analyze the liveness state before and after each call, and because each call site has different stack context (different offsets: 8, 16, 24, ... 80), the verifier treats them as distinct states.
+
+## The Root Cause
+
+The `CALL_AT` macro creates calls with different stack offsets:
+```c
+#define CALL_AT(fn, off) "r1 = r10;" "r1 += -" #off ";" "call " #fn ";"
+```
+
+The varying offsets (8, 16, 24, ..., 80) mean each call site is analyzed separately. With 50 calls per function × 7 levels of nesting, this explodes exponentially.
+
+## The Fix
+
+The smallest fix is to **make all calls from each function use the same stack offset**, so the verifier can reuse analysis results. Instead of 10 different offsets, use a single offset for all calls within each function.
+
+However, looking more carefully: the `r1` setup with stack offset is actually setting up an argument that isn't used by the callees (they're `__naked` with no parameters). But the verifier still sees the different `r1` values at each call site.
+
+The simplest fix: **Use the same offset for all calls** - change `CALLS_10` to use a single offset repeatedly, or better, eliminate the varying offset entirely since these naked functions ignore `r1` anyway.
+
+```patch
+--- a/test.c
++++ b/test.c
+@@ -1,8 +1,7 @@
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ 
+-#define CALL_AT(fn, off) "r1 = r10;" "r1 += -" #off ";" "call " #fn ";"
+-#define CALLS_10(fn) \
+-	CALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \
+-	CALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)
++#define CALL(fn) "call " #fn ";"
++#define CALLS_10(fn) \
++	CALL(fn) CALL(fn) CALL(fn) CALL(fn) CALL(fn) \
++	CALL(fn) CALL(fn) CALL(fn) CALL(fn) CALL(fn)
+ #define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
+```
+
+This removes the `r1 = r10; r1 += -offset;` preamble entirely. Since all helper functions are `__naked` and don't use their arguments, this doesn't change runtime behavior. 
+
+More importantly, **all 50 call sites now have identical register state before the call**, so the verifier can:
+1. Analyze each subprogram once
+2. Cache and reuse the results across all identical call sites
+
+This reduces the complexity from exponential to linear in the number of unique subprograms (7 subprograms + entry = 8 analyses).

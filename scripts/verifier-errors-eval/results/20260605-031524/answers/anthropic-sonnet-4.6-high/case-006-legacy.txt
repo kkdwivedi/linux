@@ -1,0 +1,30 @@
+## Explanation
+
+The verifier rejects the program because `bpf_ktime_get_coarse_ns` (helper #160) is **not permitted for `BPF_PROG_TYPE_KPROBE` programs**. Each BPF program type has an allowlist of helpers it may call, and `bpf_ktime_get_coarse_ns` is not on the kprobe allowlist.
+
+The closely related helper `bpf_ktime_get_ns` *is* allowed in kprobe programs.
+
+## Fix
+
+Replace `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns` in both the inline-asm call and the `__imm` constraint:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("kprobe")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_ns];			\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+```
+
+`bpf_ktime_get_ns` is whitelisted for kprobe programs and provides essentially the same monotonic nanosecond timestamp (just not coarse-grained), so this is the minimal, correct substitution.

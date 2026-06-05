@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Check if (offset > 47) exit before using it for a 1-byte access to a 48-byte object.",
+    "Check if (offset + 1 > sizeof(struct value)) exit in a verifier-friendly way that avoids overflow.",
+    "Mask or clamp the offset so the verifier can prove the adjusted pointer remains within the map value."
+  ],
+  "canonical_fix": "Add an upper-bound check on the loaded offset before adding it to the map-value pointer, proving offset + access size <= object size.",
+  "case_id": "case-014",
+  "category": "Memory Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program loads a variable offset from the map value and adds it to the map-value pointer before a helper reads one byte. The verifier knows the offset is non-negative but has no safe upper bound, so it cannot prove offset + size stays within the 48-byte map value.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-opus-4.8-high/case-014-legacy.txt",
+    "case_id": "case-014",
+    "model": "anthropic/claude-opus-4.8",
+    "profile": "openrouter-claude-opus-4.8-high",
+    "prompt_bytes": 2516,
+    "prompt_path": "public/case-014/prompt_legacy.md",
+    "prompt_sha256": "5f09191198944721d81d22840eb8d1d26f07b6ac8add806cab2dfef9c5fd1103",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-opus-4.8-high/case-014-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "d3da1e2e-5bff-463c-bb34-2023f4d2786d",
+    "started_at": "2026-06-05T03:18:28+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Explanation\n\nThe failure is at instruction 13 (`call bpf_probe_read_kernel`):\n\n```\nR1 unbounded memory access, make sure to bounds check any such access\n```\n\nWalk through what happens to `R1`:\n\n1. `r1 = r0` \u2014 `R1` is a `map_value` pointer (size 48).\n2. `r3 = *(u32*)(r0 + 0)` \u2014 loads the `offset` field, which the verifier treats as a fully unknown 32-bit scalar: `smin=0, smax=umax=0xffffffff`.\n3. `r1 += r3` \u2014 adds that unbounded scalar to the map-value pointer, producing a `map_value` with an unbounded variable offset.\n\nWhen `bpf_probe_read_kernel(dst=r1, size=1, src=0)` is called, the verifier must prove that the 1-byte write at `R1` stays inside the 48-byte map value. Because the variable offset added to `R1` is unbounded, it cannot prove this, hence the rejection.\n\nThe program loaded an attacker-controllable value (`offset`) from the map and used it as a pointer offset without bounding it.\n\n## Fix\n\nBound the loaded offset before adding it to the pointer so the verifier knows the resulting access stays within the map value. Since we write 1 byte into a 48-byte value, any offset in `[0, 47]` is safe. The simplest, verifier-friendly bound is a mask:\n\n```c\n\tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n\tr3 &= 31;\t\t\t\t\t\\\n\tr1 += r3;\t\t\t\t\t\\\n```\n\n`r3 &= 31` makes `r3` provably in `[0, 31]`, so `r1` becomes a `map_value` with a bounded variable offset, and the 1-byte `bpf_probe_read_kernel` write fits within the 48-byte value.\n\n### Patched asm block\n\n```c\n\tasm volatile (\"\t\t\t\t\t\\\n\tr2 = r10;\t\t\t\t\t\\\n\tr2 += -8;\t\t\t\t\t\\\n\tr1 = 0;\t\t\t\t\t\t\\\n\t*(u64*)(r2 + 0) = r1;\t\t\t\t\\\n\tr1 = %[map_a] ll;\t\t\t\t\\\n\tcall %[bpf_map_lookup_elem];\t\t\t\\\n\tif r0 == 0 goto l0_%=;\t\t\t\t\\\n\tr1 = r0;\t\t\t\t\t\\\n\tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n\tr3 &= 31;\t\t\t\t\t\\\n\tr1 += r3;\t\t\t\t\t\\\n\tr2 = 1;\t\t\t\t\t\t\\\n\tr3 = 0;\t\t\t\t\t\t\\\n\tcall %[bpf_probe_read_kernel];\t\t\t\\\nl0_%=:\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_map_lookup_elem),\n\t  __imm(bpf_probe_read_kernel),\n\t  __imm_addr(map_a)\n\t: __clobber_all);\n```\n\n(Equivalently you could insert an explicit branch such as `if r3 > 47 goto l0_%=;` before `r1 += r3`. The mask is the minimal one-line change and gives the verifier a tight `[0,31]` bound that comfortably fits the access.)",
+  "must_mention": [
+    "The offset is variable and lacks an upper bound",
+    "The object/map value size is finite",
+    "The proof needed is offset plus access size within bounds"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks that map_lookup_elem returned non-NULL",
+    "Adds a lower-bound check only",
+    "Checks after the helper access"
+  ]
+}

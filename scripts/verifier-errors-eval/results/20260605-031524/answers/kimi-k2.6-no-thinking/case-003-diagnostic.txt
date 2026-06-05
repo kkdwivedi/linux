@@ -1,0 +1,50 @@
+Looking at this eBPF verifier failure, I need to analyze what's happening step by step.
+
+## Verifier Failure Explanation
+
+The program stores `r1` (which contains `ctx()`, a valid pointer) at `fp-8` on the stack, then overwrites part of that stack slot with a scalar value (`0x23`/`35`), and finally tries to load it back and dereference it.
+
+Let me trace through the execution:
+
+1. **Instruction 0**: `*(u64*)(r10 - 8) = r1` — Stores `ctx()` pointer at `fp-8`
+2. **Instruction 1**: `r0 = 0x23` — Sets `r0` to 35
+3. **Instruction 2**: `*(u8*)(r10 - 7) = r0` — **This is the problem!** Stores 35 to `fp-7` (the second byte of the 8-byte slot at `fp-8`)
+
+The verifier log shows: after instruction 2, `fp-8=mmmmmmmm` — the entire 8-byte slot becomes "memory with mixed meaning" (marked as `m` for scalar/unknown). This happens because a byte within the pointer storage was overwritten with an arbitrary scalar value.
+
+4. **Instruction 3**: `r0 = *(u64*)(r10 - 8)` — Loads back the corrupted value, but verifier sees `R0=scalar()` not a pointer, because the slot was tainted
+5. **Instruction 4**: `r0 = *(u64*)(r0 + 8)` — **FAILS** — tries to dereference `r0` as a pointer, but verifier knows it's just a scalar
+
+## Root Cause
+
+The core issue is that **instruction 2 corrupts the pointer by doing a partial write to the middle of the 8-byte slot containing the pointer**. When you write a byte at `r10 - 7`, you're overwriting byte 1 of the 8-byte pointer value stored at `r10 - 8`. This makes the verifier mark the entire slot as untrusted scalar data (`mmmmmmmm`), so when loaded back, it's no longer considered a valid pointer.
+
+## The Fix
+
+The smallest fix is to **not corrupt the pointer** — either:
+- Store the scalar somewhere else that doesn't overlap with the pointer
+- Or if the intent is to test pointer preservation, don't overwrite part of the pointer
+
+Looking at the code pattern, it seems like this might be testing whether a pointer can be preserved through stack storage. The fix is to store the scalar value at a **non-overlapping** stack location.
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	*(u64*)(r10 - 8) = r1;				\
+	r0 = 0x23;					\
+	*(u8*)(r10 - 16) = r0;				\
+	r0 = *(u64*)(r10 - 8);				\
+	r0 = *(u64*)(r0 + 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+**Change**: `*(u8*)(r10 - 7) = r0;` → `*(u8*)(r10 - 16) = r0;`
+
+This stores the scalar value `0x23` at `fp-16` instead of `fp-7`, which doesn't overlap with the pointer stored at `fp-8`. The pointer at `fp-8` remains intact, so when reloaded, `r0` is still recognized as a valid pointer (`ctx()` or derived), allowing the dereference at `r0 + 8` to pass verification.

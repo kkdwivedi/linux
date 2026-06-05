@@ -1,0 +1,36 @@
+## Verifier Failure Analysis
+
+The verifier is rejecting this program because:
+
+1. **IRQ-disabled region violation**: `bpf_local_irq_save()` disables interrupts and increments a reference counter (shown as `refs=1` in the log).
+
+2. **Sleepable function in atomic context**: The function `helper_a()` is marked `__noinline`, which means it's a global function. When called within an IRQ-disabled region (after `bpf_local_irq_save()`), the verifier detects that `helper_a()` contains `bpf_copy_from_user()`, which is a **sleepable helper**.
+
+3. **The core issue**: Sleepable helpers cannot be called when interrupts are disabled because they may sleep, which would deadlock the kernel.
+
+The error message "sleepable global function helper_a() called in IRQ-disabled region" explicitly states this violation.
+
+## Root Cause
+
+The `bpf_copy_from_user()` call inside `helper_a()` is sleepable. When `helper_a()` is called after `bpf_local_irq_save()`, the verifier correctly rejects it because the IRQ-disabled region prevents sleeping.
+
+## Proposed Fix
+
+Move the `helper_a(0)` call **outside** the IRQ-disabled region:
+
+```c
+SEC("?syscall")
+int entry(void *ctx)
+{
+	unsigned long flags;
+
+	helper_a(0);
+	bpf_local_irq_save(&flags);
+	bpf_local_irq_restore(&flags);
+	return 0;
+}
+```
+
+**Why this works**: By calling `helper_a(0)` before `bpf_local_irq_save()`, the sleepable helper executes in a context where sleeping is allowed. The IRQ-disabled region only contains the save/restore pair, which are non-sleepable operations.
+
+This is the minimal fix that satisfies the verifier's constraint that sleepable functions cannot execute in IRQ-disabled regions.

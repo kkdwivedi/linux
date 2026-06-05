@@ -1,0 +1,43 @@
+## Analysis
+
+The verifier rejects the program because `slice_len` is a **global variable**, which the verifier treats as an unbounded scalar (range 0–0xffffffff). The `bpf_dynptr_slice` helper requires that the length argument (R4) be bounded and provably within the size of the buffer (R3). Since the verifier cannot prove that `slice_len ≤ sizeof(buffer)`, it rejects the call with "R4 unbounded memory access."
+
+From the log:
+```
+11: (61) r4 = *(u32 *)(r1 +0)    ; R4=scalar(smin=0,smax=umax=0xffffffff,...)
+```
+The value is loaded from a map (the `.data` section for global variables), so the verifier has no idea it equals `sizeof(struct ethhdr)`.
+
+## Fix
+
+Replace the global variable `slice_len` with a compile-time constant expression directly in the call. This way the verifier sees a known constant for R4 and can confirm it fits within the buffer.
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 4096);
+} ringbuf SEC(".maps");
+
+SEC("?tc")
+int entry(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+	struct ethhdr *hdr;
+	char buffer[sizeof(*hdr)] = {};
+
+	bpf_dynptr_from_skb(skb, 0, &ptr);
+
+	hdr = bpf_dynptr_slice(&ptr, 0, buffer, sizeof(*hdr));
+	if (!hdr)
+		return SK_DROP;
+
+	return SK_PASS;
+}
+```
+
+**What changed:** Removed the global `__u32 slice_len = sizeof(struct ethhdr);` and replaced `slice_len` in the `bpf_dynptr_slice` call with `sizeof(*hdr)`. Since `sizeof(*hdr)` is a compile-time constant (14), the verifier can now prove the length fits within `buffer[sizeof(*hdr)]` and the memory/length pair is valid.

@@ -1,0 +1,36 @@
+## Explanation of the Verifier Failure
+
+The verifier rejects this program because of a loss of type information:
+
+1. **Instruction 0**: `*(u64*)(r10 - 8) = r1` stores `ctx()` (a known context pointer) at `fp-8`
+2. **Instruction 2**: `*(u8*)(r10 - 7) = r0` writes a byte to `fp-7`, which overlaps with the 8-byte value at `fp-8`
+3. **Instruction 3**: `r0 = *(u64*)(r10 - 8)` loads from `fp-8`, but because of the overlapping byte write at `fp-7`, the verifier loses track of what type of value is stored there and marks it as `scalar()`
+4. **Instruction 4**: `r0 = *(u64*)(r0 + 8)` attempts to dereference `r0` as a pointer, but since `r0` is now an unknown scalar (not a known pointer type), the verifier rejects this as an invalid memory access
+
+The core issue is that overlapping writes to stack memory cause the verifier to lose type information about previously stored values.
+
+## Proposed Fix
+
+The smallest fix is to avoid the overlapping write. Since instruction 2 writes only a single byte to `fp-7`, and this overlaps with the 8-byte `ctx()` value at `fp-8`, we should use a different stack location for the byte write:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	*(u64*)(r10 - 8) = r1;				\
+	r0 = 0x23;					\
+	*(u8*)(r10 - 9) = r0;				\
+	r0 = *(u64*)(r10 - 8);				\
+	r0 = *(u64*)(r0 + 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+**Change**: Line 8, change `*(u8*)(r10 - 7)` to `*(u8*)(r10 - 9)`
+
+This ensures the byte write at `fp-9` does not overlap with the 8-byte `ctx()` value at `fp-8`, preserving the verifier's knowledge that `r0` loaded from `fp-8` is a valid pointer type that can be dereferenced.

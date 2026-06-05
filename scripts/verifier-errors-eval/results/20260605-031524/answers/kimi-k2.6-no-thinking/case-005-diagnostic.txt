@@ -1,0 +1,56 @@
+I'll analyze this verifier failure and propose a fix.
+
+## Verifier Failure Explanation
+
+The error is straightforward: **sleepable helpers cannot be called inside non-preemptible regions**.
+
+The program creates this invalid sequence:
+1. `bpf_preempt_disable()` — enters a non-preemptible region (depth becomes 1)
+2. `bpf_copy_from_user()` — **FAILS** because this helper may sleep
+3. `bpf_preempt_enable()` — would exit the region (never reached in valid code)
+
+The `bpf_copy_from_user()` helper is classified as "sleepable" because accessing user memory can trigger page faults, which may require the kernel to sleep while handling the fault (e.g., swapping in pages). The verifier enforces that sleepable operations cannot occur between `bpf_preempt_disable()` and `bpf_preempt_enable()` pairs.
+
+## The Fix
+
+The simplest fix is to **move `bpf_copy_from_user()` outside the preempt disable/enable region**. The `bpf_preempt_disable()`/`bpf_preempt_enable()` pair serves no purpose here since the copy helper itself needs to be sleepable.
+
+```patch
+--- a/case.c
++++ b/case.c
+@@ -109,9 +109,7 @@ int entry(void *ctx)
+ {
+ 	u32 data;
+ 
+-	bpf_preempt_disable();
+ 	bpf_copy_from_user(&data, sizeof(data), NULL);
+-	bpf_preempt_enable();
+ 	return 0;
+ }
+```
+
+Or as the complete fixed source:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+SEC("?fentry.s/sys_getpgid")
+int entry(void *ctx)
+{
+	u32 data;
+
+	bpf_copy_from_user(&data, sizeof(data), NULL);
+	return 0;
+}
+```
+
+## Why This Fix Works
+
+- `bpf_copy_from_user()` is designed to handle potential sleeping safely on its own
+- Removing the unnecessary preemption control allows the sleepable helper to operate in its expected context
+- The `?fentry.s/` program type already runs in a context where sleeping is permitted
+
+If the original intent was to protect some other critical section, the preemption disable/enable would need to surround only non-sleepable operations, with any sleepable helpers called outside that region.

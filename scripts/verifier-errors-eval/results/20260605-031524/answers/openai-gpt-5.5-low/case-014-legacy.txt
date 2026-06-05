@@ -1,0 +1,55 @@
+The verifier rejects the program because `r1`, the destination pointer passed to `bpf_probe_read_kernel()`, is computed from a map value pointer plus an unchecked value loaded from the map itself:
+
+```asm
+r3 = *(u32*)(r0 + 0);   // r3 is map_a.value.offset, range 0..0xffffffff
+r1 += r3;              // r1 = map_value + unbounded offset
+...
+call bpf_probe_read_kernel;
+```
+
+`map_a`’s value size is 48 bytes:
+
+```c
+struct value {
+	__u32 offset;     // bytes 0..3
+	__u8 data[44];   // bytes 4..47
+};
+```
+
+At the helper call, `r1` is the destination buffer, and `r2 = 1`, so the verifier needs to prove that writing 1 byte to `r1` stays inside the 48-byte map value. Since `offset` can be as large as `0xffffffff`, the verifier reports:
+
+```text
+R1 unbounded memory access, make sure to bounds check any such access
+```
+
+The smallest fix is to bounds-check `offset` before adding it to the map value pointer. Since the helper writes 1 byte and the map value is 48 bytes, valid byte offsets are `0..47`.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -27,6 +27,7 @@ __naked void entry(void)
+ 	if r0 == 0 goto l0_%=;				\
+ 	r1 = r0;					\
+ 	r3 = *(u32*)(r0 + 0);				\
++	if r3 > 47 goto l0_%=;				\
+ 	r1 += r3;					\
+ 	r2 = 1;						\
+ 	r3 = 0;						\
+```
+
+With that check, the verifier can infer that after `r1 += r3`, `r1` points somewhere within `map_value[0..47]`, and a 1-byte write through `bpf_probe_read_kernel()` is bounded.
+
+If the intended destination is specifically `data[offset]` rather than any byte in the whole struct, then the semantically cleaner version would be to check `offset <= 43` and add 4 bytes for the `data` field:
+
+```asm
+r3 = *(u32*)(r0 + 0);
+if r3 > 43 goto l0_%=;
+r1 += 4;
+r1 += r3;
+```
+
+But for the verifier failure shown, the minimal source-level repair is the `if r3 > 47 goto l0_%=;` bounds check.

@@ -1,0 +1,11 @@
+The bug is in `helper_b`: it passes `skb + 1` to `helper_c`, which creates a modified ctx pointer with offset 192 (sizeof struct __sk_buff = 192). The BPF verifier disallows dereferencing a ctx pointer that has been offset.
+
+The fix is to just pass `skb` instead of `skb + 1`:
+
+```c
+__attribute__((noinline))
+int helper_b(int val, struct __sk_buff *skb)
+{
+	return helper_a(skb) + helper_c(val, skb);
+}
+```

@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Rewrite the recursion as a bounded loop in the same function.",
+    "Manually unroll the small fixed number of iterations.",
+    "Split helpers so calls form a directed acyclic graph."
+  ],
+  "canonical_fix": "Remove the recursive bpf2bpf call and express the repeated work as a verifier-bounded loop or as an acyclic/unrolled call sequence.",
+  "case_id": "case-019",
+  "category": "Program Structure",
+  "difficulty": "hard",
+  "expected_explanation": "helper_a contains a bpf2bpf call to itself, creating a recursive subprogram call graph. The verifier requires an acyclic finite call graph even if the source-level branch appears bounded.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-high/case-019-legacy.txt",
+    "case_id": "case-019",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-high",
+    "prompt_bytes": 1084,
+    "prompt_path": "public/case-019/prompt_legacy.md",
+    "prompt_sha256": "c56d2c6e4bb69291f472e6afb890014cb9c5bba47608e3e1c0192e7f6f0ff6aa",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-high/case-019-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "d638545b-a286-4606-bea8-118a55811053",
+    "started_at": "2026-06-05T03:16:06+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "The verifier is rejecting this before normal instruction simulation because the BPF-to-BPF subprogram call graph contains a cycle:\n\n```text\nhelper_a -> helper_a\n```\n\nEven though the recursion is guarded by:\n\n```asm\nif r1 < 4 goto l0_%=\n```\n\nthe verifier does not allow recursive subprogram calls at all. It rejects the program statically while building/checking the call graph, which is why the log says `processed 0 insns`.\n\nThe smallest source-level fix is to remove the recursive call and express the same bounded behavior as an in-function bounded loop. Since `entry()` initializes `r1 = 0`, the verifier should be able to see that `r1` increases until it reaches `4`.\n\nPatch:\n\n```diff\n@@\n static __naked __noinline __attribute__((used))\n void helper_a(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n-\tr1 += 1;\t\t\t\t\t\\\n+l0_%=:\tr1 += 1;\t\t\t\t\t\\\n \tr0 = r1;\t\t\t\t\t\\\n \tif r1 < 4 goto l0_%=;\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n-l0_%=:\tcall helper_a;\t\t\t\t\t\\\n-\texit;\t\t\t\t\t\t\\\n \"\t::: __clobber_all);\n }\n```\n\nAfter the change, the call graph is acyclic:\n\n```text\nentry -> helper_a\n```\n\nand `helper_a` contains only a bounded loop:\n\n```asm\nl0:\n    r1 += 1;\n    r0 = r1;\n    if r1 < 4 goto l0;\n    exit;\n```\n\nThis preserves the intended result of the original tail-recursive code while satisfying the verifier\u2019s rule that BPF subprograms must not recurse.",
+  "must_mention": [
+    "The bpf2bpf call graph is recursive",
+    "Verifier requires no recursive subprogram calls",
+    "A bounded loop or acyclic rewrite is needed"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes the branch bound from 4 to another number",
+    "Adds a runtime recursion depth counter but keeps the self-call",
+    "Treats the failure as stack memory bounds"
+  ]
+}

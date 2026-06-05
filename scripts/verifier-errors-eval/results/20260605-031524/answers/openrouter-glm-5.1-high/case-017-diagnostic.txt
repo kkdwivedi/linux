@@ -1,0 +1,25 @@
+## Explanation
+
+The verifier enforces that `bpf_local_irq_save`/`bpf_local_irq_restore` must follow strict LIFO (last-in, first-out) ordering — essentially a stack discipline for IRQ flag states.
+
+The code saves in this order:
+1. `bpf_local_irq_save(&flags1)` → id=1
+2. `bpf_local_irq_save(&flags2)` → id=2
+
+But then restores in the wrong order:
+1. `bpf_local_irq_restore(&flags1)` → expects id=2 (the most recently saved), but gets id=1 → **error**
+
+The verifier expected the restore of id=2 (the last save) first, but instead got a restore of id=1.
+
+## Fix
+
+Swap the restore order so the most recently saved flags are restored first:
+
+```c
+	bpf_local_irq_save(&flags1);
+	bpf_local_irq_save(&flags2);
+	bpf_local_irq_restore(&flags2);   // restore flags2 first (LIFO)
+	bpf_local_irq_restore(&flags1);   // then flags1
+```
+
+This is the minimal change — just swap lines 248 and 249. The save order remains the same, but the restores now follow the required reverse order, matching the verifier's LIFO expectation.

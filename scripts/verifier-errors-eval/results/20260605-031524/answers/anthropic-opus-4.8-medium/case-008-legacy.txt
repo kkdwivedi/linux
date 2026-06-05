@@ -1,0 +1,30 @@
+## The failure
+
+`bpf_dynptr_slice(&ptr, 0, buffer, 9)` tells the verifier that `buffer` (the R3 pointer + R4 length pair) is a 9-byte memory region the helper may write into. But `buffer` is only 8 bytes (`char buffer[8]`, stored at `fp-24..fp-16`). So the helper's declared length (9) exceeds the actual stack object, and the verifier rejects it:
+
+```
+invalid read from stack R3 off -24+8 size 9
+R3 and R4 memory, len pair leads to invalid memory access
+```
+
+The `len` argument to `bpf_dynptr_slice` must not be larger than the backing `buffer`.
+
+## The fix
+
+Make the buffer length and the requested length consistent. Smallest change is to ask for 8 bytes (matching the 8-byte buffer):
+
+```c
+	data = bpf_dynptr_slice(&ptr, 0, buffer, 8);
+```
+
+Alternatively, enlarge the buffer to at least 9 bytes:
+
+```c
+	char buffer[9] = {};
+	...
+	data = bpf_dynptr_slice(&ptr, 0, buffer, 9);
+```
+
+Either edit guarantees `len <= sizeof(buffer)`, satisfying the verifier's memory/len pair check.
+
+(If this is a "should-pass" positive test, prefer the first form `len = 8`; if you intended to keep `len = 9`, you must grow `buffer` to 9.)

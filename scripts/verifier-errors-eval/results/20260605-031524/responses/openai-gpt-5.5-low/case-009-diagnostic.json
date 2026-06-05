@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier failure is at:\n\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\n`value` is a map value returned from `bpf_map_lookup_elem()`. Its `task` field is a kptr:\n\n```c\nstruct map_value {\n\tstruct task_struct *task;\n};\n```\n\nWhen the verifier loads `value->task`, it types the result as:\n\n```text\nrcu_ptr_or_null_task_struct\n```\n\ni.e. the pointer may be `NULL`. But `bpf_task_acquire()` requires a non-`NULL` `struct task_struct *`. Even though this program previously inserted/acquired/exchanged a task into the map, the verifier does not prove that the later map lookup returns a value whose kptr field is definitely non-`NULL`. Kptr loads from maps are treated as nullable unless explicitly checked.\n\nThe smallest fix is to load `value->task` into a local variable, check it for `NULL`, and only call `bpf_task_acquire()` on the non-`NULL` path.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -68,6 +68,7 @@ SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n \tstruct task_struct *acquired;\n+\tstruct task_struct *value_task;\n \tstruct map_value *value;\n \n \tvalue = helper_a(task);\n@@ -75,7 +76,11 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)\n \t\treturn 0;\n \n-\tacquired = bpf_task_acquire(value->task);\n+\tvalue_task = value->task;\n+\tif (!value_task)\n+\t\treturn 0;\n+\n+\tacquired = bpf_task_acquire(value_task);\n \tif (!acquired)\n \t\treturn 0;\n \n```\n\nOr equivalently, the fixed `entry()` becomes:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired;\n\tstruct task_struct *value_task;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n\tvalue_task = value->task;\n\tif (!value_task)\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(value_task);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\nUsing a temporary is important: writing only\n\n```c\nif (!value->task)\n\treturn 0;\nacquired = bpf_task_acquire(value->task);\n```\n\nmay compile into two separate loads from the map kptr field, and the verifier may still consider the second load nullable. Loading once, checking that same register, and passing that checked pointer to `bpf_task_acquire()` is the verifier-friendly form.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-low/case-009-diagnostic.txt",
+    "case_id": "case-009",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-low",
+    "prompt_bytes": 9539,
+    "prompt_path": "public/case-009/prompt_diagnostic.md",
+    "prompt_sha256": "b18a80e715b0997c1feba2b4b098abd71869a9fb867ace1b91abe52c1a1cab07",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-low/case-009-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "low"
+    },
+    "run_id": "681d030c-6f32-4fc2-94ad-6447a3c18614",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.01645,
+    "output_cost_usd": 0.03159,
+    "total_cost_usd": 0.04804
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 3290,
+    "output_tokens": 1053,
+    "raw_usage": {
+      "input_tokens": 3290,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1053,
+      "output_tokens_details": {
+        "reasoning_tokens": 410
+      },
+      "total_tokens": 4343
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 410,
+    "total_tokens": 4343
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629345,
+    "created_at": 1780629324,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_057ef561fc20d7bf006a223f4ce10081a28c235a8551bf268f",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_057ef561fc20d7bf006a223f4db17081a2a7e1dcec2402223f",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier failure is at:\n\n```c\nacquired = bpf_task_acquire(value->task);\n```\n\n`value` is a map value returned from `bpf_map_lookup_elem()`. Its `task` field is a kptr:\n\n```c\nstruct map_value {\n\tstruct task_struct *task;\n};\n```\n\nWhen the verifier loads `value->task`, it types the result as:\n\n```text\nrcu_ptr_or_null_task_struct\n```\n\ni.e. the pointer may be `NULL`. But `bpf_task_acquire()` requires a non-`NULL` `struct task_struct *`. Even though this program previously inserted/acquired/exchanged a task into the map, the verifier does not prove that the later map lookup returns a value whose kptr field is definitely non-`NULL`. Kptr loads from maps are treated as nullable unless explicitly checked.\n\nThe smallest fix is to load `value->task` into a local variable, check it for `NULL`, and only call `bpf_task_acquire()` on the non-`NULL` path.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -68,6 +68,7 @@ SEC(\"tp_btf/task_newtask\")\n int BPF_PROG(entry, struct task_struct *task, u64 flags)\n {\n \tstruct task_struct *acquired;\n+\tstruct task_struct *value_task;\n \tstruct map_value *value;\n \n \tvalue = helper_a(task);\n@@ -75,7 +76,11 @@ int BPF_PROG(entry, struct task_struct *task, u64 flags)\n \t\treturn 0;\n \n-\tacquired = bpf_task_acquire(value->task);\n+\tvalue_task = value->task;\n+\tif (!value_task)\n+\t\treturn 0;\n+\n+\tacquired = bpf_task_acquire(value_task);\n \tif (!acquired)\n \t\treturn 0;\n \n```\n\nOr equivalently, the fixed `entry()` becomes:\n\n```c\nSEC(\"tp_btf/task_newtask\")\nint BPF_PROG(entry, struct task_struct *task, u64 flags)\n{\n\tstruct task_struct *acquired;\n\tstruct task_struct *value_task;\n\tstruct map_value *value;\n\n\tvalue = helper_a(task);\n\tif (!value)\n\t\treturn 0;\n\n\tvalue_task = value->task;\n\tif (!value_task)\n\t\treturn 0;\n\n\tacquired = bpf_task_acquire(value_task);\n\tif (!acquired)\n\t\treturn 0;\n\n\tbpf_task_release(acquired);\n\treturn 0;\n}\n```\n\nUsing a temporary is important: writing only\n\n```c\nif (!value->task)\n\treturn 0;\nacquired = bpf_task_acquire(value->task);\n```\n\nmay compile into two separate loads from the map kptr field, and the verifier may still consider the second load nullable. Loading once, checking that same register, and passing that checked pointer to `bpf_task_acquire()` is the verifier-friendly form.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_057ef561fc20d7bf006a223f5849e481a28e39a5675fe2297c",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "low",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 3290,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1053,
+      "output_tokens_details": {
+        "reasoning_tokens": 410
+      },
+      "total_tokens": 4343
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

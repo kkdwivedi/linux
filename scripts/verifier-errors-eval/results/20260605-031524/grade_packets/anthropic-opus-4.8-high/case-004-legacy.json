@@ -1,0 +1,67 @@
+{
+  "acceptable_fixes": [
+    "Guard helper_a with if (!s) return 0; before s->x.",
+    "Make the function pattern local/static only if that changes verifier validation so the argument is proven non-NULL, without hiding an unsafe dereference."
+  ],
+  "canonical_fix": "Add a NULL check in helper_a before reading s->x, returning a safe value on the NULL path.",
+  "case_id": "case-004",
+  "category": "Register Type Safety",
+  "difficulty": "easy",
+  "expected_explanation": "The global subprogram dereferences its pointer argument directly. The verifier validates global subprograms for any argument state matching the prototype, including NULL-like memory arguments, so the callee must prove the pointer is non-NULL before dereferencing.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-004-legacy.txt",
+    "case_id": "case-004",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 1415,
+    "prompt_path": "public/case-004/prompt_legacy.md",
+    "prompt_sha256": "5122475504cbe77965669ffc9de4273ee4a86feb8b73ecbb090ea008b68a08ae",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-004-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "b5d0413e-eb2f-43fb-85c7-cadfe09847bd",
+    "started_at": "2026-06-05T03:17:29+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Explanation\n\n`helper_a()` is a `__noinline` function, so the verifier treats it as a **global (BPF-to-BPF) function** and validates it independently from `entry()`. For such functions, a pointer-to-struct argument is passed in as type `PTR_TO_MEM_OR_NULL` (shown as `mem_or_null` in the log):\n\n```\n7: R1=mem_or_null(id=1,sz=4)\n```\n\nThe verifier does not assume the caller passes a non-NULL pointer. It only knows the pointer *may* be NULL and *may* point to 4 bytes of memory. When the function then dereferences it without first checking for NULL:\n\n```\n10: (61) r2 = *(u32 *)(r6 +0)\nR6 invalid mem access 'mem_or_null'\n```\n\nit rejects the access, because dereferencing a possibly-NULL pointer is unsafe.\n\n## Fix\n\nAdd an explicit NULL check inside `helper_a()` before dereferencing `s`. After the check, the verifier narrows the type from `mem_or_null` to `mem`, making the load valid.\n\n```c\n__noinline int helper_a(const struct Item *s)\n{\n\tif (!s)\n\t\treturn 0;\n\treturn bpf_get_prandom_u32() < s->x;\n}\n```\n\nThis is the smallest source-level change: the `if (!s)` branch lets the verifier prune the NULL case, so on the path reaching `s->x` the register is a valid `PTR_TO_MEM` of size 4, and the 4-byte load at offset 0 is accepted.\n\n(Equivalently, one could annotate the argument as non-null with the `__arg_nonnull` tag, e.g. `helper_a(const struct Item *s __arg_nonnull)`, but the explicit NULL check is the simplest and most portable fix.)",
+  "must_mention": [
+    "The callee argument may be NULL",
+    "The dereference is inside helper_a",
+    "The fix belongs before s->x is read"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check after dereferencing s",
+    "Checks the address of the local object in entry but leaves helper_a unsafe for verifier validation",
+    "Changes the comparison but not the dereference"
+  ]
+}

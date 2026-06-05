@@ -1,0 +1,44 @@
+The verifier failure is a **refcount leak** on one control-flow path.
+
+### What happens
+
+- `bpf_sk_lookup_tcp()` (insn 19) returns `R0=sock_or_null` with an owned reference.
+- Right after that, your code does:
+
+```asm
+if r6 == 0 goto l1;
+exit;
+```
+
+- On the `r6 != 0` path, program exits immediately (insn 21) **without calling `bpf_sk_release()`**.
+- Verifier reports: `Unreleased reference id=2 alloc_insn=19`.
+
+So the bug is not in lookup itself; it’s the early `exit` before the release block.
+
+---
+
+### Smallest likely fix
+
+Remove that early `exit` so both branches flow into the existing `l1` block, which already does:
+
+- `if r0 == 0 goto l2;`
+- `bpf_sk_release(r0);`
+- `exit;`
+
+That ensures all paths either have no socket or release it before exit.
+
+## Patch
+
+```diff
+@@
+ 	r5 = 0;						\
+ 	call %[bpf_sk_lookup_tcp];			\
+ 	if r6 == 0 goto l1_%=;				\
+-	exit;						\
+ l1_%=:	if r0 == 0 goto l2_%=;				\
+ 	r1 = r0;					\
+ 	call %[bpf_sk_release];				\
+ l2_%=:	exit;						\
+```
+
+This is the minimal source-level change that should satisfy the verifier’s resource lifetime check.

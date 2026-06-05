@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Move helper_a(sk, 0) before taking and checking p.",
+    "Recompute p from sk->data after helper_a and repeat the data_end check before *p = 42.",
+    "Avoid calling a packet-data-invalidating helper between pointer validation and pointer use."
+  ],
+  "canonical_fix": "After helper_a returns, reload sk->data and sk->data_end, redo the bounds check, and only then write through the packet pointer.",
+  "case_id": "case-015",
+  "category": "Register Type Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program validates a packet data pointer, then calls a subprogram that invokes bpf_skb_pull_data. That helper can move packet data and invalidates packet pointers proven before the call. The later store through the old pointer uses an invalidated value.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-glm-5.1-high/case-015-legacy.txt",
+    "case_id": "case-015",
+    "model": "z-ai/glm-5.1",
+    "profile": "openrouter-glm-5.1-high",
+    "prompt_bytes": 1984,
+    "prompt_path": "public/case-015/prompt_legacy.md",
+    "prompt_sha256": "dc0fc1e91b61bdf915966f9cbe5ae652d8b1776a8af859d12e6cd23d52604af2",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-glm-5.1-high/case-015-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "fcbe7922-ee0b-4ac9-bd97-3cee389ee282",
+    "started_at": "2026-06-05T03:21:35+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## Verifier Failure Explanation\n\nThe problem is that `bpf_skb_pull_data()` (called indirectly via `helper_a` \u2192 `helper_b`) can reallocate the skb's data buffer, which **invalidates all previously derived packet pointers**. \n\nIn the verifier log, we can see:\n- Before the call: `R7=pkt(r=0)` \u2014 a valid packet pointer with range 0\n- After the call: `R7` becomes `scalar` \u2014 the verifier no longer treats it as a packet pointer\n\nSo when the code tries `*p = 42` (which uses R7), the verifier rejects it with `R7 invalid mem access 'scalar'` because the pointer is no longer recognized as a valid packet memory address.\n\n## Fix\n\nMove the `helper_a(sk, 0)` call **before** reading `sk->data` and `sk->data_end`, so that the pointer derivation and bounds check happen after the potentially-reallocating call:\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\thelper_a(sk, 0);\n\n\tint *p = (void *)(long)sk->data;\n\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\n**Why this works:** After `bpf_skb_pull_data()` completes, the verifier knows the data pointers are stable. By reading `sk->data` and `sk->data_end` *after* the call, the derived pointer `p` retains its `pkt` type with a valid range, and the bounds check against `data_end` establishes a safe access range. The write `*p = 42` then passes verification.",
+  "must_mention": [
+    "bpf_skb_pull_data invalidates packet pointers",
+    "The previous packet bounds check no longer applies after the call",
+    "Reload and revalidate data/data_end before dereference"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check for p only",
+    "Uses the old p after the helper call",
+    "Changes the write value but not pointer provenance"
+  ]
+}

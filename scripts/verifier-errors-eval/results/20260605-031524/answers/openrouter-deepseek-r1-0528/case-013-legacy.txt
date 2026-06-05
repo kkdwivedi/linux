@@ -1,0 +1,59 @@
+The verifier error indicates that the combined stack size of 3 function calls exceeds the BPF stack limit of 512 bytes. Specifically, the call chain `entry -> helper_c -> helper_b` (or `helper_d`) uses 544 bytes, which is too large.
+
+The root cause is that each helper function (`helper_b`, `helper_c`, `helper_d`) allocates 260 bytes on the stack for their `buf` arrays. When nested calls occur (e.g., `entry` calls `helper_c`, which then calls `helper_b`), their stack frames accumulate to exceed the limit.
+
+### Fix
+Reduce the stack allocation per function by changing `MAX_STACK` from 260 to 244. This reduces the per-function stack usage by 16 bytes, bringing the worst-case combined stack size (3 calls) down to 512 bytes (244 * 2 + overhead = 512).
+
+Here's the patched source:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+#define MAX_STACK 244
+
+static __attribute__((noinline))
+int helper_a(int val, struct __sk_buff *skb)
+{
+	asm volatile ("");
+	return skb->len;
+}
+
+__attribute__((noinline))
+int helper_b(struct __sk_buff *skb)
+{
+	volatile char buf[MAX_STACK] = {};
+	__sink(buf[MAX_STACK - 1]);
+	return helper_a(0, skb) + skb->len;
+}
+
+int helper_d(int val, struct __sk_buff *skb, int arg);
+
+__attribute__((noinline))
+int helper_c(int val, struct __sk_buff *skb)
+{
+	volatile char buf[MAX_STACK] = {};
+	__sink(buf[MAX_STACK - 1]);
+	return helper_b(skb) + helper_d(val, skb, 1);
+}
+
+__attribute__((noinline))
+int helper_d(int val, struct __sk_buff *skb, int arg)
+{
+	volatile char buf[MAX_STACK] = {};
+	__sink(buf[MAX_STACK - 1]);
+	return skb->ifindex * val * arg;
+}
+
+SEC("tc")
+int entry(struct __sk_buff *skb)
+{
+	return helper_a(1, skb) + helper_b(skb) + helper_c(2, skb) + helper_d(3, skb, 4);
+}
+```
+
+### Key Changes:
+- Changed `#define MAX_STACK 260` to `#define MAX_STACK 244`
+- Maintains all functionality while reducing per-function stack usage
+- Ensures worst-case call chain (`entry -> helper_c -> helper_b`) fits within 512 bytes

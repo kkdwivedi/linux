@@ -1,0 +1,58 @@
+## What the verifier is complaining about
+
+The log shows the failure at instruction 4:
+
+```
+4: (79) r0 = *(u64 *)(r0 +8)
+R0 invalid mem access 'scalar'
+```
+
+`R0` is a scalar at that point, not a pointer, so the dereference is rejected.
+
+The reason is the sequence of stack operations:
+
+```
+0: *(u64*)(r10 - 8) = r1    // spill ctx pointer into the 8-byte slot fp-8..fp-1
+2: *(u8 *)(r10 - 7) = r0    // <-- 1-byte write *inside* that same 8-byte slot
+3: r0 = *(u64*)(r10 - 8)    // reload
+```
+
+A spilled register is only tracked as a pointer while the **whole** 8-byte spill slot is intact. The 1-byte store at `r10-7` falls inside the slot that holds the spilled pointer (the slot spans `r10-8 … r10-1`). That partial overwrite invalidates the spill: the verifier downgrades the slot from `fp-8=ctx()` to `fp-8=mmmmmmmm` (STACK_MISC), exactly as the log shows:
+
+```
+2: ... R10=fp0 fp-8=mmmmmmmm
+3: (79) r0 = *(u64 *)(r10 -8)  ; R0=scalar()
+```
+
+So the reload in insn 3 produces a plain scalar (unknown value), and dereferencing it in insn 4 is illegal.
+
+## Smallest fix
+
+Don't write the byte into the same stack slot that holds the spilled pointer. Put the scratch byte in a different, non-overlapping slot so the `fp-8` spill stays a valid `ctx()` pointer across the reload:
+
+```c
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	*(u64*)(r10 - 8) = r1;				\
+	r0 = 0x23;					\
+	*(u8*)(r10 - 16) = r0;			\	/* was r10 - 7: kept off the spill slot */
+	r0 = *(u64*)(r10 - 8);				\
+	r0 = *(u64*)(r0 + 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+With this change the slot `fp-8…fp-1` is never partially overwritten, so insn 3 reloads `R0 = ctx()` (a real pointer), and the dereference of `r0 + 8` is type-correct.
+
+## Caveat
+
+This fixes the exact error in the log (dereference of a scalar). Since the program is `SEC("socket")`, `ctx` is `__sk_buff`, and a *u64* load at `ctx + 8` may then be rejected by the context-access checker (most `__sk_buff` fields are 4-byte). If that secondary error appears, narrow the final access to a valid field, e.g.
+
+```c
+	r0 = *(u32*)(r0 + 0);   /* read __sk_buff::len */
+```
+
+But the root cause of the reported failure is the partial 1-byte store landing inside the spilled-pointer slot; moving it out of that slot is the minimal source change that addresses the verifier message.

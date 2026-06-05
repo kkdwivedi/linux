@@ -1,0 +1,47 @@
+## What the verifier is complaining about
+
+The error is:
+
+```
+10: (63) *(u32 *)(r7 +0) = r1
+R7 invalid mem access 'scalar'
+```
+
+`r7` holds the packet pointer `p` (derived from `sk->data`). You correctly bounds-check it against `sk->data_end` at insns 3–5, so right after the check `R7` is a valid `pkt` pointer.
+
+The problem is the call at insn 8:
+
+```
+8: (85) call pc+4
+Func#1 ('helper_a') is global and assumed valid.
+```
+
+`helper_a` is a **global** (non-static) subprogram. The verifier does not look inside global subprograms when verifying the caller; it just assumes they're valid. But because a global function *could* call a packet-changing helper such as `bpf_skb_pull_data()` (which it does, transitively via `helper_b`), the verifier must conservatively assume the call may **reallocate/invalidate the packet buffer**. Therefore all packet pointers held in registers are invalidated (turned into `scalar`) across that call.
+
+So after insn 8, `R7` is no longer a `pkt` pointer — it's a scalar — and the store `*p = 42` at insn 10 is rejected. The earlier bounds check is meaningless because the underlying packet may have moved.
+
+This is *correct* verifier behavior: `bpf_skb_pull_data()` can change `sk->data`/`sk->data_end`, so any pointer obtained before the pull is stale afterward.
+
+## The fix
+
+Recompute the packet pointer and redo the bounds check **after** the call, not before. The smallest source change:
+
+```c
+SEC("tc")
+int entry(struct __sk_buff *sk)
+{
+	int *p;
+
+	helper_a(sk, 0);
+
+	p = (void *)(long)sk->data;
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	*p = 42;
+	return TCX_PASS;
+}
+```
+
+Now `p` is derived from `sk->data` *after* the potential `bpf_skb_pull_data()`, and the bounds check against `sk->data_end` is performed on the fresh, post-call packet state. The verifier sees a valid `pkt` pointer with a verified range at the time of the store, so the write succeeds.
+
+(Equivalently, if you must keep the original ordering, you'd have to re-load `sk->data`/`sk->data_end` and re-run the bounds check after the call — but simply moving the call before the pointer computation is the minimal, clean fix.)

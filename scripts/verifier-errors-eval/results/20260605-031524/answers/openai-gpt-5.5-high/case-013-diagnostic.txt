@@ -1,0 +1,56 @@
+The failure is not caused by an invalid skb access or bad argument type. It is the verifier’s combined BPF-to-BPF call stack limit.
+
+`helper_b()`, `helper_c()`, and `helper_d()` each allocate:
+
+```c
+volatile char buf[MAX_STACK] = {};
+```
+
+With `MAX_STACK == 260`, the generated BPF stack frame is rounded/aligned to about `272` bytes. When `entry()` calls `helper_c()`, and `helper_c()` calls `helper_b()`, both `helper_c`’s and `helper_b`’s stack frames are live at the same time:
+
+```text
+entry -> helper_c -> helper_b
+```
+
+So the verifier sees roughly:
+
+```text
+272 + 272 = 544 bytes
+```
+
+which exceeds the 512-byte combined call-chain stack limit.
+
+The smallest likely source fix is to reduce the local buffer size so each frame rounds to 256 bytes instead of 272. Since 512 bytes is allowed and only values greater than 512 fail, changing `MAX_STACK` from `260` to `256` should make the deepest chains:
+
+```text
+entry -> helper_c -> helper_b
+entry -> helper_c -> helper_d
+```
+
+use at most:
+
+```text
+256 + 256 = 512 bytes
+```
+
+and pass verification.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -1,7 +1,7 @@
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ 
+-#define MAX_STACK 260
++#define MAX_STACK 256
+ 
+ static __attribute__((noinline))
+ int helper_a(int val, struct __sk_buff *skb)
+```
+
+If a particular compiler/kernel combination still emits extra stack in `entry()`, then reducing further to `248` would provide margin, but based on the verifier log, `260 -> 256` is the minimal likely fix.

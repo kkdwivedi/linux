@@ -1,0 +1,59 @@
+## What the verifier is complaining about
+
+The program looks up a map value, reads the first `u32` (`offset`) out of it, and then uses that value as a pointer offset:
+
+```
+9:  r3 = *(u32 *)(r0 + 0)   // r3 = value->offset, a SCALAR in [0, 0xffffffff]
+10: r1 += r3                // r1 = map_value + variable, *unbounded* offset
+...
+13: call bpf_probe_read_kernel   // r1 is the destination buffer
+```
+
+`bpf_probe_read_kernel(dst, size, src)` writes `size` bytes to `dst` (`r1`).
+The verifier must prove `dst_offset + size <= object_size`. Here:
+
+- object size is 48,
+- `size` (`r2`) is 1,
+- but `r1`’s offset is the value just loaded from the map, which is a fully
+  unbounded scalar (`var_off=(0x0; 0xffffffff)`, range `[0, 4294967295]`).
+
+Since nothing constrains `offset`, the verifier cannot prove the write stays
+inside the 48‑byte map value, so it rejects the program:
+
+```
+R1 unbounded memory access, make sure to bounds check any such access
+```
+
+This is correct: the source never bounds-checks `offset` before adding it to
+the map-value pointer.
+
+## Smallest fix
+
+Constrain `offset` (`r3`) before adding it to the pointer so the verifier can
+prove `offset + 1 <= 48`. The cheapest way is to mask it. The `data[44]` array
+starts at offset 4, and a 1‑byte access needs `offset <= 47`; masking with
+`0x1f` (i.e. `& 31`) keeps `r3` in `[0, 31]`, which is safely within bounds.
+
+```c
+	r3 = *(u32*)(r0 + 0);				\
+	r3 &= 31;					\
+	r1 += r3;					\
+```
+
+After `r3 &= 31`, the verifier knows `r3 ∈ [0,31]`, so `r1` becomes a map_value
+with offset bounded to `[0,31]`; `offset + size = 31 + 1 = 32 <= 48`, and the
+`bpf_probe_read_kernel` write is accepted.
+
+### Patch
+
+```diff
+ 	r1 = r0;					\
+ 	r3 = *(u32*)(r0 + 0);				\
++	r3 &= 31;					\
+ 	r1 += r3;					\
+ 	r2 = 1;						\
+```
+
+(Any equivalent bounds check works, e.g. `if r3 > 47 goto l0_%=;` before
+`r1 += r3`. Masking is the smallest single-instruction change that gives the
+verifier a provable upper bound.)

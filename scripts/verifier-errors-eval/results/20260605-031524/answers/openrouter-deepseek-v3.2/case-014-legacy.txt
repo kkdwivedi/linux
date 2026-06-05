@@ -1,0 +1,22 @@
+The verifier error occurs because the program reads an offset from a map value and uses it to compute a destination pointer for `bpf_probe_read_kernel` without bounds checking. The offset can be any 32-bit value, leading to an unbounded memory access when adding it to the map value pointer. The map value size is 48 bytes (struct with a 4-byte `offset` and a 44-byte `data` array), so the offset must be restricted to ensure the pointer stays within bounds.
+
+The fix adds a bounds check after reading the offset: if the offset is 48 or greater, the program jumps to exit, preventing out-of-bounds access. This ensures the destination pointer is within the map value's valid range.
+
+Patch:
+```diff
+--- original.c
++++ fixed.c
+@@ -XX,XX +XX,XX @@
+ 	call %[bpf_map_lookup_elem];			\
+ 	if r0 == 0 goto l0_%=;				\
+ 	r1 = r0;					\
+ 	r3 = *(u32*)(r0 + 0);				\
++	if r3 >= 48 goto l0_%=;				\
+ 	r1 += r3;					\
+ 	r2 = 1;						\
+ 	r3 = 0;						\
+ 	call %[bpf_probe_read_kernel];			\
+ l0_%=:	exit;						\
+```
+
+This change is minimal and directly addresses the verifier's complaint about unbounded memory access. Note that the source address for `bpf_probe_read_kernel` is still set to 0, which may cause a separate verifier error; however, the immediate issue is the unbounded destination pointer, which this patch resolves.

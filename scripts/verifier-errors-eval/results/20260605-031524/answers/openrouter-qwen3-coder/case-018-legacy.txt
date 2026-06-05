@@ -1,0 +1,56 @@
+Looking at the verifier log, the issue is clear: the verifier is detecting that `bpf_res_spin_unlock` calls are being made out of order. The error message "bpf_res_spin_unlock cannot be out of order" indicates that the BPF verifier enforces strict lock ordering to prevent potential deadlocks and ensure proper lock semantics.
+
+In the current code, the locks are acquired in this order:
+1. `lock_a` (first)
+2. `lock_b` (second)
+
+But when unlocking, the code does:
+1. Unlock `lock_a` (first acquired, first released)
+2. Unlock `lock_b` (second acquired, second released)
+
+Wait, that's actually the correct order for nested locks. Let me re-read the code more carefully.
+
+Looking at the code flow:
+- Lock A succeeds
+- Lock B fails → unlock A and return
+- If both succeed → unlock A then unlock B
+
+The issue is in the error handling path where if `bpf_res_spin_lock(&lock_b)` fails, we unlock `lock_a` and return. But the verifier is tracking that we're unlocking in an order that doesn't match the acquisition order tracking.
+
+Actually, re-reading the error more carefully: the problem is that we're calling `bpf_res_spin_unlock` on `lock_a` at instruction 10, but the verifier expects locks to be unlocked in LIFO (last-in, first-out) order for safety reasons.
+
+The fix is to ensure that we always unlock in the reverse order of locking, even in error paths. Since we acquire A then B, we should release B then A. But in the error case where B fails to lock, we should not have locked B, so we can only unlock A.
+
+However, looking at this more carefully, the real issue might be that the verifier is being overly strict about the order. But the actual problem is that we're trying to unlock `lock_a` after having attempted (and failed) to lock `lock_b`.
+
+The cleanest fix is to restructure the code to make the locking pattern clearer to the verifier:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+struct bpf_res_spin_lock lock_a __hidden SEC(".data.A");
+struct bpf_res_spin_lock lock_b __hidden SEC(".data.B");
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	int ret_a, ret_b;
+
+	ret_a = bpf_res_spin_lock(&lock_a);
+	if (ret_a)
+		return 0;
+	
+	ret_b = bpf_res_spin_lock(&lock_b);
+	if (ret_b) {
+		bpf_res_spin_unlock(&lock_a);
+		return 0;
+	}
+	
+	bpf_res_spin_unlock(&lock_b);
+	bpf_res_spin_unlock(&lock_a);
+	return 0;
+}
+```
+
+The key change is unlocking in reverse order: B first, then A, which is the proper nested lock release pattern. This should satisfy the verifier's ordering requirements.

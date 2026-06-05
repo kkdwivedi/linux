@@ -1,0 +1,130 @@
+{
+  "answer_text": "The failure is because `r3` is loaded from the map value and then used as a variable offset into that same map value:\n\n```asm\nr3 = *(u32*)(r0 + 0);   // r3 = value->offset, range 0..0xffffffff\nr1 = r0;\nr1 += r3;              // r1 = map_value + unbounded offset\nr2 = 1;\n...\ncall bpf_probe_read_kernel;\n```\n\nFor `bpf_probe_read_kernel(dst, size, src)`, `r1` is the destination pointer and `r2` is the destination size. The verifier must prove that `r1..r1+size-1` is inside the map value. The map value size is 48 bytes, and the helper writes 1 byte, so the verifier needs:\n\n```text\noffset + 1 <= 48\n```\n\ni.e. `offset <= 47`.\n\nBut `offset` comes from map contents and has no upper bound, so the verifier rejects it as a possible out-of-bounds write.\n\nThe smallest fix is to add a bounds check after loading `offset` and before adding it to the map value pointer.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -21,6 +21,7 @@ __naked void entry(void)\n \tif r0 == 0 goto l0_%=;\t\t\t\t\\\n \tr1 = r0;\t\t\t\t\t\\\n \tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n+\tif r3 > 47 goto l0_%=;\t\t\t\t\\\n \tr1 += r3;\t\t\t\t\t\\\n \tr2 = 1;\t\t\t\t\t\t\\\n \tr3 = 0;\t\t\t\t\t\t\\\n```\n\nWith this check, on the fallthrough path the verifier can infer:\n\n```text\n0 <= r3 <= 47\n```\n\nThen `r1 = map_value + r3` is guaranteed to point within the 48-byte map value, and the 1-byte write performed by `bpf_probe_read_kernel()` is safe.\n\nIf the intended destination is specifically `data[]` rather than anywhere in `struct value`, then the stricter semantic fix would be to check `offset <= 43` and add the `data` field offset, but for the verifier failure shown, the minimal source-level repair is the `r3 > 47` guard.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-medium/case-014-diagnostic.txt",
+    "case_id": "case-014",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-medium",
+    "prompt_bytes": 4492,
+    "prompt_path": "public/case-014/prompt_diagnostic.md",
+    "prompt_sha256": "ac5a2ab54da5cf45e897928788b3ed66a0aaeb6499aac9a13e24b90fac12b24c",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-medium/case-014-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "d23c5a43-b06f-4a04-9c43-8cec88f7ef88",
+    "started_at": "2026-06-05T03:15:39+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.007365,
+    "output_cost_usd": 0.04719,
+    "total_cost_usd": 0.054555000000000006
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1473,
+    "output_tokens": 1573,
+    "raw_usage": {
+      "input_tokens": 1473,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1573,
+      "output_tokens_details": {
+        "reasoning_tokens": 1034
+      },
+      "total_tokens": 3046
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 1034,
+    "total_tokens": 3046
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629379,
+    "created_at": 1780629340,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0032df7911350caa006a223f5c004081a1bcc34614c80fd0c8",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.5-2026-04-23",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0032df7911350caa006a223f5c976481a1a915f9124d01bb86",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is because `r3` is loaded from the map value and then used as a variable offset into that same map value:\n\n```asm\nr3 = *(u32*)(r0 + 0);   // r3 = value->offset, range 0..0xffffffff\nr1 = r0;\nr1 += r3;              // r1 = map_value + unbounded offset\nr2 = 1;\n...\ncall bpf_probe_read_kernel;\n```\n\nFor `bpf_probe_read_kernel(dst, size, src)`, `r1` is the destination pointer and `r2` is the destination size. The verifier must prove that `r1..r1+size-1` is inside the map value. The map value size is 48 bytes, and the helper writes 1 byte, so the verifier needs:\n\n```text\noffset + 1 <= 48\n```\n\ni.e. `offset <= 47`.\n\nBut `offset` comes from map contents and has no upper bound, so the verifier rejects it as a possible out-of-bounds write.\n\nThe smallest fix is to add a bounds check after loading `offset` and before adding it to the map value pointer.\n\nPatch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -21,6 +21,7 @@ __naked void entry(void)\n \tif r0 == 0 goto l0_%=;\t\t\t\t\\\n \tr1 = r0;\t\t\t\t\t\\\n \tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n+\tif r3 > 47 goto l0_%=;\t\t\t\t\\\n \tr1 += r3;\t\t\t\t\t\\\n \tr2 = 1;\t\t\t\t\t\t\\\n \tr3 = 0;\t\t\t\t\t\t\\\n```\n\nWith this check, on the fallthrough path the verifier can infer:\n\n```text\n0 <= r3 <= 47\n```\n\nThen `r1 = map_value + r3` is guaranteed to point within the 48-byte map value, and the 1-byte write performed by `bpf_probe_read_kernel()` is safe.\n\nIf the intended destination is specifically `data[]` rather than anywhere in `struct value`, then the stricter semantic fix would be to check `offset <= 43` and add the `data` field offset, but for the verifier failure shown, the minimal source-level repair is the `r3 > 47` guard.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0032df7911350caa006a223f7ab1a081a1a8a0edae83fc0f41",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 1473,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 1573,
+      "output_tokens_details": {
+        "reasoning_tokens": 1034
+      },
+      "total_tokens": 3046
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

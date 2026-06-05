@@ -1,0 +1,35 @@
+## Analysis
+
+The verifier is hitting a **liveness analysis complexity limit** due to excessive recursion depth. The issue is:
+
+1. The call chain is: `entry` → 50x `helper_a` → 50x `helper_b` → ... → 50x `helper_g`
+2. This creates a deeply nested call graph (7 levels deep with 50 calls each)
+3. When analyzing liveness, the verifier re-analyzes `helper_g` many times from different call contexts, creating exponential state explosion
+4. The liveness analysis hits the 10,001 calls complexity limit
+
+The log shows `helper_g` being re-analyzed repeatedly at depth 7, indicating the verifier is exhausting its complexity budget while tracking which values are live across the deeply nested call chain.
+
+## Solution
+
+The smallest fix is to **reduce the number of calls per level** from 50 to something much smaller (e.g., 2-5). This exponentially reduces the state explosion.
+
+**Proposed patch:**
+
+```c
+#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)
+```
+
+Change to:
+
+```c
+#define CALLS_50(fn) CALLS_10(fn)
+```
+
+Or alternatively, reduce `CALLS_10` itself:
+
+```c
+#define CALLS_2(fn) CALL_AT(fn, 8) CALL_AT(fn, 16)
+#define CALLS_50(fn) CALLS_2(fn)
+```
+
+**Why this works:** With fewer calls at each level, the number of unique call paths decreases dramatically (from 50^7 to 1^7 or 2^7), keeping the liveness analysis within the verifier's complexity budget while maintaining the nested call structure that the test likely intends to check.

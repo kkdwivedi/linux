@@ -1,0 +1,68 @@
+## Explanation of the Verifier Failure
+
+The verifier is complaining about an **unreleased reference leak**. Here's what's happening:
+
+1. At instruction 19, `bpf_sk_lookup_tcp` returns a `sock_or_null` reference with `id=2` and `refs=2` (reference count is incremented)
+2. At instruction 20, there's a conditional check `if r6 == 0 goto pc+1`
+3. At instruction 21, the program exits
+
+The problem is: **when `r6 != 0`, the program exits without releasing the socket reference obtained at instruction 19**. The verifier tracks that if the condition at instruction 20 is false (i.e., `r6 != 0`), execution reaches the exit at instruction 21 with an unreleased socket reference.
+
+The logic appears to be trying to exit early if `r6` (the mark field) is non-zero, but this path doesn't call `bpf_sk_release` to release the socket obtained from `bpf_sk_lookup_tcp`.
+
+## Proposed Fix
+
+The socket reference must be released before exiting when `r6 != 0`. The fix is to move the `bpf_sk_release` call to the branch that exits when `r6 != 0`:
+
+```c
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("tc")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	r2 = *(u32*)(r1 + %[data]);			\
+	r3 = *(u32*)(r1 + %[data_end]);			\
+	r0 = r2;					\
+	r0 += 16;					\
+	if r0 <= r3 goto l0_%=;				\
+	exit;						\
+l0_%=:	r6 = *(u32*)(r2 + %[mark]);			\
+	r2 = 0;						\
+	*(u32*)(r10 -8) = r2;				\
+	*(u64*)(r10 -16) = r2;				\
+	*(u64*)(r10 -24) = r2;				\
+	*(u64*)(r10 -32) = r2;				\
+	*(u64*)(r10 -40) = r2;				\
+	*(u64*)(r10 -48) = r2;				\
+	r2 = r10;					\
+	r2 += -48;					\
+	r3 = 36;					\
+	r4 = 0;						\
+	r5 = 0;						\
+	call %[bpf_sk_lookup_tcp];			\
+	if r0 == 0 goto l1_%=;				\
+	r1 = r0;					\
+	if r6 == 0 goto l1_%=;				\
+	call %[bpf_sk_release];				\
+l1_%=:	exit;						\
+"	:
+	: __imm(bpf_sk_lookup_tcp),
+	  __imm(bpf_sk_release),
+	  __imm_const(data, offsetof(struct __sk_buff, data)),
+	  __imm_const(data_end, offsetof(struct __sk_buff, data_end)),
+	  __imm_const(mark, offsetof(struct __sk_buff, mark))
+	: __clobber_all);
+}
+```
+
+## Key Changes
+
+1. Check `if r0 == 0` (socket is null) and skip the release if true
+2. Move the socket into `r1` for `bpf_sk_release` call
+3. Check `if r6 == 0` and skip the release if the mark is 0 (original intent to exit early)
+4. Only call `bpf_sk_release` when both conditions are false (socket is valid AND mark is non-zero)
+5. All paths now reach a single `exit` that either has released the socket reference or never acquired one
+
+This ensures the socket reference is properly released before any exit path.

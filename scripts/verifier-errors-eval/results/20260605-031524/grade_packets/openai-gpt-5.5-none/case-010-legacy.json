@@ -1,0 +1,64 @@
+{
+  "acceptable_fixes": [
+    "Change helper_c(val, skb + 1) to helper_c(val, skb).",
+    "Preserve the original context pointer in another variable/register and pass that original pointer to functions that dereference ctx fields."
+  ],
+  "canonical_fix": "Pass the original skb pointer to helper_c, or keep an unmodified copy for context dereferences and perform any needed offset arithmetic only in verifier-allowed ways.",
+  "case_id": "case-010",
+  "category": "Register Type Safety",
+  "difficulty": "medium",
+  "expected_explanation": "helper_b passes skb + 1 to helper_c, whose argument is later dereferenced as a context pointer. The verifier rejects dereferencing a modified ctx pointer because the callee no longer receives the original context pointer form.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-none/case-010-legacy.txt",
+    "case_id": "case-010",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-none",
+    "prompt_bytes": 2233,
+    "prompt_path": "public/case-010/prompt_legacy.md",
+    "prompt_sha256": "42cb94c19ecff9212d01b745ca76ad135db7dce4e6c15eefc8d6cb8a521dd385",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-none/case-010-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "none"
+    },
+    "run_id": "9b2c991a-bcdd-4e83-907e-49d6fa4c3ee7",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "The failure is caused by this call in `helper_b()`:\n\n```c\nhelper_c(val, skb + 1)\n```\n\n`skb` is a `struct __sk_buff *`, i.e. a BPF context pointer. Pointer arithmetic on context pointers is not allowed for passing into BPF subprograms that expect a context pointer.\n\nThe compiler translated `skb + 1` into adding the size of `struct __sk_buff` to the context pointer:\n\n```text\n21: (07) r6 += 192                    ; R6=ctx(imm=192)\n23: (bf) r2 = r6                      ; R2=ctx(imm=192)\n24: (85) call pc+2\ndereference of modified ctx ptr R2 off=192 disallowed\n```\n\nSo `helper_c()` receives `R2=ctx(imm=192)`, a modified context pointer. Since `helper_c()` dereferences it:\n\n```c\nreturn skb->ifindex * val;\n```\n\nthe verifier rejects the call:\n\n```text\ndereference of modified ctx ptr R2 off=192 disallowed\nCaller passes invalid args into func#3 ('helper_c')\n```\n\nThe smallest source-level fix is to pass the original `skb` pointer to `helper_c()` instead of `skb + 1`.\n\nPatch:\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -14,7 +14,7 @@ int helper_c(int val, struct __sk_buff *skb);\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n \n __attribute__((noinline))\n```\n\nAfter this change, `helper_c()` will receive an unmodified `ctx` pointer matching its prototype, so its access to `skb->ifindex` should satisfy the verifier.",
+  "must_mention": [
+    "skb + 1 modifies the ctx pointer",
+    "helper_c dereferences the ctx pointer",
+    "The callee needs the original ctx pointer"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check to skb",
+    "Changes helper_c's field access but still passes skb + 1 as ctx",
+    "Treats the error as stack depth or packet bounds"
+  ]
+}

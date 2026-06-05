@@ -1,0 +1,55 @@
+The verifier failure is due to **combined nested BPF-to-BPF stack usage**, not argument types or pointer safety.
+
+`helper_b()`, `helper_c()`, and `helper_d()` each allocate:
+
+```c
+volatile char buf[MAX_STACK] = {};
+```
+
+With `MAX_STACK == 260`, the compiler/verifier-accounted stack frame for these helpers is about **272 bytes** each after alignment/padding/spills.
+
+The failing call chain is:
+
+```text
+entry -> helper_c -> helper_b
+```
+
+Both `helper_c()` and `helper_b()` have large stack frames, so the verifier computes:
+
+```text
+272 + 272 = 544 bytes
+```
+
+That exceeds the verifier’s combined nested call stack limit of **512 bytes**:
+
+```text
+combined stack size of 3 calls is 544. Too large
+```
+
+A minimal source-level fix is to reduce the per-helper stack frame so that two nested helpers fit within 512 bytes. Reducing `MAX_STACK` from `260` to `244` should make each frame account as roughly **256 bytes**, giving:
+
+```text
+256 + 256 = 512 bytes
+```
+
+which is at the limit and should pass.
+
+Patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..1111111 100644
+--- a/case.c
++++ b/case.c
+@@ -2,7 +2,7 @@
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ 
+-#define MAX_STACK 260
++#define MAX_STACK 244
+ 
+ static __attribute__((noinline))
+ int helper_a(int val, struct __sk_buff *skb)
+```
+
+Why `244` rather than `256`: the verifier is not charging exactly the C array size. The observed 260-byte buffer becomes a 272-byte frame after compiler layout/alignment/spill effects. Reducing to 244 is likely the largest value that brings the accounted frame down to 256 bytes, allowing two such nested frames to fit under the 512-byte combined stack limit.

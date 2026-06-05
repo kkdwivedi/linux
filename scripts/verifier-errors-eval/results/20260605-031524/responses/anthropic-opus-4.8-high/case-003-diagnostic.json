@@ -1,0 +1,92 @@
+{
+  "answer_text": "## Explanation\n\nThe program does this:\n\n```\n*(u64*)(r10 - 8) = r1     // spill ctx pointer into stack slot fp-8 (bytes fp-8 .. fp-1)\nr0 = 0x23\n*(u8*)(r10 - 7) = r0      // write 1 byte at fp-7  -- INSIDE the spilled pointer!\nr0 = *(u64*)(r10 - 8)     // reload the slot\nr0 = *(u64*)(r0 + 8)      // dereference\n```\n\nThe spilled 64-bit pointer occupies stack bytes **fp-8 through fp-1**. The byte\nstore at **fp-7** lands *inside* that 8-byte slot. The verifier tracks spilled\nregisters per 8-byte slot; any partial overwrite of a spilled pointer destroys\nthe precise \"pointer\" tracking and the slot becomes `misc`/unknown scalar\n(`fp-8=mmmmmmmm`).\n\nSo when the slot is reloaded into `r0`, the verifier only knows it is an\nunknown scalar, not the ctx pointer. The subsequent `r0 = *(u64*)(r0 + 8)` is\nthen a dereference of a scalar, which is rejected:\n\n```\nR0 invalid mem access 'scalar'\n```\n\n## Fix\n\nMake the byte store land **outside** the 8-byte slot holding the spilled\npointer, so the pointer in fp-8 stays intact. The spilled pointer covers\noffsets -8..-1, so use an offset like `-9` (or any byte not in -8..-1):\n\n```c\nSEC(\"socket\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n\tr0 = 0x23;\t\t\t\t\t\\\n\t*(u8*)(r10 - 9) = r0;\t\t\t\t\\\n\tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n\tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\nWith this change the reload `r0 = *(u64*)(r10 - 8)` recovers the original\n`ctx()` pointer, and the dereference becomes a legal context access rather than\na dereference of an unknown scalar.\n\n(If the verifier additionally complains about the exact ctx offset/size on the\nfinal load, that load can be replaced with a known-valid `__sk_buff` field\naccess, but the root cause of the reported failure is the overlapping byte\nstore corrupting the spilled pointer slot.)",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-003-diagnostic.txt",
+    "case_id": "case-003",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 2939,
+    "prompt_path": "public/case-003/prompt_diagnostic.md",
+    "prompt_sha256": "f0ae7f2740c6566909dcad09724c1c4e67495167ac5f9dff858044543f91e0e9",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-003-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "32b2ae88-2e4f-4caf-ad0c-200c4a968749",
+    "started_at": "2026-06-05T03:17:28+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00661,
+    "output_cost_usd": 0.0417,
+    "total_cost_usd": 0.04831
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1322,
+    "output_tokens": 1668,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1322,
+      "output_tokens": 1668,
+      "output_tokens_details": {
+        "thinking_tokens": 819
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 2990
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "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",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## Explanation\n\nThe program does this:\n\n```\n*(u64*)(r10 - 8) = r1     // spill ctx pointer into stack slot fp-8 (bytes fp-8 .. fp-1)\nr0 = 0x23\n*(u8*)(r10 - 7) = r0      // write 1 byte at fp-7  -- INSIDE the spilled pointer!\nr0 = *(u64*)(r10 - 8)     // reload the slot\nr0 = *(u64*)(r0 + 8)      // dereference\n```\n\nThe spilled 64-bit pointer occupies stack bytes **fp-8 through fp-1**. The byte\nstore at **fp-7** lands *inside* that 8-byte slot. The verifier tracks spilled\nregisters per 8-byte slot; any partial overwrite of a spilled pointer destroys\nthe precise \"pointer\" tracking and the slot becomes `misc`/unknown scalar\n(`fp-8=mmmmmmmm`).\n\nSo when the slot is reloaded into `r0`, the verifier only knows it is an\nunknown scalar, not the ctx pointer. The subsequent `r0 = *(u64*)(r0 + 8)` is\nthen a dereference of a scalar, which is rejected:\n\n```\nR0 invalid mem access 'scalar'\n```\n\n## Fix\n\nMake the byte store land **outside** the 8-byte slot holding the spilled\npointer, so the pointer in fp-8 stays intact. The spilled pointer covers\noffsets -8..-1, so use an offset like `-9` (or any byte not in -8..-1):\n\n```c\nSEC(\"socket\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\t*(u64*)(r10 - 8) = r1;\t\t\t\t\\\n\tr0 = 0x23;\t\t\t\t\t\\\n\t*(u8*)(r10 - 9) = r0;\t\t\t\t\\\n\tr0 = *(u64*)(r10 - 8);\t\t\t\t\\\n\tr0 = *(u64*)(r0 + 8);\t\t\t\t\\\n\texit;\t\t\t\t\t\t\\\n\"\t::: __clobber_all);\n}\n```\n\nWith this change the reload `r0 = *(u64*)(r10 - 8)` recovers the original\n`ctx()` pointer, and the dereference becomes a legal context access rather than\na dereference of an unknown scalar.\n\n(If the verifier additionally complains about the exact ctx offset/size on the\nfinal load, that load can be replaced with a known-valid `__sk_buff` field\naccess, but the root cause of the reported failure is the overlapping byte\nstore corrupting the spilled pointer slot.)",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01BzsPG8LTfwVesBbDQV6PLi",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1322,
+      "output_tokens": 1668,
+      "output_tokens_details": {
+        "thinking_tokens": 819
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

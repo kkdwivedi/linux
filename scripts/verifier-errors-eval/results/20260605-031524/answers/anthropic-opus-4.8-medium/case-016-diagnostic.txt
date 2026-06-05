@@ -1,0 +1,63 @@
+## What the verifier is complaining about
+
+`bpf_sk_lookup_tcp()` returns an *acquired* reference (`R0=sock_or_null(id=2)`). The verifier tracks that reference and requires it to be released (via `bpf_sk_release`) on **every** path that reaches `BPF_EXIT`.
+
+Look at the control flow after the call:
+
+```
+call bpf_sk_lookup_tcp        ; R0 = sock_or_null (ref id=2 held)
+if r6 == 0 goto l1_%=         ; if r6 != 0 -> fall through
+exit                          ; <-- LEAK: exits with id=2 still held
+l1_%=:
+    if r0 == 0 goto l2_%=
+    r1 = r0
+    call bpf_sk_release       ; release happens only on the r6==0 path
+l2_%=:
+    exit
+```
+
+When `r6 != 0` (the false branch of `if r6 == 0`), the program hits the early
+`exit` at insn 21 **without** ever calling `bpf_sk_release`, so the reference
+`id=2` leaks. That is exactly what the log reports:
+
+```
+Unreleased reference id=2 alloc_insn=19
+BPF_EXIT instruction in main prog would lead to reference leak
+```
+
+The `r6 == 0` branch is fine because it goes to `l1_%=`, which does the release.
+Only the `r6 != 0` path is broken.
+
+## Smallest fix
+
+Make the `r6 != 0` path also flow through the release logic. The simplest edit is
+to delete the early `exit;` so the fall-through from `if r6 == 0 goto l1_%=`
+lands directly on the release sequence (which already null-checks `r0`):
+
+```c
+	call %[bpf_sk_lookup_tcp];			\
+	if r6 == 0 goto l1_%=;				\
+l1_%=:	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+```
+
+(After removing `exit;`, the `if r6 == 0 goto l1_%=` simply jumps to the next
+instruction on both outcomes; both branches now reach the `r0`-null-check and
+`bpf_sk_release`, so the reference is released on every exit path.)
+
+If you prefer to keep the `r6` branch meaningful, restructure so the release
+precedes the `r6` test, e.g.:
+
+```c
+	call %[bpf_sk_lookup_tcp];			\
+	if r0 == 0 goto l2_%=;				\
+	r1 = r0;					\
+	call %[bpf_sk_release];				\
+l2_%=:	exit;						\
+```
+
+Either way the key requirement is satisfied: every path to `exit` first releases
+(or never holds) the socket reference, eliminating the leak the verifier
+detected.

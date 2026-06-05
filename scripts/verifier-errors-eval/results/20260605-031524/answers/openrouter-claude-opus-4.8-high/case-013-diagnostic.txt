@@ -1,0 +1,53 @@
+## Explanation
+
+The verifier enforces a **512‑byte limit on the combined stack usage of a chain of nested function calls** (BPF subprograms each get their own stack frame, but the sum along any call path must stay ≤ 512 bytes).
+
+Here every helper declares a local buffer of `MAX_STACK` bytes:
+
+```c
+volatile char buf[MAX_STACK] = {};   /* MAX_STACK == 260 */
+```
+
+The deepest call chain is:
+
+```
+entry  ->  helper_c  ->  helper_b
+```
+
+* `helper_c` frame: `buf[260]` rounded up to an 8‑byte multiple → 264 bytes
+* `helper_b` frame: another 264 bytes
+* `entry` frame: ~16 bytes
+
+Total = 264 + 264 + 16 = **544 bytes > 512**, which is exactly what the log reports:
+
+```
+combined stack size of 3 calls is 544. Too large
+```
+
+(`helper_d` is reported "safe for any args" because the chain `entry -> helper_c -> helper_d` is also 264+264+16=544, but the failure is hit first on the `helper_b` path.)
+
+Note this has nothing to do with the call *depth* count — 3 frames is allowed — it is purely the **byte total** of the buffers.
+
+## Smallest fix
+
+Shrink the per‑frame buffer so that two such frames plus the entry frame fit in 512 bytes:
+
+```
+entry(16) + helper_c(buf) + helper_b(buf) <= 512
+  =>  buf + buf <= ~496  =>  buf <= ~248
+```
+
+Pick a value with margin, e.g. **240** (already 8‑byte aligned):
+
+240 + 240 + 16 = 496 ≤ 512.
+
+### Patch
+
+```c
+-#define MAX_STACK 260
++#define MAX_STACK 240
+```
+
+This reduces each affected frame from 264 to 240 bytes, bringing the worst-case chain (`entry -> helper_c -> helper_b`, and the equally deep `entry -> helper_c -> helper_d`) down to 496 bytes, under the 512‑byte combined-stack limit, while leaving the program structure (number/shape of calls, the `__sink(buf[MAX_STACK-1])` accesses, etc.) unchanged.
+
+If the test specifically needs to keep buffers large, the alternative source-level edit is to **flatten the call chain** (e.g. don't have `helper_c` call `helper_b`/`helper_d`, call them directly from `entry`), but reducing `MAX_STACK` is the minimal change.

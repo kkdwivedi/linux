@@ -1,0 +1,26 @@
+**Verifier failure explanation**
+
+The program attaches to a sleepable fentry tracepoint (`?fentry.s/...`) and therefore runs in a sleepable context.  
+Inside `entry()` it calls `bpf_preempt_disable()`, which enters a *non-preemptible* region.  
+Immediately after, it calls `bpf_copy_from_user()`.  The verifier knows that `bpf_copy_from_user` is a **sleepable** helper (it may sleep while faulting in user pages), and sleepable helpers are forbidden while preemption is disabled.  Consequently the verifier rejects the program with:
+
+> *sleepable helper bpf_copy_from_user#148 in non-preemptible region*
+
+**Smallest fix**
+
+The critical section is unnecessary here: the program is already sleepable, so it can call `bpf_copy_from_user()` directly without any manual preemption control.  Remove the `bpf_preempt_disable()` / `bpf_preempt_enable()` pair and leave the helper call in the normal sleepable context.
+
+```diff
+@@ -10,9 +10,7 @@ SEC("?fentry.s/sys_getpgid")
+ int entry(void *ctx)
+ {
+ 	u32 data;
+ 
+-	bpf_preempt_disable();
+ 	bpf_copy_from_user(&data, sizeof(data), NULL);
+-	bpf_preempt_enable();
+ 	return 0;
+ }
+```
+
+This is the minimal source change that satisfies the verifier, because the sleepable helper is no longer invoked inside an active non-preemptible region.

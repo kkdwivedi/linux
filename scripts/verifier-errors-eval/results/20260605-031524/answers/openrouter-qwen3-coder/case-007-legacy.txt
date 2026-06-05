@@ -1,0 +1,43 @@
+Looking at the verifier log, the issue is with the `slice_len` variable being unbounded. The verifier is complaining about "R4 unbounded memory access" where R4 contains the value read from `slice_len`.
+
+The problem is that `slice_len` is a global variable that can theoretically hold any 32-bit value, but the `bpf_dynptr_slice` helper function needs to know the exact buffer size at compile time or within bounded limits for security reasons.
+
+The verifier suggests using `'var &= const'` or `'if (var < const)'` to bound the variable.
+
+The smallest fix is to add a bounds check on `slice_len` before using it:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "GPL";
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 4096);
+} ringbuf SEC(".maps");
+
+__u32 slice_len = sizeof(struct ethhdr);
+
+SEC("?tc")
+int entry(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+	struct ethhdr *hdr;
+	char buffer[sizeof(*hdr)] = {};
+
+	bpf_dynptr_from_skb(skb, 0, &ptr);
+
+	/* Bound the slice_len variable */
+	if (slice_len > sizeof(buffer))
+		slice_len = sizeof(buffer);
+
+	hdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);
+	if (!hdr)
+		return SK_DROP;
+
+	return SK_PASS;
+}
+```
+
+This fix ensures that `slice_len` is bounded by the actual buffer size (`sizeof(buffer)`), which satisfies the verifier's requirement that the length parameter to `bpf_dynptr_slice` must be within known bounds. Since `buffer` is defined as `char buffer[sizeof(*hdr)]`, we know its size is exactly `sizeof(struct ethhdr)`, so the bounds check will effectively limit `slice_len` to a known constant value.

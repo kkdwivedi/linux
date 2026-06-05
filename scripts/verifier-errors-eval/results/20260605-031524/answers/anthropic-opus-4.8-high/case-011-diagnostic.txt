@@ -1,0 +1,38 @@
+## Explanation
+
+The verifier tracks "reference" resources that must be released on every exit path. Here two ring-buffer dynptrs are acquired:
+
+- `ptr1` → reference id=2/1
+- `ptr2` → reference id=3 (acquired at insn 14)
+
+Look at the two control-flow paths:
+
+- **`if (!sample)` true branch** (sample is NULL): both `ptr1` and `ptr2` are discarded. ✅
+- **fall-through branch** (sample is non-NULL): only `ptr1` is submitted via `bpf_ringbuf_submit_dynptr(&ptr1, 0)`. `ptr2` is **never** released. ❌
+
+So on the success path the resource `id=3` (`ptr2`) leaks, and the verifier rejects the `exit` at line 115:
+
+```
+Unreleased reference id=3 alloc_insn=14
+```
+
+## Fix
+
+Release (submit or discard) `ptr2` on the success path as well. Smallest change is to add one call before the final `return 0;`:
+
+```c
+	bpf_ringbuf_submit_dynptr(&ptr1, 0);
+	bpf_ringbuf_submit_dynptr(&ptr2, 0);   /* <-- add this */
+
+	return 0;
+```
+
+(Using `bpf_ringbuf_discard_dynptr(&ptr2, 0)` would work equally for verifier purposes; the point is that every dynptr acquired by `bpf_ringbuf_reserve_dynptr` must be released exactly once on every path to `exit`.)
+
+With that addition, `ptr2`'s reference is released on both branches, eliminating the leak and letting the program verify.
+
+Note: the unrelated message at the top
+```
+arg#0 reference type('UNKNOWN ') size cannot be determined: -22
+```
+is a separate BTF/info diagnostic and is not the cause of the verification failure; the actual failure is the unreleased `ptr2`.

@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier is rejecting this because of **IRQ-disabled region rules**:\n\n- `bpf_local_irq_save(&flags)` starts an IRQ-disabled critical section (`refs=1` in log).\n- While in that section, verifier forbids calling anything that may sleep.\n- `helper_a()` is classified as **sleepable** because it contains `bpf_copy_from_user(...)`.\n- So at instruction 5 (`call pc+4` to `helper_a`) verifier errors:  \n  **\u201csleepable global function helper_a() called in IRQ-disabled region\u201d**.\n\nSo the minimal fix is to **not call `helper_a()` between `bpf_local_irq_save()` and `bpf_local_irq_restore()`**.\n\n### Minimal patch\n\n```diff\n@@\n SEC(\"?syscall\")\n int entry(void *ctx)\n {\n \tunsigned long flags;\n \n-\tbpf_local_irq_save(&flags);\n \thelper_a(0);\n+\tbpf_local_irq_save(&flags);\n \tbpf_local_irq_restore(&flags);\n \treturn 0;\n }\n```\n\nThis keeps behavior close, and satisfies verifier constraints by moving the sleepable call outside the IRQ-disabled region.\n\n(Alternative would be making `helper_a` non-sleepable, e.g. removing/replacing `bpf_copy_from_user`, but that\u2019s a larger semantic change.)",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-012-legacy.txt",
+    "case_id": "case-012",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 1526,
+    "prompt_path": "public/case-012/prompt_legacy.md",
+    "prompt_sha256": "3c7396a0a94e22b4ffa05f47bf695c68faeca27ec07a26da548d621cb3473cdb",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-012-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "e891fa3b-d583-4f5f-8e30-bbcbf74402a6",
+    "started_at": "2026-06-05T03:16:53+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.0009695,
+    "output_cost_usd": 0.02926,
+    "total_cost_usd": 0.030229500000000003
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 554,
+    "output_tokens": 2090,
+    "raw_usage": {
+      "input_tokens": 554,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 2090,
+      "output_tokens_details": {
+        "reasoning_tokens": 1813
+      },
+      "total_tokens": 2644
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 1813,
+    "total_tokens": 2644
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629443,
+    "created_at": 1780629413,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_05a79769d9827192006a223fa5272c819f9e6eb211b704a166",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_05a79769d9827192006a223fa57c84819f995829e0dee946e0",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier is rejecting this because of **IRQ-disabled region rules**:\n\n- `bpf_local_irq_save(&flags)` starts an IRQ-disabled critical section (`refs=1` in log).\n- While in that section, verifier forbids calling anything that may sleep.\n- `helper_a()` is classified as **sleepable** because it contains `bpf_copy_from_user(...)`.\n- So at instruction 5 (`call pc+4` to `helper_a`) verifier errors:  \n  **\u201csleepable global function helper_a() called in IRQ-disabled region\u201d**.\n\nSo the minimal fix is to **not call `helper_a()` between `bpf_local_irq_save()` and `bpf_local_irq_restore()`**.\n\n### Minimal patch\n\n```diff\n@@\n SEC(\"?syscall\")\n int entry(void *ctx)\n {\n \tunsigned long flags;\n \n-\tbpf_local_irq_save(&flags);\n \thelper_a(0);\n+\tbpf_local_irq_save(&flags);\n \tbpf_local_irq_restore(&flags);\n \treturn 0;\n }\n```\n\nThis keeps behavior close, and satisfies verifier constraints by moving the sleepable call outside the IRQ-disabled region.\n\n(Alternative would be making `helper_a` non-sleepable, e.g. removing/replacing `bpf_copy_from_user`, but that\u2019s a larger semantic change.)",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_05a79769d9827192006a223fc0a798819f98e67f4e72e03db9",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "high",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 554,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 2090,
+      "output_tokens_details": {
+        "reasoning_tokens": 1813
+      },
+      "total_tokens": 2644
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Reduce CALLS_50 fan-out or the number of helper layers.",
+    "Pass a stable non-FP-derived argument pattern when possible.",
+    "Replace the generated call tree with a simpler bounded loop or less duplicated call structure."
+  ],
+  "canonical_fix": "Reduce the number of distinct call paths or argument patterns reaching the subprograms, for example by reducing fan-out/depth, consolidating calls, or avoiding many distinct FP-offset arguments.",
+  "case_id": "case-020",
+  "category": "Verifier Limit",
+  "difficulty": "hard",
+  "expected_explanation": "The program creates an enormous number of distinct bpf2bpf call paths and frame-pointer-derived argument patterns. Liveness analysis exceeds its complexity limit while recomputing subprogram liveness across those paths.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-none/case-020-diagnostic.txt",
+    "case_id": "case-020",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-none",
+    "prompt_bytes": 4110,
+    "prompt_path": "public/case-020/prompt_diagnostic.md",
+    "prompt_sha256": "cb7344658f86bd080c64c73a9c8ee3095a7de5b045356c00872dce60afb5bfb8",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-none/case-020-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "none"
+    },
+    "run_id": "6beb02bb-cd70-4b65-8b49-ba59c1b3b7e2",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The program is not failing because of an invalid instruction or unsafe memory access. It is failing because it intentionally creates an enormous number of distinct subprogram call paths.\n\nEach function calls the next one 50 times:\n\n```c\nentry -> helper_a -> helper_b -> helper_c -> helper_d -> helper_e -> helper_f -> helper_g\n```\n\nand every call passes a different stack pointer offset as `r1`:\n\n```c\nr1 = r10;\nr1 += -8;\ncall helper_x;\n\nr1 = r10;\nr1 += -16;\ncall helper_x;\n\n/* ... */\n```\n\nSo the verifier sees many distinct argument patterns and repeatedly recomputes liveness for the same subprograms. By the time it reaches `helper_g`, the liveness analysis has been recomputed too many times:\n\n```text\nliveness analysis exceeded complexity limit (10001 calls)\n```\n\nThis is a verifier complexity-limit failure, not a semantic safety failure.\n\nThe smallest source-level fix is to reduce the fanout so the total number of distinct call paths stays below the liveness-analysis limit. Since the limit exceeded at `10001` liveness calls, changing the repeated calls from 50 per level to a smaller number should make the verifier pass.\n\nA minimal and clear edit is to reduce `CALLS_50(fn)` to fewer repetitions. For example, make it 10 calls instead of 50:\n\n```diff\n #define CALLS_10(fn) \\\n \tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n \tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n+#define CALLS_50(fn) CALLS_10(fn)\n```\n\nWith this patch, every function still calls the next subprogram multiple times with distinct stack-pointer offsets, preserving the structure of the test, but the verifier no longer has to analyze the combinatorial explosion caused by `50` calls at each depth.\n\nComplete patch:\n\n```diff\ndiff --git a/case.c b/case.c\nindex 0000000..0000000 100644\n--- a/case.c\n+++ b/case.c\n@@ -6,7 +6,7 @@\n #define CALLS_10(fn) \\\n \tCALL_AT(fn, 8) CALL_AT(fn, 16) CALL_AT(fn, 24) CALL_AT(fn, 32) CALL_AT(fn, 40) \\\n \tCALL_AT(fn, 48) CALL_AT(fn, 56) CALL_AT(fn, 64) CALL_AT(fn, 72) CALL_AT(fn, 80)\n-#define CALLS_50(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn) CALLS_10(fn)\n+#define CALLS_50(fn) CALLS_10(fn)\n \n __naked __noinline __used\n static unsigned long helper_g(void)\n```\n\nIf the test specifically wants more than 10 calls per level, another safe variant would be to define a smaller intermediate macro, e.g. `CALLS_20`, and use that instead. The key requirement is to reduce the number of distinct call paths/argument patterns enough that subprogram liveness analysis does not hit the `10001` call limit.",
+  "must_mention": [
+    "The failure is verifier liveness complexity, not runtime recursion",
+    "Many call paths or distinct FP offsets drive the limit",
+    "The fix is to simplify the call/argument pattern"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only increases a runtime loop bound",
+    "Adds packet or memory bounds checks",
+    "Suggests releasing a resource"
+  ]
+}

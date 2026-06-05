@@ -1,0 +1,37 @@
+## Root Cause Analysis
+
+The BPF verifier enforces a **512-byte combined stack depth limit** across nested calls. It checks the call chain `entry → helper_c → helper_b` and finds:
+
+| Frame      | Stack size |
+|------------|-----------|
+| `entry`    | ~24 bytes (saved registers for 4 chained calls) |
+| `helper_c` | 260 bytes (`volatile char buf[MAX_STACK]`) |
+| `helper_b` | 260 bytes (`volatile char buf[MAX_STACK]`) |
+| **Total**  | **544 bytes** > 512 byte limit |
+
+The path `entry → helper_c → helper_b` creates 3 nested frames with a combined depth of 544 bytes, which exceeds the hard 512-byte limit.
+
+Note that `entry` also calls `helper_d` directly (depth-2), but that chain is fine. Only the 3-deep chain through `helper_c → helper_b` is problematic.
+
+## Fix
+
+The minimum required reduction is 32 bytes (544 − 512). Since both `helper_b` and `helper_c` each allocate `buf[MAX_STACK]`, reducing `MAX_STACK` by 16 cuts 32 bytes from the combined depth, bringing it to exactly 512 (which passes the `>` check in the kernel).
+
+To be safe against compiler alignment rounding, reducing by 20 is recommended:
+
+```diff
+-#define MAX_STACK 260
++#define MAX_STACK 240
+```
+
+With `MAX_STACK = 240`:
+- `entry` frame: ~24 bytes  
+- `helper_c` frame: 240 bytes  
+- `helper_b` frame: 240 bytes  
+- **Total: 504 bytes ≤ 512** ✓
+
+The change on a single line:
+
+```c
+#define MAX_STACK 240
+```

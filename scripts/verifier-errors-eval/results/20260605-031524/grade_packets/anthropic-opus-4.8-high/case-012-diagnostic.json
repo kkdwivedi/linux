@@ -1,0 +1,68 @@
+{
+  "acceptable_fixes": [
+    "Move helper_a(0) after bpf_local_irq_restore(&flags).",
+    "Split helper_a so the IRQ-disabled path calls only a non-sleepable helper.",
+    "Avoid disabling IRQs around the call if the critical section is not needed."
+  ],
+  "canonical_fix": "Restore IRQ state before calling the sleepable subprogram, or remove/replace the sleepable helper from the subprogram used in the IRQ-disabled region.",
+  "case_id": "case-012",
+  "category": "Execution Context Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The entry program disables IRQs and then calls a global subprogram that can call a sleepable helper. The verifier treats the sleepable call through the subprogram as occurring inside the IRQ-disabled region.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-012-diagnostic.txt",
+    "case_id": "case-012",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 3392,
+    "prompt_path": "public/case-012/prompt_diagnostic.md",
+    "prompt_sha256": "cb0bb7bae71f637618353d539dc3320ce61e3ed2b36b833f42dc45015a35e430",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-012-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "fce8dcbf-1955-4537-9302-363232285509",
+    "started_at": "2026-06-05T03:17:39+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "## Explanation\n\n`helper_a()` is defined as a **global** (non-`static`) function. In the BPF verifier, global functions are verified independently of their callers and are treated as **sleepable** subprograms \u2014 the verifier conservatively assumes a global function may sleep, because it does not know the calling context when it verifies the function in isolation.\n\nYour `entry` program opens an IRQ-disabled critical section with `bpf_local_irq_save()`. Code inside such a region must not call anything that may sleep. Because `helper_a()` is a sleepable global function, calling it between `bpf_local_irq_save()` and `bpf_local_irq_restore()` is rejected:\n\n```\nsleepable global function helper_a() called in IRQ-disabled region\n```\n\nNote the actual body of `helper_a()` never runs `bpf_copy_from_user()` for `i == 0`, but that's irrelevant: the restriction is on the *call to a global function*, not on whether that path is taken at runtime.\n\n## Fix\n\nMake the helper a **static** function. Static (non-global) subprograms are verified inline in the context of their caller, inheriting its execution-context state, so they are not treated as standalone sleepable global functions. The IRQ-disabled check then validates the helper's actual body against the current context.\n\n```c\nstatic int __noinline helper_a(int i)\n{\n\tchar data[8];\n\n\tif (!i)\n\t\tbpf_copy_from_user(data, sizeof(data), NULL);\n\treturn i;\n}\n```\n\nThe single-word change `int __noinline` \u2192 `static int __noinline` is the smallest source-level fix.\n\n(Of course, if `bpf_copy_from_user()` could actually be reached inside the critical section it would still fail \u2014 but here, with the static helper inlined into the caller's verification, the verifier sees that the `i == 0` argument makes the `bpf_copy_from_user()` branch dead, so the program verifies.)",
+  "must_mention": [
+    "A sleepable operation is reached through a global subprogram",
+    "IRQs are disabled at that point",
+    "The call must be outside the IRQ-disabled region"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only changes helper_a's argument value",
+    "Moves bpf_local_irq_restore after the return",
+    "Adds a NULL check for the local buffer"
+  ]
+}

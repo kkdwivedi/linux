@@ -1,0 +1,74 @@
+The verifier failure is a reference leak.
+
+`bpf_ringbuf_reserve_dynptr()` creates a ringbuf dynptr reference that must be released on every exit path by either:
+
+- `bpf_ringbuf_submit_dynptr()`, or
+- `bpf_ringbuf_discard_dynptr()`.
+
+In the log:
+
+```text
+7:  call bpf_ringbuf_reserve_dynptr   ; ... refs=1
+14: call bpf_ringbuf_reserve_dynptr   ; ... refs=1,3
+```
+
+`ptr1` owns reference id `1`, and `ptr2` owns reference id `3`.
+
+On the `sample == NULL` path, both are discarded:
+
+```c
+bpf_ringbuf_discard_dynptr(&ptr1, 0);
+bpf_ringbuf_discard_dynptr(&ptr2, 0);
+return 0;
+```
+
+But on the success path, only `ptr1` is submitted:
+
+```c
+bpf_ringbuf_submit_dynptr(&ptr1, 0);
+return 0;
+```
+
+So `ptr2` is still live at program exit. The verifier reports:
+
+```text
+Unreleased reference id=3 alloc_insn=14
+BPF_EXIT instruction in main prog would lead to reference leak
+```
+
+`alloc_insn=14` is the second `bpf_ringbuf_reserve_dynptr()` call, i.e. `ptr2`.
+
+The smallest fix is to release `ptr2` on the success path too, probably by discarding it if it is unused.
+
+Patch:
+
+```diff
+ SEC("?raw_tp")
+ int entry(void *ctx)
+ {
+ 	struct bpf_dynptr ptr1, ptr2;
+ 	struct sample *sample;
+
+ 	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);
+ 	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);
+
+ 	sample = bpf_dynptr_data(&ptr1, 0, sizeof(*sample));
+ 	if (!sample) {
+ 		bpf_ringbuf_discard_dynptr(&ptr1, 0);
+ 		bpf_ringbuf_discard_dynptr(&ptr2, 0);
+ 		return 0;
+ 	}
+
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
++	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+
+ 	return 0;
+ }
+```
+
+That ensures both dynptr references are released on both verifier paths:
+
+- failure path: discard `ptr1`, discard `ptr2`
+- success path: submit `ptr1`, discard `ptr2`
+
+This should satisfy the verifier’s reference tracking.

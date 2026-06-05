@@ -1,0 +1,29 @@
+## Explanation
+
+The verifier tracks `bpf_cpumask_create()` as an acquired reference (`refs=2`, id=2). On the success path, `make_object()` returns that pointer to `entry()`, where it is only `__sink()`'ed and then the program exits. Since the acquired cpumask reference is never released before `BPF_EXIT`, the verifier reports:
+
+```
+Unreleased reference id=2 ... reference leak
+```
+
+`__sink()` just prevents the "unused variable" issue; it does **not** release the kptr. The created `bpf_cpumask` must be passed to `bpf_cpumask_release()` (or stored into a kptr map field) before the program returns.
+
+## Fix
+
+Release the returned cpumask in `entry()`:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *cpumask;
+
+	cpumask = make_object();
+	if (cpumask)
+		bpf_cpumask_release(cpumask);
+
+	return 0;
+}
+```
+
+This balances the `bpf_cpumask_create()` acquire on the success path with a release before exit, so no reference is leaked. (On the failure paths inside `make_object()`, the object is either never created or already released and `NULL` is returned, so the `if (cpumask)` guard keeps those paths correct.)

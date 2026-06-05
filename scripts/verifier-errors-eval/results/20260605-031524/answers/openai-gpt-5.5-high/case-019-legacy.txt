@@ -1,0 +1,52 @@
+The verifier is rejecting this before normal instruction simulation because the BPF-to-BPF subprogram call graph contains a cycle:
+
+```text
+helper_a -> helper_a
+```
+
+Even though the recursion is guarded by:
+
+```asm
+if r1 < 4 goto l0_%=
+```
+
+the verifier does not allow recursive subprogram calls at all. It rejects the program statically while building/checking the call graph, which is why the log says `processed 0 insns`.
+
+The smallest source-level fix is to remove the recursive call and express the same bounded behavior as an in-function bounded loop. Since `entry()` initializes `r1 = 0`, the verifier should be able to see that `r1` increases until it reaches `4`.
+
+Patch:
+
+```diff
+@@
+ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+ 	asm volatile ("					\
+-	r1 += 1;					\
++l0_%=:	r1 += 1;					\
+ 	r0 = r1;					\
+ 	if r1 < 4 goto l0_%=;				\
+ 	exit;						\
+-l0_%=:	call helper_a;					\
+-	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+After the change, the call graph is acyclic:
+
+```text
+entry -> helper_a
+```
+
+and `helper_a` contains only a bounded loop:
+
+```asm
+l0:
+    r1 += 1;
+    r0 = r1;
+    if r1 < 4 goto l0;
+    exit;
+```
+
+This preserves the intended result of the original tail-recursive code while satisfying the verifier’s rule that BPF subprograms must not recurse.

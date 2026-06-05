@@ -1,0 +1,66 @@
+{
+  "acceptable_fixes": [
+    "Move helper_a(sk, 0) before taking and checking p.",
+    "Recompute p from sk->data after helper_a and repeat the data_end check before *p = 42.",
+    "Avoid calling a packet-data-invalidating helper between pointer validation and pointer use."
+  ],
+  "canonical_fix": "After helper_a returns, reload sk->data and sk->data_end, redo the bounds check, and only then write through the packet pointer.",
+  "case_id": "case-015",
+  "category": "Register Type Safety",
+  "difficulty": "hard",
+  "expected_explanation": "The program validates a packet data pointer, then calls a subprogram that invokes bpf_skb_pull_data. That helper can move packet data and invalidates packet pointers proven before the call. The later store through the old pointer uses an invalidated value.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-opus-4.8-high/case-015-legacy.txt",
+    "case_id": "case-015",
+    "model": "anthropic/claude-opus-4.8",
+    "profile": "openrouter-claude-opus-4.8-high",
+    "prompt_bytes": 1984,
+    "prompt_path": "public/case-015/prompt_legacy.md",
+    "prompt_sha256": "dc0fc1e91b61bdf915966f9cbe5ae652d8b1776a8af859d12e6cd23d52604af2",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-opus-4.8-high/case-015-legacy.json",
+    "reasoning_profile": {
+      "include_reasoning": true,
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "0901c2ba-74a5-47d8-b947-cc7e6d158a07",
+    "started_at": "2026-06-05T03:18:29+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "## What the verifier is complaining about\n\nThe error is:\n\n```\n10: (63) *(u32 *)(r7 +0) = r1\nR7 invalid mem access 'scalar'\n```\n\n`R7` holds your packet pointer `p` (loaded from `sk->data`). At the time of the store it is no longer a `pkt` pointer \u2014 it has been turned into a `scalar`.\n\n## Why it happens\n\nYou do the bounds check *before* calling `helper_a()`:\n\n```c\nint *p = (void *)(long)sk->data;\nif ((void *)(p + 1) > (void *)(long)sk->data_end)   /* validates p */\n    return TCX_DROP;\nhelper_a(sk, 0);                                    /* <-- invalidates packet ptrs */\n*p = 42;                                            /* p is now stale */\n```\n\n`helper_a()` is a **global** function. The verifier treats a call to a global function conservatively: because such a function may call helpers that reposition/relinearize the packet (here `helper_a` \u2192 `helper_b` \u2192 `bpf_skb_pull_data()`, which can change `data`/`data_end`), **all packet pointers held by the caller are invalidated across the call**. So the previously-validated `R7` is downgraded to a scalar, and the store `*p = 42` is rejected.\n\nThis is correct behavior: a previous bounds check is meaningless after a call that can move the packet.\n\n## The fix\n\nRe-load the packet pointer and re-do the bounds check **after** the call. The smallest change is to reorder so the load/check happens after `helper_a()`:\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p;\n\n\thelper_a(sk, 0);\n\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nNow `p` is derived from `sk->data` *after* any packet-modifying call, and the bounds check immediately precedes the store with no intervening call, so the verifier can keep `p` as a valid `pkt` pointer with the proven range.\n\n(Equivalently, if the original ordering must be kept, simply re-read `p` and re-run the `p + 1 > data_end` check between `helper_a()` and the store \u2014 the key point is that a fresh, validated packet pointer must be used after the global-function call.)",
+  "must_mention": [
+    "bpf_skb_pull_data invalidates packet pointers",
+    "The previous packet bounds check no longer applies after the call",
+    "Reload and revalidate data/data_end before dereference"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds a NULL check for p only",
+    "Uses the old p after the helper call",
+    "Changes the write value but not pointer provenance"
+  ]
+}

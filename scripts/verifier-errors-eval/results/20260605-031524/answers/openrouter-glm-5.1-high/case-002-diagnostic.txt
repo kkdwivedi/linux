@@ -1,0 +1,31 @@
+## Analysis
+
+The verifier failure is a **reference leak**. Here's the causal path:
+
+1. `bpf_cpumask_create()` acquires an owned reference (id=2) at instruction 0.
+2. The null-check passes (cpumask is non-NULL), so the reference is still held.
+3. `bpf_cpumask_empty()` returns 0 (the mask IS empty — it was just created), so the `if (!bpf_cpumask_empty(...))` branch is **not** taken, meaning `bpf_cpumask_release()` is never called inside `make_object()`.
+4. `make_object()` returns the cpumask to `entry()`.
+5. `entry()` stores the pointer via `__sink()` and then exits with `return 0` **without ever calling `bpf_cpumask_release()`**.
+
+The verifier correctly identifies that the acquired reference was never released on this exit path.
+
+## Fix
+
+The smallest fix is to release the cpumask in `entry()` before returning. Since `make_object()` can return NULL, we need a null-check before calling `bpf_cpumask_release()`:
+
+```c
+SEC("tp_btf/task_newtask")
+int BPF_PROG(entry, struct task_struct *task, u64 flags)
+{
+	struct bpf_cpumask *cpumask;
+
+	cpumask = make_object();
+	if (cpumask)
+		bpf_cpumask_release(cpumask);
+
+	return 0;
+}
+```
+
+This replaces the `__sink(cpumask);` line with a conditional release. On every path where the cpumask was successfully acquired, it is released before the program exits, satisfying the verifier's resource lifetime safety check.

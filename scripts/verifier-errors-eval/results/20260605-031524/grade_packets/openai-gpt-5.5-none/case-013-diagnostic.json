@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Lower MAX_STACK enough that the nested helper frames fit within 512 bytes.",
+    "Move large buffers out of nested helpers or reuse a smaller/shared buffer in a verifier-accepted way.",
+    "Restructure calls so helper_b and helper_c are not simultaneously on the stack with large local buffers."
+  ],
+  "canonical_fix": "Reduce stack use along the nested call chain or shorten the call chain so the combined stack depth is at or below the verifier limit.",
+  "case_id": "case-013",
+  "category": "Verifier Limit",
+  "difficulty": "medium",
+  "expected_explanation": "The call chain entry -> helper_c -> helper_b uses more than the verifier's combined call-stack depth limit. The large per-function stack buffers accumulate across nested bpf2bpf calls.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.5-none/case-013-diagnostic.txt",
+    "case_id": "case-013",
+    "model": "gpt-5.5",
+    "profile": "openai-gpt-5.5-none",
+    "prompt_bytes": 2658,
+    "prompt_path": "public/case-013/prompt_diagnostic.md",
+    "prompt_sha256": "044070894a5a67f43ab32448001b1bd67c0db88fee4087d1bb67f71a9273513d",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.5-none/case-013-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "none"
+    },
+    "run_id": "9a46915b-7d04-4c29-9d0c-66e7c4dd8773",
+    "started_at": "2026-06-05T03:15:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "model_answer": "The verifier is rejecting the program because one nested call chain exceeds the BPF combined stack limit.\n\nThe failing chain is:\n\n```text\nentry -> helper_c -> helper_b\n```\n\nBoth `helper_c()` and `helper_b()` allocate:\n\n```c\nvolatile char buf[MAX_STACK] = {};\n```\n\nwith:\n\n```c\n#define MAX_STACK 260\n```\n\nSo each of those functions uses roughly 260 bytes of stack, plus compiler/verifier alignment and spill overhead. The verifier reports:\n\n```text\ncombined stack size of 3 calls is 544. Too large\n```\n\nThe BPF verifier limit for combined nested call stack depth is 512 bytes. The chain `entry -> helper_c -> helper_b` reaches 544 bytes, so verification fails before considering whether the program is otherwise safe.\n\n`helper_d()` also has the same local buffer, but the specific failing path in the log is through `helper_c()` into `helper_b()`.\n\nThe smallest source-level fix is to reduce the per-function stack allocation so that two nested helpers using the buffer fit under 512 bytes including overhead. Since the reported total is 544, reducing `MAX_STACK` by at least 16 bytes per frame should be enough. A conservative minimal fix is to reduce it from 260 to 240.\n\nPatch:\n\n```diff\n #include <linux/bpf.h>\n #include <bpf/bpf_helpers.h>\n \n-#define MAX_STACK 260\n+#define MAX_STACK 240\n \n static __attribute__((noinline))\n int helper_a(int val, struct __sk_buff *skb)\n {\n \tasm volatile (\"\");\n \treturn skb->len;\n }\n```\n\nWith `MAX_STACK` at 240, the deepest problematic chain should use approximately:\n\n```text\n240 + 240 + overhead\n```\n\ninstead of:\n\n```text\n260 + 260 + overhead = 544\n```\n\nThe same overhead that produced 544 before should now produce about 504, which is below the 512-byte verifier limit.\n\nSo the likely complete fixed source is:\n\n```c\n#include <linux/bpf.h>\n#include <bpf/bpf_helpers.h>\n\n#define MAX_STACK 240\n\nstatic __attribute__((noinline))\nint helper_a(int val, struct __sk_buff *skb)\n{\n\tasm volatile (\"\");\n\treturn skb->len;\n}\n\n__attribute__((noinline))\nint helper_b(struct __sk_buff *skb)\n{\n\tvolatile char buf[MAX_STACK] = {};\n\t__sink(buf[MAX_STACK - 1]);\n\treturn helper_a(0, skb) + skb->len;\n}\n\nint helper_d(int val, struct __sk_buff *skb, int arg);\n\n__attribute__((noinline))\nint helper_c(int val, struct __sk_buff *skb)\n{\n\tvolatile char buf[MAX_STACK] = {};\n\t__sink(buf[MAX_STACK - 1]);\n\treturn helper_b(skb) + helper_d(val, skb, 1);\n}\n\n__attribute__((noinline))\nint helper_d(int val, struct __sk_buff *skb, int arg)\n{\n\tvolatile char buf[MAX_STACK] = {};\n\t__sink(buf[MAX_STACK - 1]);\n\treturn skb->ifindex * val * arg;\n}\n\nSEC(\"tc\")\nint entry(struct __sk_buff *skb)\n{\n\treturn helper_a(1, skb) + helper_b(skb) + helper_c(2, skb) + helper_d(3, skb, 4);\n}\n```\n\nThis keeps the structure of the test intact while bringing the nested stack usage under the verifier\u2019s 512-byte combined stack limit.",
+  "must_mention": [
+    "Combined call-chain stack depth exceeds the verifier limit",
+    "Large local buffers in nested helpers are the cause",
+    "Fix must reduce stack usage or call depth"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Adds bounds checks around skb fields",
+    "Changes helper return arithmetic only",
+    "Reduces stack in a helper not on the reported call chain while leaving the chain over limit"
+  ]
+}

@@ -1,0 +1,38 @@
+`r1` starts as `PTR_TO_CTX`.  
+You spill it to stack at `fp-8` (bytes `[-8..-1]`), which is fine.
+
+But then this line:
+
+```asm
+*(u8*)(r10 - 7) = r0;
+```
+
+writes into the *middle* of that spilled pointer slot (`-7` is inside `[-8..-1]`).  
+That destroys the verifier’s tracked pointer-spill type for that slot (`fp-8=mmmmmmmm`), so reloading:
+
+```asm
+r0 = *(u64*)(r10 - 8);
+```
+
+gives `R0=scalar()`, not a pointer.  
+Then `*(u64 *)(r0 + 8)` is invalid dereference of scalar.
+
+### Smallest likely fix
+Don’t overlap the byte store with the spilled pointer slot.
+
+#### Patch
+```diff
+--- a/case.c
++++ b/case.c
+@@ -7,7 +7,7 @@ __naked void entry(void)
+ 	asm volatile ("					\
+ 	*(u64*)(r10 - 8) = r1;				\
+ 	r0 = 0x23;					\
+-	*(u8*)(r10 - 7) = r0;				\
++	*(u8*)(r10 - 9) = r0;				\
+ 	r0 = *(u64*)(r10 - 8);				\
+ 	r0 = *(u64*)(r0 + 8);				\
+ 	exit;						\
+```
+
+This preserves the pointer spill at `fp-8`, so reload keeps pointer type and should satisfy this verifier failure.

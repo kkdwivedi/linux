@@ -1,0 +1,130 @@
+{
+  "answer_text": "The verifier is rejecting the program immediately because of a **helper/program-type mismatch**:\n\n- Program type from `SEC(\"kprobe\")` is a kprobe/tracing program.\n- First instruction is `call bpf_ktime_get_coarse_ns`.\n- Verifier says this helper is not allowed for that program type:\n\n> `program of this type cannot use helper bpf_ktime_get_coarse_ns#160`\n\nSo this is not a register-state issue; it fails at helper allowlist check.\n\n### Smallest likely fix\n\nUse a time helper that is allowed for kprobe programs, e.g. `bpf_ktime_get_ns`.\n\n#### Patch\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -7,11 +7,11 @@ SEC(\"kprobe\")\n __naked void entry(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n-\tcall %[bpf_ktime_get_coarse_ns];\t\t\\\n+\tcall %[bpf_ktime_get_ns];\t\t\t\\\n \tr0 = 0;\t\t\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t:\n-\t: __imm(bpf_ktime_get_coarse_ns)\n+\t: __imm(bpf_ktime_get_ns)\n \t: __clobber_all);\n }\n```\n\nThat keeps behavior equivalent for this test (returning 0 anyway) while satisfying helper restrictions.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-medium/case-006-legacy.txt",
+    "case_id": "case-006",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-medium",
+    "prompt_bytes": 1056,
+    "prompt_path": "public/case-006/prompt_legacy.md",
+    "prompt_sha256": "120f6abe2c1570fcf1f340a5df8b99d8138acdc6e56cef9bda9d3f882cdbea64",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-medium/case-006-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "30aaee99-4380-4e27-a672-cc314de50916",
+    "started_at": "2026-06-05T03:16:24+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.000707,
+    "output_cost_usd": 0.006272,
+    "total_cost_usd": 0.006979
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 404,
+    "output_tokens": 448,
+    "raw_usage": {
+      "input_tokens": 404,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 448,
+      "output_tokens_details": {
+        "reasoning_tokens": 158
+      },
+      "total_tokens": 852
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 158,
+    "total_tokens": 852
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629390,
+    "created_at": 1780629384,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_01ecdf6c87e511f7006a223f8845b0819fa89a766731be6ee5",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_01ecdf6c87e511f7006a223f88a870819fbba404f0b1da465f",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The verifier is rejecting the program immediately because of a **helper/program-type mismatch**:\n\n- Program type from `SEC(\"kprobe\")` is a kprobe/tracing program.\n- First instruction is `call bpf_ktime_get_coarse_ns`.\n- Verifier says this helper is not allowed for that program type:\n\n> `program of this type cannot use helper bpf_ktime_get_coarse_ns#160`\n\nSo this is not a register-state issue; it fails at helper allowlist check.\n\n### Smallest likely fix\n\nUse a time helper that is allowed for kprobe programs, e.g. `bpf_ktime_get_ns`.\n\n#### Patch\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -7,11 +7,11 @@ SEC(\"kprobe\")\n __naked void entry(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n-\tcall %[bpf_ktime_get_coarse_ns];\t\t\\\n+\tcall %[bpf_ktime_get_ns];\t\t\t\\\n \tr0 = 0;\t\t\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t:\n-\t: __imm(bpf_ktime_get_coarse_ns)\n+\t: __imm(bpf_ktime_get_ns)\n \t: __clobber_all);\n }\n```\n\nThat keeps behavior equivalent for this test (returning 0 anyway) while satisfying helper restrictions.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_01ecdf6c87e511f7006a223f8b463c819f9d331f8adc20f620",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 404,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 448,
+      "output_tokens_details": {
+        "reasoning_tokens": 158
+      },
+      "total_tokens": 852
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

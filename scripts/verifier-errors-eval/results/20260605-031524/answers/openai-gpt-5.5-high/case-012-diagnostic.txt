@@ -1,0 +1,49 @@
+The verifier is rejecting the call to `helper_a()` because it is made while IRQs are disabled.
+
+`bpf_local_irq_save(&flags)` enters an IRQ-disabled region. The verifier tracks that as depth `1`:
+
+```text
+context: entered IRQ-disabled region; depth is now 1
+```
+
+`helper_a()` is considered a sleepable global function because it contains:
+
+```c
+bpf_copy_from_user(data, sizeof(data), NULL);
+```
+
+`bpf_copy_from_user()` may sleep, and therefore any global subprogram containing it is treated as sleepable. Sleeping is not allowed while IRQs are disabled, so this call is rejected:
+
+```text
+sleepable global function helper_a() called in IRQ-disabled region
+```
+
+The following restore happens too late to help:
+
+```c
+bpf_local_irq_restore(&flags);
+```
+
+The smallest safe source-level fix is to move the call to `helper_a(0)` outside the IRQ-disabled critical section.
+
+A likely patch:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..1111111 100644
+--- a/case.c
++++ b/case.c
+@@ -16,8 +16,8 @@ int entry(void *ctx)
+ 	unsigned long flags;
+ 
+ 	bpf_local_irq_save(&flags);
+-	helper_a(0);
+ 	bpf_local_irq_restore(&flags);
++	helper_a(0);
+ 	return 0;
+ }
+```
+
+After this change, the verifier should see that `bpf_local_irq_restore()` has ended the IRQ-disabled region before the sleepable `helper_a()` call, so the call is no longer made with IRQs disabled.
+
+If the helper truly must run inside the critical section, then `helper_a()` must be made non-sleepable, e.g. by removing `bpf_copy_from_user()` or replacing it with a non-sleepable operation. But moving the call outside the critical section is the smallest fix matching the verifier’s error.

@@ -1,0 +1,65 @@
+{
+  "acceptable_fixes": [
+    "Replace slice_len with sizeof(buffer) or sizeof(*hdr) at the call site.",
+    "Add if (slice_len > sizeof(buffer)) return ...; before bpf_dynptr_slice.",
+    "Clamp or mask slice_len so the verifier proves it cannot exceed the stack buffer."
+  ],
+  "canonical_fix": "Make the slice length verifier-bounded to the fallback buffer size before the call, or pass a compile-time constant size that is no larger than the buffer.",
+  "case_id": "case-007",
+  "category": "Memory Safety",
+  "difficulty": "medium",
+  "expected_explanation": "The dynptr slice fallback buffer is stack memory, but the length comes from a variable global value with no verifier-proven upper bound. The verifier cannot prove the memory/length pair stays within the fallback buffer.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-high/case-007-legacy.txt",
+    "case_id": "case-007",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-high",
+    "prompt_bytes": 2451,
+    "prompt_path": "public/case-007/prompt_legacy.md",
+    "prompt_sha256": "355b71d58706779cd79777d59818b81169ae16aba7b018cfa236b8e7b6e1cca7",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-high/case-007-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "high"
+    },
+    "run_id": "fcc39bb4-5adb-4347-b302-234548101398",
+    "started_at": "2026-06-05T03:16:47+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "model_answer": "The verifier is rejecting this at:\n\n```c\nhdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);\n```\n\n### Why it fails\n\n`slice_len` is a **writable global** (`.data` map), so verifier does **not** trust its initializer (`sizeof(struct ethhdr)`).  \nIn the log, `R4` (the length arg) is:\n\n- `smin=0, umax=0xffffffff` (unbounded)\n\nFor `bpf_dynptr_slice()`, `(buffer, len)` must be proven safe. Your `buffer` is a small stack array (14 bytes), but `len` is treated as potentially huge, so verifier reports:\n\n- `R4 unbounded memory access`\n- `R3 and R4 memory, len pair leads to invalid memory access`\n\n---\n\n### Smallest likely fix\n\nLoad `slice_len` once into a local, bound-check it against `sizeof(buffer)`, then pass that bounded local to the helper.\n\n```diff\n SEC(\"?tc\")\n int entry(struct __sk_buff *skb)\n {\n \tstruct bpf_dynptr ptr;\n \tstruct ethhdr *hdr;\n \tchar buffer[sizeof(*hdr)] = {};\n+\t__u32 len = slice_len;\n+\n+\tif (len > sizeof(buffer))\n+\t\treturn SK_DROP;\n \n \tbpf_dynptr_from_skb(skb, 0, &ptr);\n \n-\thdr = bpf_dynptr_slice(&ptr, 0, buffer, slice_len);\n+\thdr = bpf_dynptr_slice(&ptr, 0, buffer, len);\n \tif (!hdr)\n \t\treturn SK_DROP;\n \n \treturn SK_PASS;\n }\n```\n\nThis gives verifier a proven upper bound for `len`, so the stack memory access pair should become valid.",
+  "must_mention": [
+    "R4/length is variable or unbounded",
+    "The fallback buffer has fixed stack size",
+    "Verifier needs a length upper bound before the call"
+  ],
+  "required_json_schema": {
+    "missing": [
+      "short strings"
+    ],
+    "problems": [
+      "short strings"
+    ],
+    "repair_summary": "short string",
+    "score": "integer 0..4",
+    "strengths": [
+      "short strings"
+    ],
+    "success": "boolean",
+    "verdict": "short string"
+  },
+  "scoring": {
+    "0": "Unrelated or does not identify the verifier failure.",
+    "1": "Broad area only, no actionable source-level fix.",
+    "2": "Likely cause, but incomplete/unsafe/verifier-insufficient fix.",
+    "3": "Source-level fix likely to satisfy verifier, but imprecise.",
+    "4": "Minimal intended fix or equivalent patch with correct reasoning."
+  },
+  "success_threshold": 3,
+  "wrong_if": [
+    "Only checks the returned hdr pointer",
+    "Increases unrelated ringbuf size",
+    "Changes the dynptr source but leaves variable length unbounded"
+  ]
+}

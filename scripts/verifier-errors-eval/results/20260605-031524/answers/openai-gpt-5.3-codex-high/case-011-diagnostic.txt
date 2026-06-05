@@ -1,0 +1,29 @@
+The verifier error is a **reference leak** from `ptr2`.
+
+### Why it fails
+
+- `bpf_ringbuf_reserve_dynptr(..., &ptr1)` acquires one owned resource.
+- `bpf_ringbuf_reserve_dynptr(..., &ptr2)` acquires another owned resource (`id=3` in log).
+- On `!sample` path, both are discarded ✅
+- On `sample != NULL` path, only `ptr1` is submitted, then function exits ❌  
+  `ptr2` is never submitted/discarded, so verifier reports:
+
+> Unreleased reference id=3 alloc_insn=14
+
+### Smallest fix
+
+Release `ptr2` on the success path as well.
+
+```diff
+@@ SEC("?raw_tp")
+ int entry(void *ctx)
+ {
+@@
+ 	bpf_ringbuf_submit_dynptr(&ptr1, 0);
++	bpf_ringbuf_discard_dynptr(&ptr2, 0);
+
+ 	return 0;
+ }
+```
+
+That should satisfy the verifier’s “release/transfer on all paths” rule.

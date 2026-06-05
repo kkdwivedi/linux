@@ -1,0 +1,108 @@
+{
+  "answer_text": "## Verifier Failure Analysis\n\nThe verifier rejects this program because at instruction 13 (the `bpf_probe_read_kernel` call), register R1 has lost its bounds information.\n\n**Root cause:** At instruction 10, `r1 += r3` performs pointer arithmetic where:\n- R1 starts as a `map_value` pointer (bounded to the 48-byte struct)\n- R3 is a scalar with range [0, 0xffffffff] (unbounded)\n\nAfter the addition, R1 becomes a `map_value` pointer with an unbounded offset applied to it. When this pointer is passed to `bpf_probe_read_kernel`, the verifier cannot guarantee it stays within the map value bounds, so it rejects the access as \"unbounded memory access.\"\n\n## Solution\n\nThe fix is to bounds-check R3 before using it in pointer arithmetic. Since the struct is 48 bytes and contains a 44-byte data array, we should ensure R3 doesn't exceed safe bounds.\n\n**Patch:**\n\n```c\nSEC(\"tracepoint\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tr2 = r10;\t\t\t\t\t\\\n\tr2 += -8;\t\t\t\t\t\\\n\tr1 = 0;\t\t\t\t\t\t\\\n\t*(u64*)(r2 + 0) = r1;\t\t\t\t\\\n\tr1 = %[map_a] ll;\t\t\t\t\\\n\tcall %[bpf_map_lookup_elem];\t\t\t\\\n\tif r0 == 0 goto l0_%=;\t\t\t\t\\\n\tr1 = r0;\t\t\t\t\t\\\n\tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n\tif r3 > 4 goto l0_%=;\t\t\t\t\\\n\tr1 += r3;\t\t\t\t\t\\\n\tr2 = 1;\t\t\t\t\t\t\\\n\tr3 = 0;\t\t\t\t\t\t\\\n\tcall %[bpf_probe_read_kernel];\t\t\t\\\nl0_%=:\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_map_lookup_elem),\n\t  __imm(bpf_probe_read_kernel),\n\t  __imm_addr(map_a)\n\t: __clobber_all);\n}\n```\n\n**Key change:** Added `if r3 > 4 goto l0_%=;` after loading the offset value. This bounds-checks R3 to ensure it stays within the safe range (0-4 bytes), keeping the pointer arithmetic within the 48-byte struct bounds. The verifier will then recognize R1 as a bounded pointer when passed to `bpf_probe_read_kernel`.",
+  "meta": {
+    "answer_text_path": "answers/openrouter-claude-haiku-4.5-default/case-014-legacy.txt",
+    "case_id": "case-014",
+    "model": "anthropic/claude-haiku-4.5",
+    "profile": "openrouter-claude-haiku-4.5-default",
+    "prompt_bytes": 2516,
+    "prompt_path": "public/case-014/prompt_legacy.md",
+    "prompt_sha256": "5f09191198944721d81d22840eb8d1d26f07b6ac8add806cab2dfef9c5fd1103",
+    "provider": "openrouter",
+    "raw_response_path": "responses/openrouter-claude-haiku-4.5-default/case-014-legacy.json",
+    "reasoning_profile": {
+      "parameter": "default",
+      "value": "default"
+    },
+    "run_id": "4834ea5c-bbcc-4cdd-80f9-e5ca756ab852",
+    "started_at": "2026-06-05T03:19:04+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.001291,
+    "output_cost_usd": 0.003205,
+    "total_cost_usd": 0.004496
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1291,
+    "output_tokens": 641,
+    "raw_usage": {
+      "completion_tokens": 641,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.004496,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.003205,
+        "upstream_inference_cost": 0.004496,
+        "upstream_inference_prompt_cost": 0.001291
+      },
+      "is_byok": false,
+      "prompt_tokens": 1291,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1932
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 1932
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "## Verifier Failure Analysis\n\nThe verifier rejects this program because at instruction 13 (the `bpf_probe_read_kernel` call), register R1 has lost its bounds information.\n\n**Root cause:** At instruction 10, `r1 += r3` performs pointer arithmetic where:\n- R1 starts as a `map_value` pointer (bounded to the 48-byte struct)\n- R3 is a scalar with range [0, 0xffffffff] (unbounded)\n\nAfter the addition, R1 becomes a `map_value` pointer with an unbounded offset applied to it. When this pointer is passed to `bpf_probe_read_kernel`, the verifier cannot guarantee it stays within the map value bounds, so it rejects the access as \"unbounded memory access.\"\n\n## Solution\n\nThe fix is to bounds-check R3 before using it in pointer arithmetic. Since the struct is 48 bytes and contains a 44-byte data array, we should ensure R3 doesn't exceed safe bounds.\n\n**Patch:**\n\n```c\nSEC(\"tracepoint\")\n__naked void entry(void)\n{\n\tasm volatile (\"\t\t\t\t\t\\\n\tr2 = r10;\t\t\t\t\t\\\n\tr2 += -8;\t\t\t\t\t\\\n\tr1 = 0;\t\t\t\t\t\t\\\n\t*(u64*)(r2 + 0) = r1;\t\t\t\t\\\n\tr1 = %[map_a] ll;\t\t\t\t\\\n\tcall %[bpf_map_lookup_elem];\t\t\t\\\n\tif r0 == 0 goto l0_%=;\t\t\t\t\\\n\tr1 = r0;\t\t\t\t\t\\\n\tr3 = *(u32*)(r0 + 0);\t\t\t\t\\\n\tif r3 > 4 goto l0_%=;\t\t\t\t\\\n\tr1 += r3;\t\t\t\t\t\\\n\tr2 = 1;\t\t\t\t\t\t\\\n\tr3 = 0;\t\t\t\t\t\t\\\n\tcall %[bpf_probe_read_kernel];\t\t\t\\\nl0_%=:\texit;\t\t\t\t\t\t\\\n\"\t:\n\t: __imm(bpf_map_lookup_elem),\n\t  __imm(bpf_probe_read_kernel),\n\t  __imm_addr(map_a)\n\t: __clobber_all);\n}\n```\n\n**Key change:** Added `if r3 > 4 goto l0_%=;` after loading the offset value. This bounds-checks R3 to ensure it stays within the safe range (0-4 bytes), keeping the pointer arithmetic within the 48-byte struct bounds. The verifier will then recognize R1 as a bounded pointer when passed to `bpf_probe_read_kernel`.",
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "native_finish_reason": "end_turn"
+      }
+    ],
+    "created": 1780629544,
+    "id": "gen-1780629544-b9MrQHNZRJN3O7Zj9Hnf",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "object": "chat.completion",
+    "provider": "Amazon Bedrock",
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 641,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "cost": 0.004496,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.003205,
+        "upstream_inference_cost": 0.004496,
+        "upstream_inference_prompt_cost": 0.001291
+      },
+      "is_byok": false,
+      "prompt_tokens": 1291,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 0,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 1932
+    }
+  },
+  "reasoning_content": ""
+}

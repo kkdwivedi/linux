@@ -1,0 +1,37 @@
+The verifier rejects this because `bpf_copy_from_user()` is a sleepable helper, and the program calls it while preemption is disabled.
+
+Execution path:
+
+```c
+bpf_preempt_disable();                         // verifier tracks depth = 1
+bpf_copy_from_user(&data, sizeof(data), NULL); // may sleep -> forbidden here
+bpf_preempt_enable();
+```
+
+Even though `bpf_preempt_enable()` is immediately after it, the call to `bpf_copy_from_user()` itself could sleep before preemption is re-enabled, so the verifier stops at that helper call.
+
+The `fentry.s` section makes the program sleepable in general, but that does not allow sleepable helpers inside an explicitly non-preemptible region.
+
+Smallest fix: move the sleepable helper outside the preempt-disabled critical section, or remove the empty critical section entirely.
+
+A minimal patch that keeps the preempt disable/enable pair but calls `bpf_copy_from_user()` only after preemption is re-enabled:
+
+```diff
+diff --git a/case.c b/case.c
+index 0000000..0000000 100644
+--- a/case.c
++++ b/case.c
+@@ -9,8 +9,8 @@ int entry(void *ctx)
+ 	u32 data;
+ 
+ 	bpf_preempt_disable();
+-	bpf_copy_from_user(&data, sizeof(data), NULL);
+ 	bpf_preempt_enable();
++	bpf_copy_from_user(&data, sizeof(data), NULL);
+ 	return 0;
+ }
+```
+
+After this change, the verifier should see `bpf_copy_from_user()` executed with preemption-disabled depth `0`, so the context-safety violation should be gone.
+
+If the preempt-disabled section is not needed at all, an even simpler valid edit is to delete both `bpf_preempt_disable()` and `bpf_preempt_enable()`.

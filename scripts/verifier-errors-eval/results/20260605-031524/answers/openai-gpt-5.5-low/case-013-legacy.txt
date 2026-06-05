@@ -1,0 +1,58 @@
+The verifier is rejecting this because of the cumulative BPF stack usage across a bpf-to-bpf call chain.
+
+`helper_b()`, `helper_c()`, and `helper_d()` each allocate:
+
+```c
+volatile char buf[MAX_STACK] = {};
+```
+
+with `MAX_STACK == 260`.
+
+The compiler/verifier rounds the actual stack frame size up for alignment, and the log shows that each such frame effectively costs about `272` bytes. Along the call chain:
+
+```text
+entry()
+  -> helper_c()
+       -> helper_b()
+            -> helper_a()
+```
+
+both `helper_c()` and `helper_b()` have large stack frames, so the combined stack usage becomes:
+
+```text
+272 + 272 = 544
+```
+
+which exceeds the verifier’s 512-byte maximum stack limit:
+
+```text
+combined stack size of 3 calls is 544. Too large
+```
+
+`helper_d()` is reported safe by itself, but the nested call path through `helper_c()` and `helper_b()` exceeds the limit.
+
+The smallest likely source-level fix is to reduce `MAX_STACK` so that two rounded stack frames fit within 512 bytes. Changing it from `260` to `256` should make each frame fit into 256 bytes, giving:
+
+```text
+256 + 256 = 512
+```
+
+which is at the verifier limit and should pass.
+
+Patch:
+
+```diff
+--- a/test.c
++++ b/test.c
+@@ -2,7 +2,7 @@
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ 
+-#define MAX_STACK 260
++#define MAX_STACK 256
+ 
+ static __attribute__((noinline))
+ int helper_a(int val, struct __sk_buff *skb)
+```
+
+If you want a slightly more conservative value to avoid any compiler alignment surprise, use `248` or `240` instead. But based on the verifier log, `256` is the minimal obvious fix.

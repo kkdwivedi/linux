@@ -1,0 +1,92 @@
+{
+  "answer_text": "## What the verifier is complaining about\n\n`bpf_res_spin_lock`/`bpf_res_spin_unlock` are tracked by the verifier as a **stack of held locks**, and they must be released in strict **LIFO (reverse acquisition) order**. The error\n\n```\nbpf_res_spin_unlock cannot be out of order\n```\n\nmeans that on some explored path the verifier sees an unlock of a lock that is *not* the most-recently-acquired one.\n\n## Why it triggers here\n\nAcquisition order in the function is:\n\n1. `lock_a`\n2. `lock_b`\n\nSo the only legal release order is `lock_b` then `lock_a`.\n\nAt the bottom of the function you wrote:\n\n```c\nbpf_res_spin_unlock(&lock_a);   /* releases the OLDER lock first  -> wrong */\nbpf_res_spin_unlock(&lock_b);\n```\n\nBecause the unlock of `lock_a` is common to both the error path and the success path, the compiler hoisted it (insn 8\u201310 in the log) ahead of the `w6` branch check. On the path where `bpf_res_spin_lock(&lock_b)` succeeded, both locks are held, and the first unlock encountered is `lock_a` \u2014 i.e. releasing the older lock while the newer `lock_b` is still held. That is the out\u2011of\u2011order release the verifier rejects.\n\n## The fix\n\nRelease the locks in reverse order of acquisition (`lock_b` first, then `lock_a`):\n\n```c\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n```\n\nFull corrected function:\n\n```c\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tif (bpf_res_spin_lock(&lock_a))\n\t\treturn 0;\n\tif (bpf_res_spin_lock(&lock_b)) {\n\t\tbpf_res_spin_unlock(&lock_a);\n\t\treturn 0;\n\t}\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n\treturn 0;\n}\n```\n\nThe error path is already correct: if `bpf_res_spin_lock(&lock_b)` fails, only `lock_a` is held, so unlocking just `lock_a` is the proper top-of-stack release. With the swap, every path releases locks in strict LIFO order and the verifier is satisfied.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-018-legacy.txt",
+    "case_id": "case-018",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 1656,
+    "prompt_path": "public/case-018/prompt_legacy.md",
+    "prompt_sha256": "f85594106276b08f72d5a03ad0c0892a8771dbe55514dd329b7aff0246cc5b64",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-018-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "5807792f-15a9-428e-a3c8-2c2d59d04e4d",
+    "started_at": "2026-06-05T03:17:44+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00494,
+    "output_cost_usd": 0.06575,
+    "total_cost_usd": 0.07069
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 988,
+    "output_tokens": 2630,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 988,
+      "output_tokens": 2630,
+      "output_tokens_details": {
+        "thinking_tokens": 1826
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 3618
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "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",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## What the verifier is complaining about\n\n`bpf_res_spin_lock`/`bpf_res_spin_unlock` are tracked by the verifier as a **stack of held locks**, and they must be released in strict **LIFO (reverse acquisition) order**. The error\n\n```\nbpf_res_spin_unlock cannot be out of order\n```\n\nmeans that on some explored path the verifier sees an unlock of a lock that is *not* the most-recently-acquired one.\n\n## Why it triggers here\n\nAcquisition order in the function is:\n\n1. `lock_a`\n2. `lock_b`\n\nSo the only legal release order is `lock_b` then `lock_a`.\n\nAt the bottom of the function you wrote:\n\n```c\nbpf_res_spin_unlock(&lock_a);   /* releases the OLDER lock first  -> wrong */\nbpf_res_spin_unlock(&lock_b);\n```\n\nBecause the unlock of `lock_a` is common to both the error path and the success path, the compiler hoisted it (insn 8\u201310 in the log) ahead of the `w6` branch check. On the path where `bpf_res_spin_lock(&lock_b)` succeeded, both locks are held, and the first unlock encountered is `lock_a` \u2014 i.e. releasing the older lock while the newer `lock_b` is still held. That is the out\u2011of\u2011order release the verifier rejects.\n\n## The fix\n\nRelease the locks in reverse order of acquisition (`lock_b` first, then `lock_a`):\n\n```c\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n```\n\nFull corrected function:\n\n```c\nSEC(\"?tc\")\nint entry(struct __sk_buff *ctx)\n{\n\tif (bpf_res_spin_lock(&lock_a))\n\t\treturn 0;\n\tif (bpf_res_spin_lock(&lock_b)) {\n\t\tbpf_res_spin_unlock(&lock_a);\n\t\treturn 0;\n\t}\n\tbpf_res_spin_unlock(&lock_b);\n\tbpf_res_spin_unlock(&lock_a);\n\treturn 0;\n}\n```\n\nThe error path is already correct: if `bpf_res_spin_lock(&lock_b)` fails, only `lock_a` is held, so unlocking just `lock_a` is the proper top-of-stack release. With the swap, every path releases locks in strict LIFO order and the verifier is satisfied.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_018pRvS7WANTmE3SibNiGjfN",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 988,
+      "output_tokens": 2630,
+      "output_tokens_details": {
+        "thinking_tokens": 1826
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

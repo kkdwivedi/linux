@@ -1,0 +1,66 @@
+The verifier is tracking `bpf_local_irq_save()` / `bpf_local_irq_restore()` as a stack-like resource.
+
+In the program:
+
+```c
+bpf_local_irq_save(&flags1);    // acquires irq state id=1
+bpf_local_irq_save(&flags2);    // acquires irq state id=2
+
+bpf_local_irq_restore(&flags1); // tries to restore id=1 first
+bpf_local_irq_restore(&flags2);
+```
+
+The verifier log shows:
+
+```text
+call bpf_local_irq_save ... refs=1
+call bpf_local_irq_save ... refs=1,2
+...
+cannot restore irq state out of order, expected id=2 acquired at insn_idx=7
+```
+
+After the second `bpf_local_irq_save(&flags2)`, the most recently acquired irq state is `id=2`. The verifier expects restores to happen in reverse acquisition order, like unlocking nested locks. But the program restores `flags1` first, which is `id=1`, so verification fails.
+
+The smallest fix is to restore in LIFO order:
+
+```c
+bpf_local_irq_restore(&flags2);
+bpf_local_irq_restore(&flags1);
+```
+
+Patch:
+
+```diff
+--- a/case.c
++++ b/case.c
+@@ -8,8 +8,8 @@ int entry(struct __sk_buff *ctx)
+ 
+ 	bpf_local_irq_save(&flags1);
+ 	bpf_local_irq_save(&flags2);
+-	bpf_local_irq_restore(&flags1);
+ 	bpf_local_irq_restore(&flags2);
++	bpf_local_irq_restore(&flags1);
+ 	return 0;
+ }
+```
+
+Resulting program:
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	unsigned long flags1, flags2;
+
+	bpf_local_irq_save(&flags1);
+	bpf_local_irq_save(&flags2);
+	bpf_local_irq_restore(&flags2);
+	bpf_local_irq_restore(&flags1);
+	return 0;
+}
+```
+
+This should satisfy the verifier because irq state `id=2` is restored before `id=1`, matching the required reverse order.

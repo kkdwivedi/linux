@@ -1,0 +1,32 @@
+`helper_b()` is passing a **modified context pointer** into `helper_c`:
+
+```c
+helper_c(val, skb + 1)
+```
+
+For `tc` programs, `skb` is a verifier-tracked `ctx` pointer.  
+`skb + 1` becomes `ctx + sizeof(struct __sk_buff)` (log shows `r6 += 192`), and then `helper_c()` dereferences it (`skb->ifindex`). The verifier rejects this pattern:
+
+- `dereference of modified ctx ptr R2 off=192 disallowed`
+- `Caller passes invalid args into func#3 ('helper_c')`
+
+So the failure is not in `helper_c` itself, but in the callsite argument.
+
+### Smallest likely fix
+
+Pass the original `skb` pointer, not `skb + 1`.
+
+#### Patch
+```diff
+--- a/case.c
++++ b/case.c
+@@ -16,7 +16,7 @@ int helper_c(int val, struct __sk_buff *skb);
+ __attribute__((noinline))
+ int helper_b(int val, struct __sk_buff *skb)
+ {
+-	return helper_a(skb) + helper_c(val, skb + 1);
++	return helper_a(skb) + helper_c(val, skb);
+ }
+```
+
+This keeps `R2` as an unmodified `ctx` pointer when calling `helper_c`, which should satisfy the verifier.

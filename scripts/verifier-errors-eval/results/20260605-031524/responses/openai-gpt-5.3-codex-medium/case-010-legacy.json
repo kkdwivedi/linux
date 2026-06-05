@@ -1,0 +1,130 @@
+{
+  "answer_text": "The failure is caused by this line in `helper_b`:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\n`skb` is a **context pointer** (`struct __sk_buff *`).  \nIn BPF verifier rules, context pointers are special: you can only access known fields at fixed offsets from the original ctx pointer. You cannot do arbitrary pointer arithmetic like `skb + 1` and then dereference/pass it as a ctx.\n\nFrom the log:\n\n- `r6` starts as `ctx()`\n- `r6 += 192` (i.e., `skb + 1`, where `192` is `sizeof(struct __sk_buff)` on this target)\n- then passed as arg to `helper_c`\n- `helper_c` dereferences `skb->ifindex`\n- verifier rejects: **\u201cdereference of modified ctx ptr R2 off=192 disallowed\u201d**\n\n## Smallest likely fix\n\nPass the original `skb` pointer to `helper_c` (remove `+ 1`).\n\n### Patch\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -16,7 +16,7 @@ int helper_c(int val, struct __sk_buff *skb);\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n```\n\nThis keeps ctx unmodified and should satisfy the verifier.",
+  "meta": {
+    "answer_text_path": "answers/openai-gpt-5.3-codex-medium/case-010-legacy.txt",
+    "case_id": "case-010",
+    "model": "gpt-5.3-codex",
+    "profile": "openai-gpt-5.3-codex-medium",
+    "prompt_bytes": 2233,
+    "prompt_path": "public/case-010/prompt_legacy.md",
+    "prompt_sha256": "42cb94c19ecff9212d01b745ca76ad135db7dce4e6c15eefc8d6cb8a521dd385",
+    "provider": "openai",
+    "raw_response_path": "responses/openai-gpt-5.3-codex-medium/case-010-legacy.json",
+    "reasoning_profile": {
+      "parameter": "reasoning.effort",
+      "value": "medium"
+    },
+    "run_id": "4575d1ad-3225-466b-8a81-a7d06fd96f66",
+    "started_at": "2026-06-05T03:16:27+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00139475,
+    "output_cost_usd": 0.006846,
+    "total_cost_usd": 0.00824075
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 797,
+    "output_tokens": 489,
+    "raw_usage": {
+      "input_tokens": 797,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 489,
+      "output_tokens_details": {
+        "reasoning_tokens": 158
+      },
+      "total_tokens": 1286
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 158,
+    "total_tokens": 1286
+  },
+  "raw_response": {
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1780629395,
+    "created_at": 1780629387,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "id": "resp_0e4768d3fb619b31006a223f8bb92081a38f75997aa0fb2525",
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": 32768,
+    "max_tool_calls": null,
+    "metadata": {},
+    "model": "gpt-5.3-codex",
+    "moderation": null,
+    "object": "response",
+    "output": [
+      {
+        "content": [],
+        "id": "rs_0e4768d3fb619b31006a223f8c24b481a3be459e93dbbb62d7",
+        "summary": [],
+        "type": "reasoning"
+      },
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "The failure is caused by this line in `helper_b`:\n\n```c\nreturn helper_a(skb) + helper_c(val, skb + 1);\n```\n\n`skb` is a **context pointer** (`struct __sk_buff *`).  \nIn BPF verifier rules, context pointers are special: you can only access known fields at fixed offsets from the original ctx pointer. You cannot do arbitrary pointer arithmetic like `skb + 1` and then dereference/pass it as a ctx.\n\nFrom the log:\n\n- `r6` starts as `ctx()`\n- `r6 += 192` (i.e., `skb + 1`, where `192` is `sizeof(struct __sk_buff)` on this target)\n- then passed as arg to `helper_c`\n- `helper_c` dereferences `skb->ifindex`\n- verifier rejects: **\u201cdereference of modified ctx ptr R2 off=192 disallowed\u201d**\n\n## Smallest likely fix\n\nPass the original `skb` pointer to `helper_c` (remove `+ 1`).\n\n### Patch\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -16,7 +16,7 @@ int helper_c(int val, struct __sk_buff *skb);\n __attribute__((noinline))\n int helper_b(int val, struct __sk_buff *skb)\n {\n-\treturn helper_a(skb) + helper_c(val, skb + 1);\n+\treturn helper_a(skb) + helper_c(val, skb);\n }\n```\n\nThis keeps ctx unmodified and should satisfy the verifier.",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_0e4768d3fb619b31006a223f9012ec81a3befcd8c54be3622e",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "medium",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "status": "completed",
+    "store": true,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 797,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 489,
+      "output_tokens_details": {
+        "reasoning_tokens": 158
+      },
+      "total_tokens": 1286
+    },
+    "user": null
+  },
+  "reasoning_content": ""
+}

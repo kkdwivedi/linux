@@ -1,0 +1,27 @@
+## Explanation of the Verifier Failure
+
+The verifier is rejecting the program because the pointer parameter `s` in `helper_a()` is being treated as `mem_or_null` — meaning it could potentially be NULL. When the function attempts to dereference `s->x` at line 13, the verifier cannot prove the access is safe because the pointer hasn't been validated as non-NULL.
+
+The root cause is that when a pointer is passed to a `__noinline` function, the verifier conservatively assumes it could be NULL (since it cannot fully track the caller's context). The function must explicitly check for NULL before dereferencing.
+
+## Proposed Fix
+
+Add a NULL check in `helper_a()` before dereferencing the pointer:
+
+```c
+__noinline int helper_a(const struct Item *s)
+{
+	if (!s)
+		return 0;
+	return bpf_get_prandom_u32() < s->x;
+}
+```
+
+## Why This Works
+
+1. The `if (!s)` check validates that `s` is not NULL
+2. After this check, the verifier narrows the type of `s` from `mem_or_null` to `mem` (guaranteed non-NULL)
+3. The subsequent dereference `s->x` is now safe and passes verification
+4. The early return handles the NULL case gracefully
+
+This is the minimal fix required — it adds only a single NULL check that the verifier can use to prove memory safety.

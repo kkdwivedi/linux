@@ -1,0 +1,92 @@
+{
+  "answer_text": "## What the verifier is complaining about\n\nThis is not a logic error in the program \u2014 it is a **stack budget** error.\n\nThe BPF verifier limits the *combined* stack usage along any chain of nested\n(non\u2011inlined, \"global\"/`noinline`) function calls to **512 bytes**.\n\nHere every helper allocates a `MAX_STACK` (260\u2011byte) on\u2011stack buffer:\n\n```\nentry\n  \u2514\u2500 helper_c   buf[260]\n        \u251c\u2500 helper_b   buf[260]\n        \u2502     \u2514\u2500 helper_a   (no buffer)\n        \u2514\u2500 helper_d   buf[260]\n```\n\nThe deepest path that simultaneously holds two of those buffers\n(`entry \u2192 helper_c \u2192 helper_b`, or `entry \u2192 helper_c \u2192 helper_d`) needs\n`260 + 260` bytes plus a little call\u2011frame overhead, which the verifier rounds up\nto **544 bytes**:\n\n```\ncombined stack size of 3 calls is 544. Too large\n```\n\nSince `544 > 512`, verification is rejected. Nothing about pointer safety is\nwrong \u2014 `helper_d` is already reported \"safe\".\n\n## Smallest fix\n\nShrink the per\u2011frame stack buffers so the two\u2011deep chain fits under the\n512\u2011byte limit. Two buffers must satisfy roughly `2 * MAX_STACK + overhead \u2264 512`.\nWith the observed ~24 bytes of overhead, `MAX_STACK` must be `\u2264 244`. Pick a\nsafe round value:\n\n```c\n-#define MAX_STACK 260\n+#define MAX_STACK 200\n```\n\nWith `MAX_STACK = 200`, the deepest live combination is about\n`200 + 200 + overhead \u2248 424 bytes`, comfortably under 512, and the program\nverifies.\n\nNo other code changes are required \u2014 the call graph, signatures, and `__sink`\nusage are all fine; only the aggregate stack size violated the verifier\u2019s\n512\u2011byte limit.",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-medium/case-013-legacy.txt",
+    "case_id": "case-013",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-medium",
+    "prompt_bytes": 1649,
+    "prompt_path": "public/case-013/prompt_legacy.md",
+    "prompt_sha256": "4d1d466cfe05bcf610e895dd892a6a1aa50e76dc1045f63dfca8de2da264bd35",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-medium/case-013-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "medium"
+    },
+    "run_id": "db570108-cfa3-48f0-ad44-a5d9eec189db",
+    "started_at": "2026-06-05T03:17:20+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.004465,
+    "output_cost_usd": 0.04395,
+    "total_cost_usd": 0.048415
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 893,
+    "output_tokens": 1758,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 893,
+      "output_tokens": 1758,
+      "output_tokens_details": {
+        "thinking_tokens": 1109
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 2651
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "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",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## What the verifier is complaining about\n\nThis is not a logic error in the program \u2014 it is a **stack budget** error.\n\nThe BPF verifier limits the *combined* stack usage along any chain of nested\n(non\u2011inlined, \"global\"/`noinline`) function calls to **512 bytes**.\n\nHere every helper allocates a `MAX_STACK` (260\u2011byte) on\u2011stack buffer:\n\n```\nentry\n  \u2514\u2500 helper_c   buf[260]\n        \u251c\u2500 helper_b   buf[260]\n        \u2502     \u2514\u2500 helper_a   (no buffer)\n        \u2514\u2500 helper_d   buf[260]\n```\n\nThe deepest path that simultaneously holds two of those buffers\n(`entry \u2192 helper_c \u2192 helper_b`, or `entry \u2192 helper_c \u2192 helper_d`) needs\n`260 + 260` bytes plus a little call\u2011frame overhead, which the verifier rounds up\nto **544 bytes**:\n\n```\ncombined stack size of 3 calls is 544. Too large\n```\n\nSince `544 > 512`, verification is rejected. Nothing about pointer safety is\nwrong \u2014 `helper_d` is already reported \"safe\".\n\n## Smallest fix\n\nShrink the per\u2011frame stack buffers so the two\u2011deep chain fits under the\n512\u2011byte limit. Two buffers must satisfy roughly `2 * MAX_STACK + overhead \u2264 512`.\nWith the observed ~24 bytes of overhead, `MAX_STACK` must be `\u2264 244`. Pick a\nsafe round value:\n\n```c\n-#define MAX_STACK 260\n+#define MAX_STACK 200\n```\n\nWith `MAX_STACK = 200`, the deepest live combination is about\n`200 + 200 + overhead \u2248 424 bytes`, comfortably under 512, and the program\nverifies.\n\nNo other code changes are required \u2014 the call graph, signatures, and `__sink`\nusage are all fine; only the aggregate stack size violated the verifier\u2019s\n512\u2011byte limit.",
+        "type": "text"
+      }
+    ],
+    "id": "msg_01JNs1FRqqQynStBopu5eVA8",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 893,
+      "output_tokens": 1758,
+      "output_tokens_details": {
+        "thinking_tokens": 1109
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

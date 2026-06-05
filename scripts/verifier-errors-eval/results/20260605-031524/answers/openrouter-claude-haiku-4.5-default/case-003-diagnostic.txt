@@ -1,0 +1,41 @@
+## Explanation of the Verifier Failure
+
+The verifier is rejecting this program because of a **type safety violation**. Here's what happens:
+
+1. **Instruction 0**: `r1` (the context pointer) is stored at `fp-8`
+2. **Instruction 1-2**: `r0` is set to 35 (a scalar), then a byte is written to `fp-7`
+3. **Instruction 3**: `r0 = *(u64 *)(r10 - 8)` loads from `fp-8`
+   - The verifier **loses track** that this location contains a pointer because instruction 2 wrote a scalar byte to `fp-7`, which overlaps with the 8-byte value at `fp-8`
+   - The write at `fp-7` (1 byte) corrupts the verifier's knowledge of the 8-byte pointer at `fp-8`, causing it to be marked as `scalar()` (unknown integer)
+4. **Instruction 4**: `r0 = *(u64 *)(r0 + 8)` attempts to dereference `r0`
+   - Since `r0` is now a scalar (not a pointer), this is invalid and the verifier rejects it
+
+## Root Cause
+
+Writing to `fp-7` (a 1-byte write) overlaps with the 8-byte value stored at `fp-8`, causing the verifier to lose confidence that `fp-8` contains a valid pointer.
+
+## Fix
+
+Avoid the overlapping write. Instead of writing to `fp-7`, write to a location that doesn't overlap with `fp-8`. Since we're using 8 bytes at `fp-8`, we should write to `fp-6` or lower (further from `fp0`):
+
+```c
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("socket")
+__naked void entry(void)
+{
+	asm volatile ("					\
+	*(u64*)(r10 - 8) = r1;				\
+	r0 = 0x23;					\
+	*(u8*)(r10 - 16) = r0;				\
+	r0 = *(u64*)(r10 - 8);				\
+	r0 = *(u64*)(r0 + 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+**Change**: `*(u8*)(r10 - 7)` → `*(u8*)(r10 - 16)`
+
+This ensures the byte write at `fp-16` doesn't overlap with the 8-byte pointer stored at `fp-8`, allowing the verifier to maintain type safety and successfully load and dereference the pointer.

@@ -1,0 +1,47 @@
+## Explanation of the Failure
+
+The BPF verifier does not allow recursive calls. `helper_a` calls itself (`call helper_a` at label `l0`), which the verifier immediately rejects with:
+
+```
+recursive call from helper_a() to helper_a()
+```
+
+The recursion is tail-recursive (the last thing before each `exit` is either a return or a self-call), so it can be mechanically replaced with a backward branch (loop).
+
+## Fix
+
+Replace the self-call with a loop by moving the label to the top of the function body:
+
+```diff
+ static __naked __noinline __attribute__((used))
+ void helper_a(void)
+ {
+ 	asm volatile ("					\
+-	r1 += 1;					\
++l0_%=:	r1 += 1;					\
+ 	r0 = r1;					\
+-	if r1 < 4 goto l0_%=;				\
++	if r1 < 4 goto l0_%=;				\
+ 	exit;						\
+-l0_%=:	call helper_a;					\
+-	exit;						\
+ "	::: __clobber_all);
+ }
+```
+
+### Result
+
+```c
+static __naked __noinline __attribute__((used))
+void helper_a(void)
+{
+	asm volatile ("					\
+l0_%=:	r1 += 1;					\
+	r0 = r1;					\
+	if r1 < 4 goto l0_%=;				\
+	exit;						\
+"	::: __clobber_all);
+}
+```
+
+This keeps the same semantics (increment `r1`, loop while `r1 < 4`, then exit) but expresses it as a backward branch instead of a recursive call, which the verifier accepts.

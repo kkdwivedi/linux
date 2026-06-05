@@ -1,0 +1,65 @@
+{
+  "answer_text": "Looking at the verifier log, the failure is clear:\n\n## Explanation\n\nThe program uses `SEC(\"kprobe\")` as its program type, but `bpf_ktime_get_coarse_ns` is not allowed for kprobe programs. The verifier explicitly states:\n\n> \"program of this type cannot use helper bpf_ktime_get_coarse_ns#160\"\n\nThe helper `bpf_ktime_get_coarse_ns` is a BPF helper that gets coarse-grained time, but it has restrictions on which program types can use it. Kprobe programs have a restricted set of allowed helpers compared to some other program types.\n\n## Fix\n\nThe smallest fix is to switch to a compatible helper. For kprobe programs, `bpf_ktime_get_ns` is typically allowed and provides similar functionality (nanosecond timestamp, just not \"coarse\" variant).\n\nHere's the patch:\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -8,10 +8,10 @@ SEC(\"kprobe\")\n __naked void entry(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n-\tcall %[bpf_ktime_get_coarse_ns];\t\t\\\n+\tcall %[bpf_ktime_get_ns];\t\t\t\\\n \tr0 = 0;\t\t\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t:\n-\t: __imm(bpf_ktime_get_coarse_ns)\n+\t: __imm(bpf_ktime_get_ns)\n \t: __clobber_all);\n }\n```\n\nThis change replaces `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns`, which is a helper typically allowed in kprobe programs. The `bpf_ktime_get_ns` helper returns the current time in nanoseconds (using the full precision clock source rather than the coarse/grained variant), and the return value still goes into `r0` with the same calling convention, so the rest of the program logic remains unchanged.",
+  "meta": {
+    "answer_text_path": "answers/kimi-k2.6-no-thinking/case-006-diagnostic.txt",
+    "case_id": "case-006",
+    "model": "kimi-k2.6",
+    "profile": "kimi-k2.6-no-thinking",
+    "prompt_bytes": 1849,
+    "prompt_path": "public/case-006/prompt_diagnostic.md",
+    "prompt_sha256": "0c351f7275500308d5dd7e77f65459b6d00560f51ba8d1d768a521650bb1de73",
+    "provider": "kimi",
+    "raw_response_path": "responses/kimi-k2.6-no-thinking/case-006-diagnostic.json",
+    "reasoning_profile": {
+      "parameter": "thinking.type",
+      "value": "disabled"
+    },
+    "run_id": "44fe4d93-8b02-4039-965a-ef9ebb0758af",
+    "started_at": "2026-06-05T03:18:00+00:00",
+    "timeout_seconds": 300,
+    "variant": "diagnostic"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.00053485,
+    "output_cost_usd": 0.001568,
+    "total_cost_usd": 0.00210285
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 563,
+    "output_tokens": 392,
+    "raw_usage": {
+      "completion_tokens": 392,
+      "prompt_tokens": 563,
+      "total_tokens": 955
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 955
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+          "content": "Looking at the verifier log, the failure is clear:\n\n## Explanation\n\nThe program uses `SEC(\"kprobe\")` as its program type, but `bpf_ktime_get_coarse_ns` is not allowed for kprobe programs. The verifier explicitly states:\n\n> \"program of this type cannot use helper bpf_ktime_get_coarse_ns#160\"\n\nThe helper `bpf_ktime_get_coarse_ns` is a BPF helper that gets coarse-grained time, but it has restrictions on which program types can use it. Kprobe programs have a restricted set of allowed helpers compared to some other program types.\n\n## Fix\n\nThe smallest fix is to switch to a compatible helper. For kprobe programs, `bpf_ktime_get_ns` is typically allowed and provides similar functionality (nanosecond timestamp, just not \"coarse\" variant).\n\nHere's the patch:\n\n```diff\n--- a/case.c\n+++ b/case.c\n@@ -8,10 +8,10 @@ SEC(\"kprobe\")\n __naked void entry(void)\n {\n \tasm volatile (\"\t\t\t\t\t\\\n-\tcall %[bpf_ktime_get_coarse_ns];\t\t\\\n+\tcall %[bpf_ktime_get_ns];\t\t\t\\\n \tr0 = 0;\t\t\t\t\t\t\\\n \texit;\t\t\t\t\t\t\\\n \"\t:\n-\t: __imm(bpf_ktime_get_coarse_ns)\n+\t: __imm(bpf_ktime_get_ns)\n \t: __clobber_all);\n }\n```\n\nThis change replaces `bpf_ktime_get_coarse_ns` with `bpf_ktime_get_ns`, which is a helper typically allowed in kprobe programs. The `bpf_ktime_get_ns` helper returns the current time in nanoseconds (using the full precision clock source rather than the coarse/grained variant), and the return value still goes into `r0` with the same calling convention, so the rest of the program logic remains unchanged.",
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1780629480,
+    "id": "chatcmpl-6a223fe8eeebc8f70f15016a",
+    "model": "kimi-k2.6",
+    "object": "chat.completion",
+    "usage": {
+      "completion_tokens": 392,
+      "prompt_tokens": 563,
+      "total_tokens": 955
+    }
+  },
+  "reasoning_content": ""
+}

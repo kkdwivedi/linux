@@ -1,0 +1,59 @@
+The verifier is rejecting `helper_a()` because its argument is inferred as nullable:
+
+```text
+R1=mem_or_null(id=1,sz=4)
+...
+R6=mem_or_null(id=1,sz=4)
+...
+r2 = *(u32 *)(r6 +0)
+R6 invalid mem access 'mem_or_null'
+```
+
+`helper_a()` is a separately validated `__noinline` BPF subprogram. Its parameter:
+
+```c
+const struct Item *s
+```
+
+is treated by the verifier as a pointer that may be `NULL`. The function immediately dereferences it:
+
+```c
+s->x
+```
+
+without first proving `s != NULL`, so the verifier rejects the load.
+
+Even though the caller passes `&s`, which is non-NULL in normal C semantics, the verifier validates the subprogram independently and requires the callee to handle the nullable pointer type.
+
+The smallest source-level fix is to add an explicit null check in `helper_a()` before dereferencing `s`.
+
+Patch:
+
+```diff
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+
+ struct Item {
+ 	int x;
+ };
+
+ __noinline int helper_a(const struct Item *s)
+ {
++	if (!s)
++		return 0;
++
+ 	return bpf_get_prandom_u32() < s->x;
+ }
+
+ SEC("cgroup_skb/ingress")
+ int entry(struct __sk_buff *skb)
+ {
+ 	const struct Item s = {.x = skb->len};
+
+ 	helper_a(&s);
+
+ 	return 1;
+ }
+```
+
+With the null check, the verifier can refine `s` from `mem_or_null` to non-null memory on the fallthrough path, making the load from `s->x` valid.

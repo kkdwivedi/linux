@@ -1,0 +1,92 @@
+{
+  "answer_text": "## What the verifier is complaining about\n\nThe error is:\n\n```\n10: (63) *(u32 *)(r7 +0) = r1\nR7 invalid mem access 'scalar'\n```\n\n`r7` holds the packet pointer `p` (derived from `sk->data`). You correctly bounds-check it against `sk->data_end` at insns 3\u20135, so right after the check `R7` is a valid `pkt` pointer.\n\nThe problem is the call at insn 8:\n\n```\n8: (85) call pc+4\nFunc#1 ('helper_a') is global and assumed valid.\n```\n\n`helper_a` is a **global** (non-static) subprogram. The verifier does not look inside global subprograms when verifying the caller; it just assumes they're valid. But because a global function *could* call a packet-changing helper such as `bpf_skb_pull_data()` (which it does, transitively via `helper_b`), the verifier must conservatively assume the call may **reallocate/invalidate the packet buffer**. Therefore all packet pointers held in registers are invalidated (turned into `scalar`) across that call.\n\nSo after insn 8, `R7` is no longer a `pkt` pointer \u2014 it's a scalar \u2014 and the store `*p = 42` at insn 10 is rejected. The earlier bounds check is meaningless because the underlying packet may have moved.\n\nThis is *correct* verifier behavior: `bpf_skb_pull_data()` can change `sk->data`/`sk->data_end`, so any pointer obtained before the pull is stale afterward.\n\n## The fix\n\nRecompute the packet pointer and redo the bounds check **after** the call, not before. The smallest source change:\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p;\n\n\thelper_a(sk, 0);\n\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nNow `p` is derived from `sk->data` *after* the potential `bpf_skb_pull_data()`, and the bounds check against `sk->data_end` is performed on the fresh, post-call packet state. The verifier sees a valid `pkt` pointer with a verified range at the time of the store, so the write succeeds.\n\n(Equivalently, if you must keep the original ordering, you'd have to re-load `sk->data`/`sk->data_end` and re-run the bounds check after the call \u2014 but simply moving the call before the pointer computation is the minimal, clean fix.)",
+  "meta": {
+    "answer_text_path": "answers/anthropic-opus-4.8-high/case-015-legacy.txt",
+    "case_id": "case-015",
+    "model": "claude-opus-4-8",
+    "profile": "anthropic-opus-4.8-high",
+    "prompt_bytes": 1984,
+    "prompt_path": "public/case-015/prompt_legacy.md",
+    "prompt_sha256": "dc0fc1e91b61bdf915966f9cbe5ae652d8b1776a8af859d12e6cd23d52604af2",
+    "provider": "anthropic",
+    "raw_response_path": "responses/anthropic-opus-4.8-high/case-015-legacy.json",
+    "reasoning_profile": {
+      "parameter": "output_config.effort",
+      "thinking": {
+        "type": "adaptive"
+      },
+      "value": "high"
+    },
+    "run_id": "249b7d11-792f-43cb-95e8-2d5493bed083",
+    "started_at": "2026-06-05T03:17:41+00:00",
+    "timeout_seconds": 300,
+    "variant": "legacy"
+  },
+  "normalized_cost": {
+    "cache_write_cost_usd": 0.0,
+    "cached_input_cost_usd": 0.0,
+    "input_cost_usd": 0.005745,
+    "output_cost_usd": 0.034625,
+    "total_cost_usd": 0.04037
+  },
+  "normalized_usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 1149,
+    "output_tokens": 1385,
+    "raw_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1149,
+      "output_tokens": 1385,
+      "output_tokens_details": {
+        "thinking_tokens": 532
+      },
+      "service_tier": "standard"
+    },
+    "reasoning_content_chars": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 2534
+  },
+  "raw_response": {
+    "content": [
+      {
+        "signature": "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",
+        "thinking": "",
+        "type": "thinking"
+      },
+      {
+        "text": "## What the verifier is complaining about\n\nThe error is:\n\n```\n10: (63) *(u32 *)(r7 +0) = r1\nR7 invalid mem access 'scalar'\n```\n\n`r7` holds the packet pointer `p` (derived from `sk->data`). You correctly bounds-check it against `sk->data_end` at insns 3\u20135, so right after the check `R7` is a valid `pkt` pointer.\n\nThe problem is the call at insn 8:\n\n```\n8: (85) call pc+4\nFunc#1 ('helper_a') is global and assumed valid.\n```\n\n`helper_a` is a **global** (non-static) subprogram. The verifier does not look inside global subprograms when verifying the caller; it just assumes they're valid. But because a global function *could* call a packet-changing helper such as `bpf_skb_pull_data()` (which it does, transitively via `helper_b`), the verifier must conservatively assume the call may **reallocate/invalidate the packet buffer**. Therefore all packet pointers held in registers are invalidated (turned into `scalar`) across that call.\n\nSo after insn 8, `R7` is no longer a `pkt` pointer \u2014 it's a scalar \u2014 and the store `*p = 42` at insn 10 is rejected. The earlier bounds check is meaningless because the underlying packet may have moved.\n\nThis is *correct* verifier behavior: `bpf_skb_pull_data()` can change `sk->data`/`sk->data_end`, so any pointer obtained before the pull is stale afterward.\n\n## The fix\n\nRecompute the packet pointer and redo the bounds check **after** the call, not before. The smallest source change:\n\n```c\nSEC(\"tc\")\nint entry(struct __sk_buff *sk)\n{\n\tint *p;\n\n\thelper_a(sk, 0);\n\n\tp = (void *)(long)sk->data;\n\tif ((void *)(p + 1) > (void *)(long)sk->data_end)\n\t\treturn TCX_DROP;\n\t*p = 42;\n\treturn TCX_PASS;\n}\n```\n\nNow `p` is derived from `sk->data` *after* the potential `bpf_skb_pull_data()`, and the bounds check against `sk->data_end` is performed on the fresh, post-call packet state. The verifier sees a valid `pkt` pointer with a verified range at the time of the store, so the write succeeds.\n\n(Equivalently, if you must keep the original ordering, you'd have to re-load `sk->data`/`sk->data_end` and re-run the bounds check after the call \u2014 but simply moving the call before the pointer computation is the minimal, clean fix.)",
+        "type": "text"
+      }
+    ],
+    "id": "msg_0148xcYv9qfJtHJYx7hvDijB",
+    "model": "claude-opus-4-8",
+    "role": "assistant",
+    "stop_details": null,
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "global",
+      "input_tokens": 1149,
+      "output_tokens": 1385,
+      "output_tokens_details": {
+        "thinking_tokens": 532
+      },
+      "service_tier": "standard"
+    }
+  },
+  "reasoning_content": ""
+}

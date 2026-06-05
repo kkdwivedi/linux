@@ -1,0 +1,34 @@
+## Explanation
+
+`bpf_local_irq_save`/`bpf_local_irq_restore` are treated by the verifier like a stack-based (LIFO) locking discipline. Each `save` acquires an "irq flag" reference with an id, and the verifier requires that you `restore` them in **reverse order** of acquisition.
+
+In the program:
+
+- `bpf_local_irq_save(&flags1)` → acquires id=1
+- `bpf_local_irq_save(&flags2)` → acquires id=2
+
+The code then restores `flags1` (id=1) first, but the verifier expects the most recently acquired one (id=2) to be released first:
+
+```
+cannot restore irq state out of order, expected id=2 acquired at insn_idx=7
+```
+
+## Fix
+
+Restore the IRQ flags in LIFO order — release `flags2` before `flags1`:
+
+```c
+SEC("?tc")
+int entry(struct __sk_buff *ctx)
+{
+	unsigned long flags1, flags2;
+
+	bpf_local_irq_save(&flags1);
+	bpf_local_irq_save(&flags2);
+	bpf_local_irq_restore(&flags2);   /* release last-acquired first */
+	bpf_local_irq_restore(&flags1);
+	return 0;
+}
+```
+
+This satisfies the verifier's required nested/LIFO ordering for IRQ save/restore reference tracking.
