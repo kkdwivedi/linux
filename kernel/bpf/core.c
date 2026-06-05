@@ -2566,7 +2566,9 @@ int bpf_prog_check_freplace_runtime(const struct bpf_prog *prog,
 		return -EINVAL;
 
 	if (prog->aux->max_ctx_offset > tgt_prog->aux->max_ctx_offset ||
-	    prog->aux->max_tp_access > tgt_prog->aux->max_tp_access)
+	    prog->aux->max_tp_access > tgt_prog->aux->max_tp_access ||
+	    prog->aux->max_rdonly_access > tgt_prog->aux->max_rdonly_access ||
+	    prog->aux->max_rdwr_access > tgt_prog->aux->max_rdwr_access)
 		return -EINVAL;
 
 	return 0;
