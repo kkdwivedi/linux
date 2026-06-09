@@ -11,6 +11,7 @@
 #include <linux/kthread.h>
 #include <linux/atomic.h>
 #include <linux/slab.h>
+#include <linux/jiffies.h>
 
 static struct perf_event_attr hw_attr = {
 	.type		= PERF_TYPE_HARDWARE,
@@ -51,12 +52,13 @@ enum rqsl_mode {
 	RQSL_MODE_AA = 0,
 	RQSL_MODE_ABBA,
 	RQSL_MODE_ABBCCA,
+	RQSL_MODE_HANDOFF_TAIL,
 };
 
 static int test_mode = RQSL_MODE_AA;
 module_param(test_mode, int, 0644);
 MODULE_PARM_DESC(test_mode,
-		 "rqspinlock test mode: 0 = AA, 1 = ABBA, 2 = ABBCCA");
+		 "rqspinlock test mode: 0 = AA, 1 = ABBA, 2 = ABBCCA, 3 = handoff tail");
 
 static int normal_delay = 20;
 module_param(normal_delay, int, 0644);
@@ -81,6 +83,7 @@ static const char *rqsl_mode_names[] = {
 	[RQSL_MODE_AA] = "AA",
 	[RQSL_MODE_ABBA] = "ABBA",
 	[RQSL_MODE_ABBCCA] = "ABBCCA",
+	[RQSL_MODE_HANDOFF_TAIL] = "handoff tail",
 };
 
 struct rqsl_lock_pair {
@@ -211,6 +214,317 @@ static void nmi_cb(struct perf_event *event, struct perf_sample_data *data,
 		raw_res_spin_unlock_irqrestore(locks.nmi_lock, flags);
 }
 
+#ifdef CONFIG_QUEUED_SPINLOCKS
+
+#define RQSL_HANDOFF_SETUP_TIMEOUT_MS	1000
+#define RQSL_HANDOFF_RESULT_TIMEOUT_MS	3000
+
+#define rqsl_wait_until(cond, timeout_ms)				\
+	({								\
+		unsigned long __deadline;				\
+		int __ret = 0;						\
+									\
+		__deadline = jiffies + msecs_to_jiffies(timeout_ms);	\
+		while (!(cond)) {					\
+			if (time_after(jiffies, __deadline)) {		\
+				__ret = -ETIMEDOUT;			\
+				break;					\
+			}						\
+			usleep_range(1000, 2000);			\
+		}							\
+		__ret;							\
+	})
+
+struct rqsl_handoff_tail_state {
+	struct task_struct *owner;
+	struct task_struct *pending;
+	struct task_struct *queue;
+	struct task_struct *rescuer;
+	bool owner_has_a;
+	bool start_owner_attempt_b;
+	bool owner_attempting_b;
+	bool queue_has_b;
+	bool queue_done;
+	bool owner_done;
+	bool pending_done;
+	bool rescuer_go;
+	bool rescuer_done;
+	bool rescue_needed;
+	int owner_a_ret;
+	int queue_b_ret;
+	int queue_a_ret;
+	int pending_a_ret;
+	int rescuer_a_ret;
+};
+
+static struct rqsl_handoff_tail_state rqsl_handoff_tail;
+
+static int rqsl_handoff_tail_idle(void)
+{
+	while (!kthread_should_stop())
+		msleep(20);
+	return 0;
+}
+
+static int rqsl_handoff_tail_owner_fn(void *arg)
+{
+	struct rqsl_handoff_tail_state *s = arg;
+	int ret;
+
+	ret = raw_res_spin_lock(&lock_a);
+	WRITE_ONCE(s->owner_a_ret, ret);
+	if (ret)
+		goto out;
+
+	WRITE_ONCE(s->owner_has_a, true);
+	while (!kthread_should_stop() && !READ_ONCE(s->start_owner_attempt_b))
+		cpu_relax();
+
+	if (!kthread_should_stop()) {
+		/*
+		 * Create the remote CPU held-lock table shape for an ABBA
+		 * diagnosis without racing CPU0 to detect and unwind first.
+		 */
+		grab_held_lock_entry(&lock_b);
+		WRITE_ONCE(s->owner_attempting_b, true);
+		while (!kthread_should_stop() && !READ_ONCE(s->queue_done))
+			cpu_relax();
+		release_held_lock_entry();
+	}
+	raw_res_spin_unlock(&lock_a);
+
+out:
+	WRITE_ONCE(s->owner_done, true);
+	return rqsl_handoff_tail_idle();
+}
+
+static int rqsl_handoff_tail_pending_fn(void *arg)
+{
+	struct rqsl_handoff_tail_state *s = arg;
+	int ret;
+
+	while (!kthread_should_stop() && !READ_ONCE(s->owner_has_a))
+		cpu_relax();
+	if (kthread_should_stop())
+		goto out;
+
+	ret = raw_res_spin_lock(&lock_a);
+	WRITE_ONCE(s->pending_a_ret, ret);
+	if (!ret)
+		raw_res_spin_unlock(&lock_a);
+
+out:
+	WRITE_ONCE(s->pending_done, true);
+	return rqsl_handoff_tail_idle();
+}
+
+static int rqsl_handoff_tail_queue_fn(void *arg)
+{
+	struct rqsl_handoff_tail_state *s = arg;
+	int ret;
+
+	while (!kthread_should_stop() && !READ_ONCE(s->owner_has_a))
+		cpu_relax();
+	while (!kthread_should_stop() &&
+	       !(atomic_read(&lock_a.val) & _Q_PENDING_MASK))
+		cpu_relax();
+	if (kthread_should_stop())
+		goto out;
+
+	ret = raw_res_spin_lock(&lock_b);
+	WRITE_ONCE(s->queue_b_ret, ret);
+	if (ret)
+		goto out;
+
+	WRITE_ONCE(s->queue_has_b, true);
+	ret = raw_res_spin_lock(&lock_a);
+	WRITE_ONCE(s->queue_a_ret, ret);
+	if (!ret)
+		raw_res_spin_unlock(&lock_a);
+	raw_res_spin_unlock(&lock_b);
+
+out:
+	WRITE_ONCE(s->queue_done, true);
+	return rqsl_handoff_tail_idle();
+}
+
+static int rqsl_handoff_tail_rescuer_fn(void *arg)
+{
+	struct rqsl_handoff_tail_state *s = arg;
+	int ret;
+
+	while (!kthread_should_stop() && !READ_ONCE(s->rescuer_go))
+		usleep_range(1000, 2000);
+	if (kthread_should_stop())
+		goto out;
+
+	ret = raw_res_spin_lock(&lock_a);
+	WRITE_ONCE(s->rescuer_a_ret, ret);
+	if (!ret)
+		raw_res_spin_unlock(&lock_a);
+
+out:
+	WRITE_ONCE(s->rescuer_done, true);
+	return rqsl_handoff_tail_idle();
+}
+
+static int rqsl_start_bound_thread(struct task_struct **thread, int cpu,
+				   int (*fn)(void *), void *arg,
+				   const char *name)
+{
+	struct task_struct *t;
+
+	t = kthread_create(fn, arg, "%s/%d", name, cpu);
+	if (IS_ERR(t))
+		return PTR_ERR(t);
+	kthread_bind(t, cpu);
+	*thread = t;
+	wake_up_process(t);
+	return 0;
+}
+
+static void rqsl_handoff_tail_stop_threads(struct rqsl_handoff_tail_state *s)
+{
+	if (s->owner) {
+		kthread_stop(s->owner);
+		s->owner = NULL;
+	}
+	if (s->pending) {
+		kthread_stop(s->pending);
+		s->pending = NULL;
+	}
+	if (s->queue) {
+		kthread_stop(s->queue);
+		s->queue = NULL;
+	}
+	if (s->rescuer) {
+		kthread_stop(s->rescuer);
+		s->rescuer = NULL;
+	}
+}
+
+static int rqsl_handoff_tail_pick_cpus(int cpus[4])
+{
+	int cpu, nr = 0;
+
+	for_each_online_cpu(cpu) {
+		cpus[nr++] = cpu;
+		if (nr == 4)
+			return 0;
+	}
+	return -EOPNOTSUPP;
+}
+
+static int rqsl_handoff_tail_run(void)
+{
+	struct rqsl_handoff_tail_state *s = &rqsl_handoff_tail;
+	int cpus[4], ret;
+
+	ret = rqsl_handoff_tail_pick_cpus(cpus);
+	if (ret)
+		return ret;
+
+	memset(s, 0, sizeof(*s));
+	s->owner_a_ret = -EINPROGRESS;
+	s->queue_b_ret = -EINPROGRESS;
+	s->queue_a_ret = -EINPROGRESS;
+	s->pending_a_ret = -EINPROGRESS;
+	s->rescuer_a_ret = -EINPROGRESS;
+
+	raw_res_spin_lock_init(&lock_a);
+	raw_res_spin_lock_init(&lock_b);
+
+	ret = rqsl_start_bound_thread(&s->owner, cpus[0],
+				      rqsl_handoff_tail_owner_fn, s,
+				      "rqsl_owner");
+	if (ret)
+		goto out_stop;
+	ret = rqsl_wait_until(READ_ONCE(s->owner_has_a),
+			      RQSL_HANDOFF_SETUP_TIMEOUT_MS);
+	if (ret)
+		goto out_stop;
+
+	ret = rqsl_start_bound_thread(&s->pending, cpus[1],
+				      rqsl_handoff_tail_pending_fn, s,
+				      "rqsl_pending");
+	if (ret)
+		goto out_stop;
+	ret = rqsl_wait_until(atomic_read(&lock_a.val) & _Q_PENDING_MASK,
+			      RQSL_HANDOFF_SETUP_TIMEOUT_MS);
+	if (ret)
+		goto out_stop;
+
+	ret = rqsl_start_bound_thread(&s->queue, cpus[2],
+				      rqsl_handoff_tail_queue_fn, s,
+				      "rqsl_queue");
+	if (ret)
+		goto out_stop;
+	ret = rqsl_start_bound_thread(&s->rescuer, cpus[3],
+				      rqsl_handoff_tail_rescuer_fn, s,
+				      "rqsl_rescue");
+	if (ret)
+		goto out_stop;
+
+	ret = rqsl_wait_until(READ_ONCE(s->queue_has_b) &&
+			      (atomic_read(&lock_a.val) & _Q_TAIL_MASK),
+			      RQSL_HANDOFF_SETUP_TIMEOUT_MS);
+	if (ret)
+		goto out_stop;
+
+	WRITE_ONCE(s->start_owner_attempt_b, true);
+	ret = rqsl_wait_until(READ_ONCE(s->owner_attempting_b),
+			      RQSL_HANDOFF_SETUP_TIMEOUT_MS);
+	if (ret)
+		goto out_stop;
+
+	ret = rqsl_wait_until(READ_ONCE(s->queue_done),
+			      RQSL_HANDOFF_RESULT_TIMEOUT_MS);
+	if (ret) {
+		WRITE_ONCE(s->rescue_needed, true);
+		WRITE_ONCE(s->rescuer_go, true);
+		ret = rqsl_wait_until(READ_ONCE(s->queue_done),
+				      RQSL_HANDOFF_RESULT_TIMEOUT_MS);
+		if (ret) {
+			pr_err("handoff-tail rescue failed, cannot safely unload\n");
+			for (;;)
+				msleep(1000);
+		}
+	}
+
+	ret = rqsl_wait_until(READ_ONCE(s->owner_done) &&
+			      READ_ONCE(s->pending_done) &&
+			      (!READ_ONCE(s->rescue_needed) ||
+			       READ_ONCE(s->rescuer_done)),
+			      RQSL_HANDOFF_RESULT_TIMEOUT_MS);
+
+out_stop:
+	rqsl_handoff_tail_stop_threads(s);
+	if (ret)
+		return ret;
+	if (READ_ONCE(s->rescue_needed)) {
+		pr_err("handoff-tail waiter needed successor rescue\n");
+		return -EDEADLK;
+	}
+	if (READ_ONCE(s->owner_a_ret))
+		return READ_ONCE(s->owner_a_ret);
+	if (READ_ONCE(s->queue_b_ret))
+		return READ_ONCE(s->queue_b_ret);
+	if (READ_ONCE(s->queue_a_ret) != -EDEADLK)
+		return -EINVAL;
+	if (READ_ONCE(s->pending_a_ret))
+		return READ_ONCE(s->pending_a_ret);
+	return 0;
+}
+
+#else
+
+static int rqsl_handoff_tail_run(void)
+{
+	return -EOPNOTSUPP;
+}
+
+#endif
+
 static void free_rqsl_threads(void)
 {
 	int i;
@@ -242,12 +556,15 @@ static int bpf_test_rqspinlock_init(void)
 	int i, ret;
 	int ncpus = num_online_cpus();
 
-	if (test_mode < RQSL_MODE_AA || test_mode > RQSL_MODE_ABBCCA) {
+	if (test_mode < RQSL_MODE_AA || test_mode > RQSL_MODE_HANDOFF_TAIL) {
 		pr_err("Invalid mode %d\n", test_mode);
 		return -EINVAL;
 	}
 
 	pr_err("Mode = %s\n", rqsl_mode_names[test_mode]);
+
+	if (test_mode == RQSL_MODE_HANDOFF_TAIL)
+		return rqsl_handoff_tail_run();
 
 	if (ncpus < test_mode + 2)
 		return -ENOTSUPP;
