@@ -218,6 +218,7 @@ static void nmi_cb(struct perf_event *event, struct perf_sample_data *data,
 
 #define RQSL_HANDOFF_SETUP_TIMEOUT_MS	1000
 #define RQSL_HANDOFF_RESULT_TIMEOUT_MS	3000
+#define RQSL_HANDOFF_TAIL_RESCUE	0
 
 #define rqsl_wait_until(cond, timeout_ms)				\
 	({								\
@@ -459,11 +460,13 @@ static int rqsl_handoff_tail_run(void)
 				      "rqsl_queue");
 	if (ret)
 		goto out_stop;
-	ret = rqsl_start_bound_thread(&s->rescuer, cpus[3],
-				      rqsl_handoff_tail_rescuer_fn, s,
-				      "rqsl_rescue");
-	if (ret)
-		goto out_stop;
+	if (RQSL_HANDOFF_TAIL_RESCUE) {
+		ret = rqsl_start_bound_thread(&s->rescuer, cpus[3],
+					      rqsl_handoff_tail_rescuer_fn, s,
+					      "rqsl_rescue");
+		if (ret)
+			goto out_stop;
+	}
 
 	ret = rqsl_wait_until(READ_ONCE(s->queue_has_b) &&
 			      (atomic_read(&lock_a.val) & _Q_TAIL_MASK),
@@ -485,7 +488,10 @@ static int rqsl_handoff_tail_run(void)
 		ret = rqsl_wait_until(READ_ONCE(s->queue_done),
 				      RQSL_HANDOFF_RESULT_TIMEOUT_MS);
 		if (ret) {
-			pr_err("handoff-tail rescue failed, cannot safely unload\n");
+			if (RQSL_HANDOFF_TAIL_RESCUE)
+				pr_err("handoff-tail rescue failed, cannot safely unload\n");
+			else
+				pr_err("handoff-tail waiter stuck with rescue disabled\n");
 			for (;;)
 				msleep(1000);
 		}
