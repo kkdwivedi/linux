@@ -7610,6 +7610,35 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 	return 0;
 }
 
+#define KF_IMPL_SUFFIX "_impl"
+
+const struct btf_type *btf_find_kfunc_impl_proto(struct bpf_verifier_log *log,
+						 struct btf *btf,
+						 const char *func_name)
+{
+	char buf[KSYM_NAME_LEN];
+	const struct btf_type *func;
+	s32 impl_id;
+	int len;
+
+	len = snprintf(buf, sizeof(buf), "%s%s", func_name, KF_IMPL_SUFFIX);
+	if (len < 0 || len >= sizeof(buf)) {
+		bpf_log(log, "function name %s%s is too long\n",
+			func_name, KF_IMPL_SUFFIX);
+		return NULL;
+	}
+
+	impl_id = btf_find_by_name_kind(btf, buf, BTF_KIND_FUNC);
+	if (impl_id <= 0) {
+		bpf_log(log, "cannot find function %s in BTF\n", buf);
+		return NULL;
+	}
+
+	func = btf_type_by_id(btf, impl_id);
+
+	return btf_type_by_id(btf, func->type);
+}
+
 /* Compare BTFs of two functions assuming only scalars and pointers to context.
  * t1 points to BTF_KIND_FUNC in btf1
  * t2 points to BTF_KIND_FUNC in btf2

@@ -2582,34 +2582,6 @@ static struct btf *find_kfunc_desc_btf(struct bpf_verifier_env *env, s16 offset)
 	return btf_vmlinux ?: ERR_PTR(-ENOENT);
 }
 
-#define KF_IMPL_SUFFIX "_impl"
-
-static const struct btf_type *find_kfunc_impl_proto(struct bpf_verifier_env *env,
-						    struct btf *btf,
-						    const char *func_name)
-{
-	char *buf = env->tmp_str_buf;
-	const struct btf_type *func;
-	s32 impl_id;
-	int len;
-
-	len = snprintf(buf, TMP_STR_BUF_LEN, "%s%s", func_name, KF_IMPL_SUFFIX);
-	if (len < 0 || len >= TMP_STR_BUF_LEN) {
-		verbose(env, "function name %s%s is too long\n", func_name, KF_IMPL_SUFFIX);
-		return NULL;
-	}
-
-	impl_id = btf_find_by_name_kind(btf, buf, BTF_KIND_FUNC);
-	if (impl_id <= 0) {
-		verbose(env, "cannot find function %s in BTF\n", buf);
-		return NULL;
-	}
-
-	func = btf_type_by_id(btf, impl_id);
-
-	return btf_type_by_id(btf, func->type);
-}
-
 static int fetch_kfunc_meta(struct bpf_verifier_env *env,
 			    s32 func_id,
 			    s16 offset,
@@ -2653,7 +2625,7 @@ static int fetch_kfunc_meta(struct bpf_verifier_env *env,
 	 * can be found through the counterpart _impl kfunc.
 	 */
 	if (kfunc_flags && (*kfunc_flags & KF_IMPLICIT_ARGS))
-		func_proto = find_kfunc_impl_proto(env, btf, func_name);
+		func_proto = btf_find_kfunc_impl_proto(&env->log, btf, func_name);
 	else
 		func_proto = btf_type_by_id(btf, func->type);
 
