@@ -3156,6 +3156,9 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 const struct btf_type *btf_find_kfunc_impl_proto(struct bpf_verifier_log *log,
 						 struct btf *btf,
 						 const char *func_name);
+const struct btf_type *btf_find_target_func_proto(struct btf *btf,
+					  const struct btf_type *func,
+					  const char *func_name);
 
 struct bpf_reg_state;
 int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog);

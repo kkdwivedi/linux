@@ -7611,6 +7611,7 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 }
 
 #define KF_IMPL_SUFFIX "_impl"
+#define BTF_KFUNC_DECL_TAG "bpf_kfunc"
 
 const struct btf_type *btf_find_kfunc_impl_proto(struct bpf_verifier_log *log,
 						 struct btf *btf,
@@ -7635,6 +7636,41 @@ const struct btf_type *btf_find_kfunc_impl_proto(struct bpf_verifier_log *log,
 	}
 
 	func = btf_type_by_id(btf, impl_id);
+
+	return btf_type_by_id(btf, func->type);
+}
+
+static bool btf_func_has_kfunc_tag(const struct btf *btf,
+				   const struct btf_type *func)
+{
+	int id = btf_named_start_id(btf, false) - 1;
+
+	while ((id = btf_find_next_decl_tag(btf, func, -1,
+					       BTF_KFUNC_DECL_TAG, id)) > 0) {
+		const struct btf_type *tag_t = btf_type_by_id(btf, id);
+		const char *tag = __btf_name_by_offset(btf, tag_t->name_off);
+
+		if (!strcmp(tag, BTF_KFUNC_DECL_TAG))
+			return true;
+	}
+
+	return false;
+}
+
+const struct btf_type *btf_find_target_func_proto(struct btf *btf,
+					  const struct btf_type *func,
+					  const char *func_name)
+{
+	const struct btf_type *impl_proto;
+
+	if (!func || !btf_type_is_func(func))
+		return NULL;
+
+	if (btf_func_has_kfunc_tag(btf, func)) {
+		impl_proto = btf_find_kfunc_impl_proto(NULL, btf, func_name);
+		if (impl_proto)
+			return impl_proto;
+	}
 
 	return btf_type_by_id(btf, func->type);
 }
