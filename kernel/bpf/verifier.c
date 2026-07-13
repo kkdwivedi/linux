@@ -194,6 +194,7 @@ struct bpf_verifier_stack_elem {
 	struct bpf_verifier_stack_elem *next;
 	/* length of verifier log at the time this state was pushed on stack */
 	u32 log_pos;
+	u32 diag_log_pos;
 };
 
 #define BPF_COMPLEXITY_LIMIT_JMP_SEQ	8192
@@ -1700,6 +1701,7 @@ static int pop_stack(struct bpf_verifier_env *env, int *prev_insn_idx,
 		err = bpf_copy_verifier_state(cur, &head->st);
 		if (err)
 			return err;
+		bpf_diag_event_log_reset(env, head->diag_log_pos);
 	}
 	if (pop_log)
 		bpf_vlog_reset(&env->log, head->log_pos);
@@ -1743,6 +1745,7 @@ static struct bpf_verifier_state *push_stack(struct bpf_verifier_env *env,
 	elem->prev_insn_idx = prev_insn_idx;
 	elem->next = env->head;
 	elem->log_pos = env->log.end_pos;
+	elem->diag_log_pos = bpf_diag_event_log_pos(env);
 	env->head = elem;
 	env->stack_size++;
 	err = bpf_copy_verifier_state(&elem->st, cur);
@@ -2264,6 +2267,7 @@ static struct bpf_verifier_state *push_async_cb(struct bpf_verifier_env *env,
 	elem->prev_insn_idx = prev_insn_idx;
 	elem->next = env->head;
 	elem->log_pos = env->log.end_pos;
+	elem->diag_log_pos = bpf_diag_event_log_pos(env);
 	env->head = elem;
 	env->stack_size++;
 	if (env->stack_size > BPF_COMPLEXITY_LIMIT_JMP_SEQ) {
@@ -17535,8 +17539,7 @@ process_bpf_exit:
 			err = bpf_update_branch_counts(env, env->cur_state);
 			if (err)
 				return err;
-			err = pop_stack(env, &prev_insn_idx, &env->insn_idx,
-					pop_log);
+			err = pop_stack(env, &prev_insn_idx, &env->insn_idx, pop_log);
 			if (err < 0) {
 				if (err != -ENOENT)
 					return err;
@@ -18396,7 +18399,8 @@ static void free_states(struct bpf_verifier_env *env)
 
 	bpf_free_verifier_state(env->cur_state, true);
 	env->cur_state = NULL;
-	while (!pop_stack(env, NULL, NULL, false));
+	while (!pop_stack(env, NULL, NULL, false))
+		;
 
 	list_for_each_safe(pos, tmp, &env->free_list) {
 		sl = container_of(pos, struct bpf_verifier_state_list, node);
@@ -18575,8 +18579,11 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 
 	ret = do_check(env);
 out:
-	if (!ret && pop_log)
-		bpf_vlog_reset(&env->log, 0);
+	if (!ret) {
+		if (pop_log)
+			bpf_vlog_reset(&env->log, 0);
+		bpf_diag_event_log_reset(env, 0);
+	}
 	free_states(env);
 	return ret;
 }
