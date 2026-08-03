@@ -4,7 +4,7 @@
 #include <bpf/bpf_helpers.h>
 
 SEC("freplace/replaceable")
-int replacement(struct pt_regs *ctx __arg_ctx)
+int replacement(void *ctx __arg_ctx)
 {
 	bpf_get_attach_cookie(ctx);
 	return 0;
