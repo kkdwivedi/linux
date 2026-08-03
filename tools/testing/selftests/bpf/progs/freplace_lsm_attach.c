@@ -12,6 +12,11 @@ void bpf_task_release(struct task_struct *p) __ksym;
 char path_buf[64];
 char digest[64];
 
+const char locked_xattr_bar[] = "security.bpf.bar";
+char locked_value_bar[] = "world";
+bool locked_set_success;
+bool locked_remove_success;
+
 SEC("freplace/replaceable_post_create")
 int replacement_post_create(struct socket *sock __arg_trusted)
 {
@@ -61,6 +66,30 @@ int replacement_file_open(struct file *file __arg_trusted)
 	bpf_path_d_path(&file->f_path, path_buf, sizeof(path_buf));
 	bpf_dynptr_from_mem(digest, sizeof(digest), 0, &digest_ptr);
 	bpf_get_fsverity_digest(file, &digest_ptr);
+	return 0;
+}
+
+SEC("freplace/replaceable_inode_setxattr")
+int replacement_inode_setxattr(struct dentry *dentry __arg_trusted)
+{
+	struct bpf_dynptr value_ptr;
+	char value[32];
+	int ret;
+
+	bpf_dynptr_from_mem(value, sizeof(value), 0, &value_ptr);
+	ret = bpf_get_dentry_xattr(dentry, locked_xattr_bar, &value_ptr);
+	if (ret < 0) {
+		bpf_dynptr_from_mem(locked_value_bar, sizeof(locked_value_bar), 0,
+				    &value_ptr);
+		ret = bpf_set_dentry_xattr(dentry, locked_xattr_bar, &value_ptr, 0);
+		if (!ret)
+			locked_set_success = true;
+	} else {
+		ret = bpf_remove_dentry_xattr(dentry, locked_xattr_bar);
+		if (!ret)
+			locked_remove_success = true;
+	}
+
 	return 0;
 }
 
