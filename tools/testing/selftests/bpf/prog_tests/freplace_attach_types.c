@@ -254,6 +254,7 @@ static void test_raw_tp(void)
 	struct freplace_attach_types_raw_tp_target *tgt_skel = NULL;
 	struct freplace_attach_types_raw_tp *skel = NULL;
 	struct bpf_link *freplace_link = NULL, *target_link = NULL;
+	struct bpf_program *prog;
 	int err, tgt_fd;
 
 	tgt_skel = freplace_attach_types_raw_tp_target__open_and_load();
@@ -263,6 +264,10 @@ static void test_raw_tp(void)
 	skel = freplace_attach_types_raw_tp__open();
 	if (!ASSERT_OK_PTR(skel, "freplace_open"))
 		goto out;
+
+	bpf_object__for_each_program(prog, skel->obj)
+		bpf_program__set_autoload(prog, false);
+	bpf_program__set_autoload(skel->progs.replacement, true);
 
 	err = bpf_map__reuse_fd(skel->maps.prog_array,
 				bpf_map__fd(tgt_skel->maps.prog_array));
@@ -298,6 +303,39 @@ static void test_raw_tp(void)
 out:
 	bpf_link__destroy(target_link);
 	bpf_link__destroy(freplace_link);
+	freplace_attach_types_raw_tp__destroy(skel);
+	freplace_attach_types_raw_tp_target__destroy(tgt_skel);
+}
+
+static void test_raw_tp_nullable(void)
+{
+	struct freplace_attach_types_raw_tp_target *tgt_skel = NULL;
+	struct freplace_attach_types_raw_tp *skel = NULL;
+	struct bpf_program *prog;
+	int err, tgt_fd;
+
+	tgt_skel = freplace_attach_types_raw_tp_target__open_and_load();
+	if (!ASSERT_OK_PTR(tgt_skel, "target_open_and_load"))
+		return;
+
+	skel = freplace_attach_types_raw_tp__open();
+	if (!ASSERT_OK_PTR(skel, "freplace_open"))
+		goto out;
+
+	bpf_object__for_each_program(prog, skel->obj)
+		bpf_program__set_autoload(prog, false);
+	bpf_program__set_autoload(skel->progs.replacement_nonnull, true);
+
+	tgt_fd = bpf_program__fd(tgt_skel->progs.raw_tp_nullable_target);
+	err = bpf_program__set_attach_target(skel->progs.replacement_nonnull,
+					     tgt_fd, "replaceable_nonnull");
+	if (!ASSERT_OK(err, "set_attach_target"))
+		goto out;
+
+	err = freplace_attach_types_raw_tp__load(skel);
+	ASSERT_OK(err, "freplace_load");
+
+out:
 	freplace_attach_types_raw_tp__destroy(skel);
 	freplace_attach_types_raw_tp_target__destroy(tgt_skel);
 }
@@ -366,6 +404,8 @@ void test_freplace_attach_types(void)
 		test_fsession_reject();
 	if (test__start_subtest("raw_tp"))
 		test_raw_tp();
+	if (test__start_subtest("raw_tp_nullable"))
+		test_raw_tp_nullable();
 	if (test__start_subtest("xdp_devmap"))
 		test_xdp_devmap();
 #else

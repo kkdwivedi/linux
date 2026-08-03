@@ -24,4 +24,10 @@ int replacement(struct bpf_raw_tracepoint_args *ctx __arg_ctx)
 	return 0;
 }
 
+SEC("freplace/replaceable_nonnull")
+int replacement_nonnull(struct sock *sk __arg_trusted)
+{
+	return sk->__sk_common.skc_state;
+}
+
 char _license[] SEC("license") = "GPL";
