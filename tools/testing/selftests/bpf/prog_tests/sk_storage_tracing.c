@@ -8,6 +8,7 @@
 #include "network_helpers.h"
 #include "test_sk_storage_trace_itself.skel.h"
 #include "test_sk_storage_tracing.skel.h"
+#include "test_sk_storage_tracing_freplace.skel.h"
 
 #define LO_ADDR6 "::1"
 #define TEST_COMM "test_progs"
@@ -21,6 +22,34 @@ struct sk_stg {
 static struct test_sk_storage_tracing *skel;
 static __u32 duration;
 static pid_t my_pid;
+
+static void test_freplace_reject(void)
+{
+	struct test_sk_storage_tracing_freplace *skel = NULL;
+	struct test_sk_storage_tracing *tgt_skel = NULL;
+	int err, tgt_fd;
+
+	tgt_skel = test_sk_storage_tracing__open_and_load();
+	if (!ASSERT_OK_PTR(tgt_skel, "target_open_and_load"))
+		return;
+
+	skel = test_sk_storage_tracing_freplace__open();
+	if (!ASSERT_OK_PTR(skel, "freplace_open"))
+		goto out;
+
+	tgt_fd = bpf_program__fd(tgt_skel->progs.trace_inet_sock_set_state);
+	err = bpf_program__set_attach_target(skel->progs.replacement_sk_storage,
+					     tgt_fd, "replaceable_sk_storage");
+	if (!ASSERT_OK(err, "set_attach_target"))
+		goto out;
+
+	err = test_sk_storage_tracing_freplace__load(skel);
+	ASSERT_ERR(err, "freplace_load");
+
+out:
+	test_sk_storage_tracing_freplace__destroy(skel);
+	test_sk_storage_tracing__destroy(tgt_skel);
+}
 
 static int check_sk_stg(int sk_fd, __u32 expected_state)
 {
@@ -105,7 +134,7 @@ out:
 		close(listen_fd);
 }
 
-void serial_test_sk_storage_tracing(void)
+static void test_basic(void)
 {
 	struct test_sk_storage_trace_itself *skel_itself;
 	int err;
@@ -132,4 +161,12 @@ void serial_test_sk_storage_tracing(void)
 	do_test();
 
 	test_sk_storage_tracing__destroy(skel);
+}
+
+void serial_test_sk_storage_tracing(void)
+{
+	if (test__start_subtest("freplace_reject"))
+		test_freplace_reject();
+	if (test__start_subtest("basic"))
+		test_basic();
 }

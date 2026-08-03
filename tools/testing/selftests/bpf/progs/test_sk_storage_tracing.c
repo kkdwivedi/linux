@@ -28,12 +28,20 @@ struct {
 } del_sk_stg_map SEC(".maps");
 
 char task_comm[16] = "";
+volatile int subprog_result;
+
+__noinline int replaceable_sk_storage(struct sock *sk __arg_trusted __arg_nullable)
+{
+	return sk ? sk->__sk_common.skc_family : 0;
+}
 
 SEC("tp_btf/inet_sock_set_state")
 int BPF_PROG(trace_inet_sock_set_state, struct sock *sk, int oldstate,
 	     int newstate)
 {
 	struct sk_stg *stg;
+
+	subprog_result = replaceable_sk_storage(sk);
 
 	if (newstate == BPF_TCP_CLOSE)
 		return 0;
