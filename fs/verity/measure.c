@@ -8,6 +8,7 @@
 #include "fsverity_private.h"
 
 #include <linux/bpf.h>
+#include <linux/bpf_verifier.h>
 #include <linux/btf.h>
 #include <linux/export.h>
 #include <linux/uaccess.h>
@@ -171,7 +172,7 @@ static int bpf_get_fsverity_digest_filter(const struct bpf_prog *prog, u32 kfunc
 		return 0;
 
 	/* Only allow to attach from LSM hooks, to avoid recursion */
-	return prog->type != BPF_PROG_TYPE_LSM ? -EACCES : 0;
+	return resolve_prog_type(prog) != BPF_PROG_TYPE_LSM ? -EACCES : 0;
 }
 
 static const struct btf_kfunc_id_set bpf_fsverity_set = {

@@ -2508,6 +2508,7 @@ static unsigned int __bpf_prog_ret0_warn(const void *ctx,
 static bool __bpf_prog_map_compatible(struct bpf_map *map,
 				      const struct bpf_prog *fp)
 {
+	const struct btf_type *attach_func_proto = resolve_attach_func_proto(fp);
 	enum bpf_attach_type attach_type = resolve_attach_type(fp);
 	enum bpf_prog_type prog_type = resolve_prog_type(fp);
 	struct bpf_prog_aux *aux = fp->aux;
@@ -2529,7 +2530,7 @@ static bool __bpf_prog_map_compatible(struct bpf_map *map,
 		map->owner->xdp_has_frags = aux->xdp_has_frags;
 		map->owner->sleepable = fp->sleepable;
 		map->owner->expected_attach_type = attach_type;
-		map->owner->attach_func_proto = aux->attach_func_proto;
+		map->owner->attach_func_proto = attach_func_proto;
 		for_each_cgroup_storage_type(i) {
 			map->owner->storage_cookie[i] =
 				aux->cgroup_storage[i] ?
@@ -2554,7 +2555,7 @@ static bool __bpf_prog_map_compatible(struct bpf_map *map,
 			      (!cookie && !aux->tail_call_reachable);
 		}
 		if (ret &&
-		    map->owner->attach_func_proto != aux->attach_func_proto) {
+		    map->owner->attach_func_proto != attach_func_proto) {
 			switch (prog_type) {
 			case BPF_PROG_TYPE_TRACING:
 			case BPF_PROG_TYPE_LSM:

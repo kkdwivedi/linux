@@ -3,6 +3,7 @@
 
 #include <linux/bpf.h>
 #include <linux/bpf_lsm.h>
+#include <linux/bpf_verifier.h>
 #include <linux/btf.h>
 #include <linux/btf_ids.h>
 #include <linux/dcache.h>
@@ -395,7 +396,7 @@ BTF_KFUNCS_END(bpf_fs_kfunc_set_ids)
 static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
 	if (!btf_id_set8_contains(&bpf_fs_kfunc_set_ids, kfunc_id) ||
-	    prog->type == BPF_PROG_TYPE_LSM)
+	    resolve_prog_type(prog) == BPF_PROG_TYPE_LSM)
 		return 0;
 	return -EACCES;
 }
@@ -427,7 +428,8 @@ BTF_SET_END(d_inode_locked_hooks)
 
 bool bpf_lsm_has_d_inode_locked(const struct bpf_prog *prog)
 {
-	return btf_id_set_contains(&d_inode_locked_hooks, prog->aux->attach_btf_id);
+	return btf_id_set_contains(&d_inode_locked_hooks,
+				   resolve_attach_btf_id(prog));
 }
 
 static const struct btf_kfunc_id_set bpf_fs_kfunc_set = {

@@ -1314,6 +1314,21 @@ static inline enum bpf_attach_type resolve_attach_type(const struct bpf_prog *pr
 		prog->aux->saved_dst_attach_type : prog->expected_attach_type;
 }
 
+static inline u32 resolve_attach_btf_id(const struct bpf_prog *prog)
+{
+	return (prog->type == BPF_PROG_TYPE_EXT && prog->aux->saved_dst_prog_type) ?
+		prog->aux->saved_dst_attach_btf_id : prog->aux->attach_btf_id;
+}
+
+static inline const struct btf_type *
+resolve_attach_func_proto(const struct bpf_prog *prog)
+{
+	if (prog->type == BPF_PROG_TYPE_EXT && prog->aux->saved_dst_prog_type &&
+	    prog->aux->dst_prog)
+		return prog->aux->dst_prog->aux->attach_func_proto;
+	return prog->aux->attach_func_proto;
+}
+
 static inline bool bpf_prog_check_recur(const struct bpf_prog *prog)
 {
 	switch (resolve_prog_type(prog)) {

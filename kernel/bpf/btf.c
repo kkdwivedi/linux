@@ -6623,8 +6623,6 @@ static bool prog_args_trusted(const struct bpf_prog *prog)
 	case BPF_PROG_TYPE_TRACING:
 		return atype == BPF_TRACE_RAW_TP || atype == BPF_TRACE_ITER;
 	case BPF_PROG_TYPE_LSM:
-		if (prog->type == BPF_PROG_TYPE_EXT)
-			return false;
 		return bpf_lsm_is_trusted(prog);
 	case BPF_PROG_TYPE_STRUCT_OPS:
 		return true;
@@ -6866,6 +6864,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	const struct btf_param *args;
 	bool ptr_err_raw_tp = false;
 	enum bpf_attach_type atype = resolve_attach_type(prog);
+	enum bpf_prog_type ptype = resolve_prog_type(prog);
 	const char *tname;
 	struct btf *btf;
 	u32 nr_args, arg;
@@ -6873,7 +6872,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 
 	if (prog->type == BPF_PROG_TYPE_EXT && tgt_prog)
 		ctx_prog = tgt_prog;
-	t = ctx_prog->aux->attach_func_proto;
+	t = resolve_attach_func_proto(prog);
 	btf = bpf_prog_get_target_btf(ctx_prog);
 	tname = ctx_prog->aux->attach_func_name;
 
@@ -6888,7 +6887,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	 * MAX_BPF_FUNC_REG_ARGS u64 arguments.
 	 */
 	nr_args = t ? btf_type_vlen(t) : MAX_BPF_FUNC_REG_ARGS;
-	if (prog->aux->attach_btf_trace) {
+	if (ctx_prog->aux->attach_btf_trace) {
 		/* skip first 'void *__data' argument in btf_trace_##name typedef */
 		args++;
 		nr_args--;
@@ -7024,18 +7023,13 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	if (btf_param_match_suffix(btf, &args[arg], "__nullable"))
 		info->reg_type |= PTR_MAYBE_NULL;
 
-	/*
-	 * An extension's attach BTF ID identifies its BPF subprogram target,
-	 * not the raw tracepoint of the program that contains that subprogram.
-	 */
-	if (prog->type == BPF_PROG_TYPE_TRACING &&
-	    prog->expected_attach_type == BPF_TRACE_RAW_TP) {
-		struct btf *btf = prog->aux->attach_btf;
+	if (ptype == BPF_PROG_TYPE_TRACING && atype == BPF_TRACE_RAW_TP) {
+		struct btf *btf = ctx_prog->aux->attach_btf;
 		const struct btf_type *t;
 		const char *tname;
 
 		/* BTF lookups cannot fail, return false on error */
-		t = btf_type_by_id(btf, prog->aux->attach_btf_id);
+		t = btf_type_by_id(btf, resolve_attach_btf_id(prog));
 		if (!t)
 			return false;
 		tname = btf_name_by_offset(btf, t->name_off);

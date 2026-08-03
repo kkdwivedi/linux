@@ -5,6 +5,7 @@
 #include <linux/anon_inodes.h>
 #include <linux/filter.h>
 #include <linux/bpf.h>
+#include <linux/bpf_verifier.h>
 #include <linux/rcupdate_trace.h>
 
 struct bpf_iter_target_info {
@@ -371,10 +372,11 @@ bpf_iter_get_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
 	const struct bpf_iter_target_info *tinfo;
 	const struct bpf_func_proto *fn = NULL;
+	u32 btf_id = resolve_attach_btf_id(prog);
 
 	mutex_lock(&targets_mutex);
 	list_for_each_entry(tinfo, &targets, list) {
-		if (tinfo->btf_id == prog->aux->attach_btf_id) {
+		if (tinfo->btf_id == btf_id) {
 			const struct bpf_iter_reg *reg_info;
 
 			reg_info = tinfo->reg_info;

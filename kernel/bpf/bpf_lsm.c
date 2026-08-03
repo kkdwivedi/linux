@@ -174,7 +174,7 @@ BPF_CALL_3(bpf_ima_inode_hash, struct inode *, inode, void *, dst, u32, size)
 
 static bool bpf_ima_inode_hash_allowed(const struct bpf_prog *prog)
 {
-	return bpf_lsm_is_sleepable_hook(prog->aux->attach_btf_id);
+	return bpf_lsm_is_sleepable_hook(resolve_attach_btf_id(prog));
 }
 
 BTF_ID_LIST_SINGLE(bpf_ima_inode_hash_btf_ids, struct, inode)
@@ -230,6 +230,7 @@ bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
 	const struct bpf_func_proto *func_proto;
 	enum bpf_attach_type atype = resolve_attach_type(prog);
+	u32 btf_id = resolve_attach_btf_id(prog);
 
 	if (atype == BPF_LSM_CGROUP) {
 		func_proto = cgroup_common_func_proto(func_id, prog);
@@ -264,21 +265,17 @@ bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	case BPF_FUNC_setsockopt:
 		if (atype != BPF_LSM_CGROUP)
 			return NULL;
-		if (btf_id_set_contains(&bpf_lsm_locked_sockopt_hooks,
-					prog->aux->attach_btf_id))
+		if (btf_id_set_contains(&bpf_lsm_locked_sockopt_hooks, btf_id))
 			return &bpf_sk_setsockopt_proto;
-		if (btf_id_set_contains(&bpf_lsm_unlocked_sockopt_hooks,
-					prog->aux->attach_btf_id))
+		if (btf_id_set_contains(&bpf_lsm_unlocked_sockopt_hooks, btf_id))
 			return &bpf_unlocked_sk_setsockopt_proto;
 		return NULL;
 	case BPF_FUNC_getsockopt:
 		if (atype != BPF_LSM_CGROUP)
 			return NULL;
-		if (btf_id_set_contains(&bpf_lsm_locked_sockopt_hooks,
-					prog->aux->attach_btf_id))
+		if (btf_id_set_contains(&bpf_lsm_locked_sockopt_hooks, btf_id))
 			return &bpf_sk_getsockopt_proto;
-		if (btf_id_set_contains(&bpf_lsm_unlocked_sockopt_hooks,
-					prog->aux->attach_btf_id))
+		if (btf_id_set_contains(&bpf_lsm_unlocked_sockopt_hooks, btf_id))
 			return &bpf_unlocked_sk_getsockopt_proto;
 		return NULL;
 #endif
@@ -409,7 +406,8 @@ bool bpf_lsm_is_sleepable_hook(u32 btf_id)
 
 bool bpf_lsm_is_trusted(const struct bpf_prog *prog)
 {
-	return !btf_id_set_contains(&untrusted_lsm_hooks, prog->aux->attach_btf_id);
+	return !btf_id_set_contains(&untrusted_lsm_hooks,
+				    resolve_attach_btf_id(prog));
 }
 
 const struct bpf_prog_ops lsm_prog_ops = {
@@ -455,10 +453,10 @@ int bpf_lsm_get_retval_range(const struct bpf_prog *prog,
 			     struct bpf_retval_range *retval_range)
 {
 	/* no return value range for void hooks */
-	if (!prog->aux->attach_func_proto->type)
+	if (!resolve_attach_func_proto(prog)->type)
 		return -EINVAL;
 
-	if (btf_id_set_contains(&bool_lsm_hooks, prog->aux->attach_btf_id)) {
+	if (btf_id_set_contains(&bool_lsm_hooks, resolve_attach_btf_id(prog))) {
 		retval_range->minval = 0;
 		retval_range->maxval = 1;
 	} else {

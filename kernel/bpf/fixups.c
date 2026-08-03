@@ -2157,7 +2157,7 @@ patch_map_ops_generic:
 		if (prog_type == BPF_PROG_TYPE_TRACING &&
 		    insn->imm == BPF_FUNC_get_func_arg) {
 			if (eatype == BPF_TRACE_RAW_TP) {
-				int nr_args = btf_type_vlen(prog->aux->attach_func_proto);
+				int nr_args = btf_type_vlen(resolve_attach_func_proto(prog));
 
 				/* skip 'void *__data' in btf_trace_##name() and save to reg0 */
 				insn_buf[0] = BPF_MOV64_IMM(BPF_REG_0, nr_args - 1);
@@ -2223,7 +2223,7 @@ patch_map_ops_generic:
 		if (prog_type == BPF_PROG_TYPE_TRACING &&
 		    insn->imm == BPF_FUNC_get_func_arg_cnt) {
 			if (eatype == BPF_TRACE_RAW_TP) {
-				int nr_args = btf_type_vlen(prog->aux->attach_func_proto);
+				int nr_args = btf_type_vlen(resolve_attach_func_proto(prog));
 
 				/* skip 'void *__data' in btf_trace_##name() and save to reg0 */
 				insn_buf[0] = BPF_MOV64_IMM(BPF_REG_0, nr_args - 1);

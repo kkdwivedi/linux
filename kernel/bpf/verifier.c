@@ -9968,7 +9968,7 @@ static int do_refine_retval_range(struct bpf_verifier_env *env,
 
 		if (prog_type == BPF_PROG_TYPE_LSM &&
 		    eatype == BPF_LSM_CGROUP) {
-			if (!env->prog->aux->attach_func_proto->type)
+			if (!resolve_attach_func_proto(env->prog)->type)
 				break;
 			bpf_lsm_get_retval_range(env->prog, &range);
 		} else {
@@ -10474,7 +10474,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 
 		if (prog_type == BPF_PROG_TYPE_LSM &&
 		    eatype == BPF_LSM_CGROUP) {
-			if (!env->prog->aux->attach_func_proto->type) {
+			if (!resolve_attach_func_proto(env->prog)->type) {
 				/* Make sure programs that attach to void
 				 * hooks don't try to modify return value.
 				 */
@@ -16605,7 +16605,7 @@ static bool return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_
 			if (range->minval == S32_MIN && range->maxval == S32_MAX)
 				return false;
 			range->return_32bit = true;
-		} else if (!env->prog->aux->attach_func_proto->type) {
+		} else if (!resolve_attach_func_proto(env->prog)->type) {
 			/* Make sure programs that attach to void
 			 * hooks don't try to modify return value.
 			 */
@@ -16689,6 +16689,10 @@ static int check_return_code(struct bpf_verifier_env *env, int regno, const char
 		/* Allow a struct_ops program to return a referenced kptr if it
 		 * matches the operator's return type and is in its unmodified
 		 * form. A scalar zero (i.e., a null pointer) is also allowed.
+		 *
+		 * Do not resolve the attachment prototype here. For an extension,
+		 * this check applies to the replaced BPF subprogram's return ABI,
+		 * not the destination program's struct_ops callback ABI.
 		 */
 		reg_type = reg->btf ? btf_type_by_id(reg->btf, reg->btf_id) : NULL;
 		ret_type = btf_type_resolve_ptr(prog->aux->attach_btf,
@@ -16743,7 +16747,7 @@ enforce_retval:
 		verbose_invalid_scalar(env, reg, range, exit_ctx, reg_name);
 		if (eatype == BPF_LSM_CGROUP &&
 		    prog_type == BPF_PROG_TYPE_LSM &&
-		    !prog->aux->attach_func_proto->type)
+		    !resolve_attach_func_proto(prog)->type)
 			verbose(env, "Note, BPF_LSM_CGROUP that attach to void LSM hooks can't modify return value!\n");
 		return -EINVAL;
 	}
@@ -19384,7 +19388,8 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 
 		if ((prog->aux->saved_dst_prog_type || prog->aux->saved_dst_attach_type) &&
 		    (!tgt_prog || prog->aux->saved_dst_prog_type != tgt_prog->type ||
-		     prog->aux->saved_dst_attach_type != tgt_prog->expected_attach_type))
+		     prog->aux->saved_dst_attach_type != tgt_prog->expected_attach_type ||
+		     prog->aux->saved_dst_attach_btf_id != resolve_attach_btf_id(tgt_prog)))
 			return -EINVAL;
 
 		if (tgt_prog && conservative)
@@ -19593,6 +19598,7 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 	prog->aux->mod = tgt_info.tgt_mod;
 
 	if (tgt_prog) {
+		prog->aux->saved_dst_attach_btf_id = resolve_attach_btf_id(tgt_prog);
 		prog->aux->saved_dst_prog_type = tgt_prog->type;
 		prog->aux->saved_dst_attach_type = tgt_prog->expected_attach_type;
 	}
