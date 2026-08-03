@@ -5121,7 +5121,7 @@ static enum priv_stack_mode bpf_enable_priv_stack(struct bpf_prog *prog)
 	 * while kprobe/tp/perf_event/raw_tp don't use trampoline hence checked
 	 * explicitly.
 	 */
-	switch (prog->type) {
+	switch (resolve_prog_type(prog)) {
 	case BPF_PROG_TYPE_KPROBE:
 	case BPF_PROG_TYPE_TRACEPOINT:
 	case BPF_PROG_TYPE_PERF_EVENT:
@@ -6133,9 +6133,9 @@ static int check_stack_access_within_bounds(
 static bool get_func_retval_range(struct bpf_prog *prog,
 				  struct bpf_retval_range *range)
 {
-	if (prog->type == BPF_PROG_TYPE_LSM &&
-		prog->expected_attach_type == BPF_LSM_MAC &&
-		!bpf_lsm_get_retval_range(prog, range)) {
+	if (resolve_prog_type(prog) == BPF_PROG_TYPE_LSM &&
+	    resolve_attach_type(prog) == BPF_LSM_MAC &&
+	    !bpf_lsm_get_retval_range(prog, range)) {
 		return true;
 	}
 	return false;
@@ -8580,7 +8580,7 @@ skip_type_check:
 
 static bool may_update_sockmap(struct bpf_verifier_env *env, int func_id)
 {
-	enum bpf_attach_type eatype = env->prog->expected_attach_type;
+	enum bpf_attach_type eatype = resolve_attach_type(env->prog);
 	enum bpf_prog_type type = resolve_prog_type(env->prog);
 
 	if (func_id != BPF_FUNC_map_update_elem &&
@@ -9936,6 +9936,7 @@ static int do_refine_retval_range(struct bpf_verifier_env *env,
 {
 	struct bpf_retval_range range;
 	struct bpf_reg_state *ret_reg = &regs[BPF_REG_0];
+	enum bpf_attach_type eatype = resolve_attach_type(env->prog);
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
 
 	if (ret_type != RET_INTEGER)
@@ -9962,11 +9963,11 @@ static int do_refine_retval_range(struct bpf_verifier_env *env,
 		 * CGROUP_GETSOCKOPT type.
 		 */
 		if (prog_type == BPF_PROG_TYPE_CGROUP_SOCKOPT &&
-		    env->prog->expected_attach_type == BPF_CGROUP_GETSOCKOPT)
+		    eatype == BPF_CGROUP_GETSOCKOPT)
 			break;
 
 		if (prog_type == BPF_PROG_TYPE_LSM &&
-		    env->prog->expected_attach_type == BPF_LSM_CGROUP) {
+		    eatype == BPF_LSM_CGROUP) {
 			if (!env->prog->aux->attach_func_proto->type)
 				break;
 			bpf_lsm_get_retval_range(env->prog, &range);
@@ -10295,6 +10296,7 @@ static int release_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
 static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			     int *insn_idx_p)
 {
+	enum bpf_attach_type eatype = resolve_attach_type(env->prog);
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
 	bool returns_cpu_specific_alloc_ptr = false;
 	const struct bpf_func_proto *fn = NULL;
@@ -10467,11 +10469,11 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 
 		/* CGROUP_GETSOCKOPT is allowed to return arbitrary value */
 		if (prog_type == BPF_PROG_TYPE_CGROUP_SOCKOPT &&
-		    env->prog->expected_attach_type == BPF_CGROUP_GETSOCKOPT)
+		    eatype == BPF_CGROUP_GETSOCKOPT)
 			break;
 
 		if (prog_type == BPF_PROG_TYPE_LSM &&
-		    env->prog->expected_attach_type == BPF_LSM_CGROUP) {
+		    eatype == BPF_LSM_CGROUP) {
 			if (!env->prog->aux->attach_func_proto->type) {
 				/* Make sure programs that attach to void
 				 * hooks don't try to modify return value.
@@ -12092,13 +12094,14 @@ static int process_kf_arg_ptr_to_rbtree_node(struct bpf_verifier_env *env,
  */
 static bool check_css_task_iter_allowlist(struct bpf_verifier_env *env)
 {
+	enum bpf_attach_type eatype = resolve_attach_type(env->prog);
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
 
 	switch (prog_type) {
 	case BPF_PROG_TYPE_LSM:
 		return true;
 	case BPF_PROG_TYPE_TRACING:
-		if (env->prog->expected_attach_type == BPF_TRACE_ITER)
+		if (eatype == BPF_TRACE_ITER)
 			return true;
 		fallthrough;
 	default:
@@ -13038,6 +13041,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    int *insn_idx_p)
 {
 	bool sleepable, rcu_lock, rcu_unlock, preempt_disable, preempt_enable;
+	enum bpf_attach_type eatype = resolve_attach_type(env->prog);
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
 	struct bpf_reg_state *regs = cur_regs(env);
 	const char *func_name, *ptr_type_name;
@@ -13126,8 +13130,8 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	if ((is_bpf_obj_drop_kfunc(meta.func_id) ||
 	     is_bpf_percpu_obj_drop_kfunc(meta.func_id)) && (is_tracing_prog_type(prog_type) ||
 	     /* is_tracing_prog_type() for now doesn't cover non-iterator tracing progs. */
-	     (prog_type == BPF_PROG_TYPE_TRACING && env->prog->expected_attach_type != BPF_TRACE_ITER
-	      && !env->prog->sleepable))) {
+	     (prog_type == BPF_PROG_TYPE_TRACING &&
+	      eatype != BPF_TRACE_ITER && !env->prog->sleepable))) {
 		struct btf_struct_meta *struct_meta;
 
 		struct_meta = btf_find_struct_meta(meta.arg_btf, meta.arg_btf_id);
@@ -16518,6 +16522,7 @@ static int check_ld_abs(struct bpf_verifier_env *env, struct bpf_insn *insn)
 
 static bool return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_range *range)
 {
+	enum bpf_attach_type eatype = resolve_attach_type(env->prog);
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
 
 	/* Default return value range. */
@@ -16525,7 +16530,7 @@ static bool return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_
 
 	switch (prog_type) {
 	case BPF_PROG_TYPE_CGROUP_SOCK_ADDR:
-		switch (env->prog->expected_attach_type) {
+		switch (eatype) {
 		case BPF_CGROUP_UDP4_RECVMSG:
 		case BPF_CGROUP_UDP6_RECVMSG:
 		case BPF_CGROUP_UNIX_RECVMSG:
@@ -16546,7 +16551,7 @@ static bool return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_
 		}
 		break;
 	case BPF_PROG_TYPE_CGROUP_SKB:
-		if (env->prog->expected_attach_type == BPF_CGROUP_INET_EGRESS)
+		if (eatype == BPF_CGROUP_INET_EGRESS)
 			*range = retval_range(0, 3);
 		break;
 	case BPF_PROG_TYPE_CGROUP_SOCK:
@@ -16561,7 +16566,7 @@ static bool return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_
 		*range = retval_range(0, 0);
 		break;
 	case BPF_PROG_TYPE_TRACING:
-		switch (env->prog->expected_attach_type) {
+		switch (eatype) {
 		case BPF_TRACE_FENTRY:
 		case BPF_TRACE_FEXIT:
 		case BPF_TRACE_FSESSION:
@@ -16579,7 +16584,7 @@ static bool return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_
 		}
 		break;
 	case BPF_PROG_TYPE_KPROBE:
-		switch (env->prog->expected_attach_type) {
+		switch (eatype) {
 		case BPF_TRACE_KPROBE_SESSION:
 		case BPF_TRACE_UPROBE_SESSION:
 			break;
@@ -16592,7 +16597,7 @@ static bool return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_
 		break;
 
 	case BPF_PROG_TYPE_LSM:
-		if (env->prog->expected_attach_type != BPF_LSM_CGROUP) {
+		if (eatype != BPF_LSM_CGROUP) {
 			/* no range found, any return value is allowed */
 			if (!get_func_retval_range(env->prog, range))
 				return false;
@@ -16630,6 +16635,10 @@ static bool return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_
 static bool program_returns_void(struct bpf_verifier_env *env)
 {
 	const struct bpf_prog *prog = env->prog;
+	/* Do not resolve prog->type or prog->expected_attach_type here. An
+	 * extension must take the BPF_PROG_TYPE_EXT case below, where whether
+	 * it returns void is determined from its own subprogram.
+	 */
 	enum bpf_prog_type prog_type = prog->type;
 
 	switch (prog_type) {
@@ -16666,6 +16675,7 @@ static int check_return_code(struct bpf_verifier_env *env, int regno, const char
 	const struct bpf_prog *prog = env->prog;
 	struct bpf_reg_state *reg = reg_state(env, regno);
 	struct bpf_retval_range range = retval_range(0, 1);
+	enum bpf_attach_type eatype = resolve_attach_type(env->prog);
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
 	struct bpf_func_state *frame = env->cur_state->frame[0];
 	const struct btf_type *reg_type, *ret_type = NULL;
@@ -16712,7 +16722,7 @@ static int check_return_code(struct bpf_verifier_env *env, int regno, const char
 	if (prog_type == BPF_PROG_TYPE_STRUCT_OPS && !ret_type)
 		return 0;
 
-	if (prog_type == BPF_PROG_TYPE_CGROUP_SKB && (env->prog->expected_attach_type == BPF_CGROUP_INET_EGRESS))
+	if (prog_type == BPF_PROG_TYPE_CGROUP_SKB && eatype == BPF_CGROUP_INET_EGRESS)
 		enforce_attach_type_range = tnum_range(2, 3);
 
 	if (!return_retval_range(env, &range))
@@ -16731,7 +16741,7 @@ enforce_retval:
 
 	if (!retval_range_within(range, reg)) {
 		verbose_invalid_scalar(env, reg, range, exit_ctx, reg_name);
-		if (prog->expected_attach_type == BPF_LSM_CGROUP &&
+		if (eatype == BPF_LSM_CGROUP &&
 		    prog_type == BPF_PROG_TYPE_LSM &&
 		    !prog->aux->attach_func_proto->type)
 			verbose(env, "Note, BPF_LSM_CGROUP that attach to void LSM hooks can't modify return value!\n");
