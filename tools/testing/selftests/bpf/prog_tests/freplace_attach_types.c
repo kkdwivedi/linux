@@ -156,6 +156,11 @@ static void test_raw_tp(void)
 	if (!ASSERT_OK_PTR(skel, "freplace_open"))
 		goto out;
 
+	err = bpf_map__reuse_fd(skel->maps.prog_array,
+				bpf_map__fd(tgt_skel->maps.prog_array));
+	if (!ASSERT_OK(err, "reuse_prog_array"))
+		goto out;
+
 	tgt_fd = bpf_program__fd(tgt_skel->progs.raw_tp_target);
 	err = bpf_program__set_attach_target(skel->progs.replacement, tgt_fd,
 					     "replaceable");

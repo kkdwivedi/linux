@@ -5,8 +5,16 @@
 
 volatile int value;
 
+struct {
+	__uint(type, BPF_MAP_TYPE_PROG_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} prog_array SEC(".maps");
+
 __noinline int replaceable(struct bpf_raw_tracepoint_args *ctx __arg_ctx)
 {
+	bpf_tail_call(ctx, &prog_array, 0);
 	return value;
 }
 
