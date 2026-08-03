@@ -11,6 +11,8 @@
 #include "freplace_attach_types_session_target.skel.h"
 #include "freplace_attach_types_tcp.skel.h"
 #include "freplace_attach_types_tcp_target.skel.h"
+#include "freplace_attach_types_xdp.skel.h"
+#include "freplace_attach_types_xdp_target.skel.h"
 
 static void test_iter(void)
 {
@@ -166,6 +168,34 @@ out:
 	freplace_attach_types_raw_tp_target__destroy(tgt_skel);
 }
 
+static void test_xdp_devmap(void)
+{
+	struct freplace_attach_types_xdp_target *tgt_skel = NULL;
+	struct freplace_attach_types_xdp *skel = NULL;
+	int err, tgt_fd;
+
+	tgt_skel = freplace_attach_types_xdp_target__open_and_load();
+	if (!ASSERT_OK_PTR(tgt_skel, "target_open_and_load"))
+		return;
+
+	skel = freplace_attach_types_xdp__open();
+	if (!ASSERT_OK_PTR(skel, "freplace_open"))
+		goto out;
+
+	tgt_fd = bpf_program__fd(tgt_skel->progs.xdp_devmap_target);
+	err = bpf_program__set_attach_target(skel->progs.replacement, tgt_fd,
+					     "replaceable");
+	if (!ASSERT_OK(err, "set_attach_target"))
+		goto out;
+
+	err = freplace_attach_types_xdp__load(skel);
+	ASSERT_OK(err, "freplace_load");
+
+out:
+	freplace_attach_types_xdp__destroy(skel);
+	freplace_attach_types_xdp_target__destroy(tgt_skel);
+}
+
 void test_freplace_attach_types(void)
 {
 #if defined(__x86_64__) || defined(__aarch64__) || defined(__powerpc64__)
@@ -198,6 +228,8 @@ void test_freplace_attach_types(void)
 		test_session();
 	if (test__start_subtest("raw_tp"))
 		test_raw_tp();
+	if (test__start_subtest("xdp_devmap"))
+		test_xdp_devmap();
 #else
 	test__skip();
 #endif
