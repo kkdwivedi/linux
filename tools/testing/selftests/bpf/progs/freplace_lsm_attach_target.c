@@ -81,7 +81,10 @@ static bool name_match_foo(const char *name)
 
 __noinline int replaceable_inode_setxattr(struct dentry *dentry __arg_trusted)
 {
-	return value + !!dentry;
+	int copied = 0;
+
+	bpf_copy_from_user(&copied, sizeof(copied), NULL);
+	return value + copied + !!dentry;
 }
 
 SEC("lsm.s/inode_setxattr")

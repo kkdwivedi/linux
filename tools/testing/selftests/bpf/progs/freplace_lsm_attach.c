@@ -14,6 +14,7 @@ char digest[64];
 
 const char locked_xattr_bar[] = "security.bpf.bar";
 char locked_value_bar[] = "world";
+char locked_read_value[32];
 bool locked_set_success;
 bool locked_remove_success;
 
@@ -73,10 +74,9 @@ SEC("freplace/replaceable_inode_setxattr")
 int replacement_inode_setxattr(struct dentry *dentry __arg_trusted)
 {
 	struct bpf_dynptr value_ptr;
-	char value[32];
 	int ret;
 
-	bpf_dynptr_from_mem(value, sizeof(value), 0, &value_ptr);
+	bpf_dynptr_from_mem(locked_read_value, sizeof(locked_read_value), 0, &value_ptr);
 	ret = bpf_get_dentry_xattr(dentry, locked_xattr_bar, &value_ptr);
 	if (ret < 0) {
 		bpf_dynptr_from_mem(locked_value_bar, sizeof(locked_value_bar), 0,

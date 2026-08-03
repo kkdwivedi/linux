@@ -2,6 +2,8 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/mount.h>
+#include <sys/stat.h>
 #include <sys/xattr.h>
 #include <unistd.h>
 #include <test_progs.h>
@@ -58,24 +60,31 @@ out:
 
 static void test_inode_setxattr(void)
 {
-	static const char testfile[] = "/tmp/test_progs_freplace_lsm_xattr";
+	static const char testdir[] = "/tmp/test_progs_freplace_lsm_xattr";
+	static const char testfile[] = "/tmp/test_progs_freplace_lsm_xattr/file";
 	static const char value_foo[] = "hello";
 	struct freplace_lsm_attach_target *tgt_skel = NULL;
 	struct freplace_lsm_attach *skel = NULL;
 	struct bpf_link *freplace_link = NULL, *target_link = NULL;
 	struct bpf_program *prog, *replacement, *target_prog;
+	bool mounted = false;
 	int err, fd = -1, tgt_fd;
+
+	err = mkdir(testdir, 0700);
+	if (err && errno != EEXIST) {
+		ASSERT_OK(err, "mkdir");
+		return;
+	}
+	err = mount("none", testdir, "tmpfs", 0, NULL);
+	if (!ASSERT_OK(err, "mount_tmpfs"))
+		goto out;
+	mounted = true;
 
 	fd = open(testfile, O_CREAT | O_RDONLY | O_TRUNC, 0644);
 	if (!ASSERT_GE(fd, 0, "create_file"))
-		return;
+		goto out;
 
 	err = setxattr(testfile, "security.bpf.foo", value_foo, sizeof(value_foo), 0);
-	if (err && errno == EOPNOTSUPP) {
-		printf("%s:SKIP:local fs doesn't support xattr (%d)\n", __func__, errno);
-		test__skip();
-		goto out;
-	}
 	if (!ASSERT_OK(err, "setxattr_support"))
 		goto out;
 
@@ -100,6 +109,9 @@ static void test_inode_setxattr(void)
 		bpf_program__set_autoload(prog, false);
 	replacement = skel->progs.replacement_inode_setxattr;
 	bpf_program__set_autoload(replacement, true);
+	err = bpf_program__set_flags(replacement, BPF_F_SLEEPABLE);
+	if (!ASSERT_OK(err, "set_sleepable"))
+		goto out;
 
 	tgt_fd = bpf_program__fd(target_prog);
 	err = bpf_program__set_attach_target(replacement, tgt_fd,
@@ -140,6 +152,9 @@ out:
 	if (fd >= 0)
 		close(fd);
 	unlink(testfile);
+	if (mounted)
+		ASSERT_OK(umount(testdir), "umount_tmpfs");
+	rmdir(testdir);
 }
 
 void test_freplace_lsm_attach(void)
