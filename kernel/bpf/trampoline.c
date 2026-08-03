@@ -176,8 +176,8 @@ static int bpf_tramp_ftrace_ops_func(struct ftrace_ops *ops, unsigned long ip,
 
 bool bpf_prog_has_trampoline(const struct bpf_prog *prog)
 {
-	enum bpf_attach_type eatype = prog->expected_attach_type;
-	enum bpf_prog_type ptype = prog->type;
+	enum bpf_attach_type eatype = resolve_attach_type(prog);
+	enum bpf_prog_type ptype = resolve_prog_type(prog);
 
 	switch (ptype) {
 	case BPF_PROG_TYPE_TRACING:
@@ -788,6 +788,10 @@ out:
 
 static enum bpf_tramp_prog_type bpf_attach_type_to_tramp(struct bpf_prog *prog)
 {
+	/*
+	 * Use the program's own attach type here. An extension must select
+	 * BPF_TRAMP_REPLACE instead of inheriting its target's trampoline kind.
+	 */
 	switch (prog->expected_attach_type) {
 	case BPF_TRACE_FENTRY:
 	case BPF_TRACE_FENTRY_MULTI:
@@ -1417,7 +1421,7 @@ bpf_trampoline_enter_t bpf_trampoline_enter(const struct bpf_prog *prog)
 			__bpf_prog_enter_recur;
 
 	if (resolve_prog_type(prog) == BPF_PROG_TYPE_LSM &&
-	    prog->expected_attach_type == BPF_LSM_CGROUP)
+	    resolve_attach_type(prog) == BPF_LSM_CGROUP)
 		return __bpf_prog_enter_lsm_cgroup;
 
 	return sleepable ? __bpf_prog_enter_sleepable : __bpf_prog_enter;
@@ -1432,7 +1436,7 @@ bpf_trampoline_exit_t bpf_trampoline_exit(const struct bpf_prog *prog)
 			__bpf_prog_exit_recur;
 
 	if (resolve_prog_type(prog) == BPF_PROG_TYPE_LSM &&
-	    prog->expected_attach_type == BPF_LSM_CGROUP)
+	    resolve_attach_type(prog) == BPF_LSM_CGROUP)
 		return __bpf_prog_exit_lsm_cgroup;
 
 	return sleepable ? __bpf_prog_exit_sleepable : __bpf_prog_exit;
