@@ -535,27 +535,48 @@ cleanup:
 static void test_func_replace_progmap(void)
 {
 	struct bpf_cpumap_val value = { .qsize = 1 };
+	struct freplace_progmap *owner_skel = NULL;
 	struct freplace_progmap *skel = NULL;
-	struct xdp_dummy *tgt_skel = NULL;
 	__u32 key = 0;
-	int err;
+	int err, prog_fd;
+
+	owner_skel = freplace_progmap__open();
+	if (!ASSERT_OK_PTR(owner_skel, "owner_prog_open"))
+		return;
+
+	bpf_program__set_autoload(owner_skel->progs.xdp_cpumap_prog, false);
+	err = freplace_progmap__load(owner_skel);
+	if (!ASSERT_OK(err, "owner_obj_load"))
+		goto out;
 
 	skel = freplace_progmap__open();
 	if (!ASSERT_OK_PTR(skel, "prog_open"))
-		return;
+		goto out;
 
-	tgt_skel = xdp_dummy__open_and_load();
-	if (!ASSERT_OK_PTR(tgt_skel, "tgt_prog_load"))
+	bpf_program__set_autoload(skel->progs.xdp_drop_prog, false);
+	err = bpf_map__reuse_fd(skel->maps.jmp_table,
+				bpf_map__fd(owner_skel->maps.jmp_table));
+	if (!ASSERT_OK(err, "reuse_jmp_table"))
 		goto out;
 
 	err = bpf_program__set_attach_target(skel->progs.xdp_cpumap_prog,
-					     bpf_program__fd(tgt_skel->progs.xdp_dummy_prog),
-					     "xdp_dummy_prog");
+					     bpf_program__fd(owner_skel->progs.xdp_drop_prog),
+					     "xdp_drop_prog");
 	if (!ASSERT_OK(err, "set_attach_target"))
 		goto out;
 
 	err = freplace_progmap__load(skel);
 	if (!ASSERT_OK(err, "obj_load"))
+		goto out;
+
+	/* The extension establishes ownership of new_jmp_table. Verify that it
+	 * records the target attach type rather than the extension's cleared
+	 * expected_attach_type.
+	 */
+	prog_fd = bpf_program__fd(owner_skel->progs.xdp_drop_prog);
+	err = bpf_map_update_elem(bpf_map__fd(skel->maps.new_jmp_table),
+				  &key, &prog_fd, 0);
+	if (!ASSERT_OK(err, "new_prog_array_update"))
 		goto out;
 
 	/* Prior to fixing the kernel, loading the PROG_TYPE_EXT 'redirect'
@@ -566,14 +587,14 @@ static void test_func_replace_progmap(void)
 	 * be correctly resolved to the *target* of the PROG_TYPE_EXT program
 	 * (i.e., PROG_TYPE_XDP) and the map update will succeed.
 	 */
-	value.bpf_prog.fd = bpf_program__fd(skel->progs.xdp_drop_prog);
+	value.bpf_prog.fd = bpf_program__fd(owner_skel->progs.xdp_drop_prog);
 	err = bpf_map_update_elem(bpf_map__fd(skel->maps.cpu_map),
 				  &key, &value, 0);
 	ASSERT_OK(err, "map_update");
 
 out:
-	xdp_dummy__destroy(tgt_skel);
 	freplace_progmap__destroy(skel);
+	freplace_progmap__destroy(owner_skel);
 }
 
 /* NOTE: affect other tests, must run in serial mode */
