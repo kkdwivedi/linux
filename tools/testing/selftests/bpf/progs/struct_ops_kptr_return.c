@@ -5,16 +5,25 @@
 
 char _license[] SEC("license") = "GPL";
 
+volatile int subprog_offset;
+
 void bpf_task_release(struct task_struct *p) __ksym;
 
-/* This test struct_ops BPF programs returning referenced kptr. The verifier should
+/*
+ * This tests struct_ops BPF programs returning referenced kptr. The verifier should
  * allow a referenced kptr or a NULL pointer to be returned. A referenced kptr to task
  * here is acquired automatically as the task argument is tagged with "__ref".
  */
+__noinline int replaceable_scalar(int input)
+{
+	return input + subprog_offset;
+}
+
 SEC("struct_ops/test_return_ref_kptr")
 struct task_struct *BPF_PROG(kptr_return, int dummy,
 			     struct task_struct *task, struct cgroup *cgrp)
 {
+	dummy = replaceable_scalar(dummy);
 	if (dummy % 2) {
 		bpf_task_release(task);
 		return NULL;
