@@ -40,10 +40,13 @@ out:
 	freplace_attach_types_iter_target__destroy(tgt_skel);
 }
 
-static void test_cgroup(void)
+static void test_cgroup(const char *replacement_name,
+			const char *target_prog_name,
+			const char *target_func_name)
 {
 	struct freplace_attach_types_cgroup_target *tgt_skel = NULL;
 	struct freplace_attach_types_cgroup *skel = NULL;
+	struct bpf_program *prog, *replacement, *target_prog;
 	int err, tgt_fd;
 
 	tgt_skel = freplace_attach_types_cgroup_target__open_and_load();
@@ -54,9 +57,20 @@ static void test_cgroup(void)
 	if (!ASSERT_OK_PTR(skel, "freplace_open"))
 		goto out;
 
-	tgt_fd = bpf_program__fd(tgt_skel->progs.cgroup_target);
-	err = bpf_program__set_attach_target(skel->progs.replacement, tgt_fd,
-					     "replaceable");
+	bpf_object__for_each_program(prog, skel->obj)
+		bpf_program__set_autoload(prog, false);
+
+	replacement = bpf_object__find_program_by_name(skel->obj, replacement_name);
+	if (!ASSERT_OK_PTR(replacement, "find_replacement"))
+		goto out;
+	bpf_program__set_autoload(replacement, true);
+
+	target_prog = bpf_object__find_program_by_name(tgt_skel->obj, target_prog_name);
+	if (!ASSERT_OK_PTR(target_prog, "find_target_prog"))
+		goto out;
+
+	tgt_fd = bpf_program__fd(target_prog);
+	err = bpf_program__set_attach_target(replacement, tgt_fd, target_func_name);
 	if (!ASSERT_OK(err, "set_attach_target"))
 		goto out;
 
@@ -162,8 +176,22 @@ void test_freplace_attach_types(void)
 
 	if (test__start_subtest("iter"))
 		test_iter();
-	if (test__start_subtest("cgroup"))
-		test_cgroup();
+	if (test__start_subtest("cgroup_getsockopt"))
+		test_cgroup("replacement_getsockopt",
+			    "cgroup_getsockopt_target",
+			    "replaceable_getsockopt");
+	if (test__start_subtest("cgroup_setsockopt"))
+		test_cgroup("replacement_setsockopt",
+			    "cgroup_setsockopt_target",
+			    "replaceable_setsockopt");
+	if (test__start_subtest("cgroup_sock_create"))
+		test_cgroup("replacement_sock_create",
+			    "cgroup_sock_create_target",
+			    "replaceable_sock_create");
+	if (test__start_subtest("cgroup_connect4"))
+		test_cgroup("replacement_connect4",
+			    "cgroup_connect4_target",
+			    "replaceable_connect4");
 	if (test__start_subtest("tcp_iter"))
 		test_tcp_iter();
 	if (test__start_subtest("session"))
