@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #include <sys/syscall.h>
+#include <network_helpers.h>
 #include <test_progs.h>
 #include "freplace_attach_types_cgroup.skel.h"
 #include "freplace_attach_types_cgroup_target.skel.h"
@@ -89,6 +90,7 @@ static void test_tcp_iter(void)
 {
 	struct freplace_attach_types_tcp_target *tgt_skel = NULL;
 	struct freplace_attach_types_tcp *skel = NULL;
+	struct bpf_program *prog;
 	int err, tgt_fd;
 
 	tgt_skel = freplace_attach_types_tcp_target__open_and_load();
@@ -98,6 +100,10 @@ static void test_tcp_iter(void)
 	skel = freplace_attach_types_tcp__open();
 	if (!ASSERT_OK_PTR(skel, "freplace_open"))
 		goto out;
+
+	bpf_object__for_each_program(prog, skel->obj)
+		bpf_program__set_autoload(prog, false);
+	bpf_program__set_autoload(skel->progs.replacement, true);
 
 	tgt_fd = bpf_program__fd(tgt_skel->progs.iter_target);
 	err = bpf_program__set_attach_target(skel->progs.replacement, tgt_fd,
@@ -111,6 +117,70 @@ static void test_tcp_iter(void)
 out:
 	freplace_attach_types_tcp__destroy(skel);
 	freplace_attach_types_tcp_target__destroy(tgt_skel);
+}
+
+static void test_tcp_iter_runtime(void)
+{
+	struct freplace_attach_types_tcp_target *tgt_skel = NULL;
+	struct freplace_attach_types_tcp *skel = NULL;
+	struct bpf_link *freplace_link = NULL, *iter_link = NULL;
+	struct bpf_program *prog;
+	char buf[64];
+	int err, iter_fd = -1, len, server_fd = -1, tgt_fd;
+
+	server_fd = start_server(AF_INET, SOCK_STREAM, NULL, 0, 0);
+	if (!ASSERT_GE(server_fd, 0, "start_server"))
+		return;
+
+	tgt_skel = freplace_attach_types_tcp_target__open_and_load();
+	if (!ASSERT_OK_PTR(tgt_skel, "target_open_and_load"))
+		goto out;
+
+	skel = freplace_attach_types_tcp__open();
+	if (!ASSERT_OK_PTR(skel, "freplace_open"))
+		goto out;
+
+	bpf_object__for_each_program(prog, skel->obj)
+		bpf_program__set_autoload(prog, false);
+	bpf_program__set_autoload(skel->progs.replacement_getsockopt, true);
+
+	tgt_fd = bpf_program__fd(tgt_skel->progs.iter_target);
+	err = bpf_program__set_attach_target(skel->progs.replacement_getsockopt,
+					     tgt_fd, "replaceable");
+	if (!ASSERT_OK(err, "set_attach_target"))
+		goto out;
+
+	err = freplace_attach_types_tcp__load(skel);
+	if (!ASSERT_OK(err, "freplace_load"))
+		goto out;
+
+	freplace_link = bpf_program__attach_freplace(skel->progs.replacement_getsockopt,
+						     tgt_fd, "replaceable");
+	if (!ASSERT_OK_PTR(freplace_link, "freplace_attach"))
+		goto out;
+
+	iter_link = bpf_program__attach_iter(tgt_skel->progs.iter_target, NULL);
+	if (!ASSERT_OK_PTR(iter_link, "iter_attach"))
+		goto out;
+
+	iter_fd = bpf_iter_create(bpf_link__fd(iter_link));
+	if (!ASSERT_GE(iter_fd, 0, "iter_create"))
+		goto out;
+
+	while ((len = read(iter_fd, buf, sizeof(buf))) > 0)
+		;
+	ASSERT_GE(len, 0, "iter_read");
+	ASSERT_GT(skel->bss->getsockopt_successes, 0, "getsockopt_successes");
+
+out:
+	if (iter_fd >= 0)
+		close(iter_fd);
+	bpf_link__destroy(iter_link);
+	bpf_link__destroy(freplace_link);
+	freplace_attach_types_tcp__destroy(skel);
+	freplace_attach_types_tcp_target__destroy(tgt_skel);
+	if (server_fd >= 0)
+		close(server_fd);
 }
 
 static void test_session(void)
@@ -288,6 +358,8 @@ void test_freplace_attach_types(void)
 			    "replaceable_connect4");
 	if (test__start_subtest("tcp_iter"))
 		test_tcp_iter();
+	if (test__start_subtest("tcp_iter_runtime"))
+		test_tcp_iter_runtime();
 	if (test__start_subtest("session"))
 		test_session();
 	if (test__start_subtest("fsession_reject"))
