@@ -11,10 +11,11 @@ int replacement(struct bpf_iter__task *ctx __arg_ctx)
 {
 	struct task_struct *task;
 
-	if (!ctx->task)
+	task = ctx->task;
+	if (!task)
 		return 0;
 
-	task = bpf_task_acquire(ctx->task);
+	task = bpf_task_acquire(task);
 	if (task)
 		bpf_task_release(task);
 	return 0;
