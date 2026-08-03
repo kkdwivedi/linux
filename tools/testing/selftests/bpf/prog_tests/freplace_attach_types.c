@@ -5,6 +5,10 @@
 #include "freplace_attach_types_cgroup_target.skel.h"
 #include "freplace_attach_types_iter.skel.h"
 #include "freplace_attach_types_iter_target.skel.h"
+#include "freplace_attach_types_raw_tp.skel.h"
+#include "freplace_attach_types_raw_tp_target.skel.h"
+#include "freplace_attach_types_session.skel.h"
+#include "freplace_attach_types_session_target.skel.h"
 #include "freplace_attach_types_tcp.skel.h"
 #include "freplace_attach_types_tcp_target.skel.h"
 
@@ -92,6 +96,62 @@ out:
 	freplace_attach_types_tcp_target__destroy(tgt_skel);
 }
 
+static void test_session(void)
+{
+	struct freplace_attach_types_session_target *tgt_skel = NULL;
+	struct freplace_attach_types_session *skel = NULL;
+	int err, tgt_fd;
+
+	tgt_skel = freplace_attach_types_session_target__open_and_load();
+	if (!ASSERT_OK_PTR(tgt_skel, "target_open_and_load"))
+		return;
+
+	skel = freplace_attach_types_session__open();
+	if (!ASSERT_OK_PTR(skel, "freplace_open"))
+		goto out;
+
+	tgt_fd = bpf_program__fd(tgt_skel->progs.session_target);
+	err = bpf_program__set_attach_target(skel->progs.replacement, tgt_fd,
+					     "replaceable");
+	if (!ASSERT_OK(err, "set_attach_target"))
+		goto out;
+
+	err = freplace_attach_types_session__load(skel);
+	ASSERT_OK(err, "freplace_load");
+
+out:
+	freplace_attach_types_session__destroy(skel);
+	freplace_attach_types_session_target__destroy(tgt_skel);
+}
+
+static void test_raw_tp(void)
+{
+	struct freplace_attach_types_raw_tp_target *tgt_skel = NULL;
+	struct freplace_attach_types_raw_tp *skel = NULL;
+	int err, tgt_fd;
+
+	tgt_skel = freplace_attach_types_raw_tp_target__open_and_load();
+	if (!ASSERT_OK_PTR(tgt_skel, "target_open_and_load"))
+		return;
+
+	skel = freplace_attach_types_raw_tp__open();
+	if (!ASSERT_OK_PTR(skel, "freplace_open"))
+		goto out;
+
+	tgt_fd = bpf_program__fd(tgt_skel->progs.raw_tp_target);
+	err = bpf_program__set_attach_target(skel->progs.replacement, tgt_fd,
+					     "replaceable");
+	if (!ASSERT_OK(err, "set_attach_target"))
+		goto out;
+
+	err = freplace_attach_types_raw_tp__load(skel);
+	ASSERT_OK(err, "freplace_load");
+
+out:
+	freplace_attach_types_raw_tp__destroy(skel);
+	freplace_attach_types_raw_tp_target__destroy(tgt_skel);
+}
+
 void test_freplace_attach_types(void)
 {
 #if defined(__x86_64__) || defined(__aarch64__) || defined(__powerpc64__)
@@ -106,6 +166,10 @@ void test_freplace_attach_types(void)
 		test_cgroup();
 	if (test__start_subtest("tcp_iter"))
 		test_tcp_iter();
+	if (test__start_subtest("session"))
+		test_session();
+	if (test__start_subtest("raw_tp"))
+		test_raw_tp();
 #else
 	test__skip();
 #endif
