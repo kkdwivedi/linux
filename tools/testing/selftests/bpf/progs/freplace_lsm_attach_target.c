@@ -57,4 +57,16 @@ int BPF_PROG(lsm_task_free_target, struct task_struct *hook_task)
 	return 0;
 }
 
+__noinline int replaceable_file_open(struct file *file __arg_trusted)
+{
+	return value + file->f_mode;
+}
+
+SEC("lsm.s/file_open")
+int BPF_PROG(lsm_file_open_target, struct file *file)
+{
+	replaceable_file_open(file);
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";

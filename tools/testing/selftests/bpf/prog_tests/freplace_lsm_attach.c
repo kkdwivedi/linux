@@ -76,6 +76,10 @@ void test_freplace_lsm_attach(void)
 		run_lsm_case("replacement_task_free",
 			     "lsm_task_free_target",
 			     "replaceable_task_free", false);
+	if (test__start_subtest("file_open"))
+		run_lsm_case("replacement_file_open",
+			     "lsm_file_open_target",
+			     "replaceable_file_open", true);
 #else
 	test__skip();
 #endif
