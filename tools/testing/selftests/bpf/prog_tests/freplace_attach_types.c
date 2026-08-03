@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#include <sys/syscall.h>
 #include <test_progs.h>
 #include "freplace_attach_types_cgroup.skel.h"
 #include "freplace_attach_types_cgroup_target.skel.h"
@@ -144,6 +145,7 @@ static void test_raw_tp(void)
 {
 	struct freplace_attach_types_raw_tp_target *tgt_skel = NULL;
 	struct freplace_attach_types_raw_tp *skel = NULL;
+	struct bpf_link *freplace_link = NULL, *target_link = NULL;
 	int err, tgt_fd;
 
 	tgt_skel = freplace_attach_types_raw_tp_target__open_and_load();
@@ -162,8 +164,27 @@ static void test_raw_tp(void)
 
 	err = freplace_attach_types_raw_tp__load(skel);
 	ASSERT_OK(err, "freplace_load");
+	if (err)
+		goto out;
+
+	freplace_link = bpf_program__attach_freplace(skel->progs.replacement,
+						     tgt_fd, "replaceable");
+	if (!ASSERT_OK_PTR(freplace_link, "freplace_attach"))
+		goto out;
+
+	target_link = bpf_program__attach_trace(tgt_skel->progs.raw_tp_target);
+	if (!ASSERT_OK_PTR(target_link, "target_attach"))
+		goto out;
+
+	(void)syscall(SYS_getpid);
+
+	ASSERT_EQ(skel->bss->arg_cnt, 2, "arg_cnt");
+	ASSERT_EQ(skel->bss->arg_err, 0, "arg_err");
+	ASSERT_EQ(skel->bss->arg, SYS_getpid, "arg");
 
 out:
+	bpf_link__destroy(target_link);
+	bpf_link__destroy(freplace_link);
 	freplace_attach_types_raw_tp__destroy(skel);
 	freplace_attach_types_raw_tp_target__destroy(tgt_skel);
 }
