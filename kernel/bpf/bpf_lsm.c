@@ -16,6 +16,7 @@
 #include <linux/btf_ids.h>
 #include <linux/ima.h>
 #include <linux/bpf-cgroup.h>
+#include <linux/bpf_verifier.h>
 
 /* For every LSM hook that allows attachment of BPF programs, declare a nop
  * function where a BPF program can be attached. Notably, we qualify each with
@@ -228,8 +229,9 @@ static const struct bpf_func_proto *
 bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
 	const struct bpf_func_proto *func_proto;
+	enum bpf_attach_type atype = resolve_attach_type(prog);
 
-	if (prog->expected_attach_type == BPF_LSM_CGROUP) {
+	if (atype == BPF_LSM_CGROUP) {
 		func_proto = cgroup_common_func_proto(func_id, prog);
 		if (func_proto)
 			return func_proto;
@@ -260,7 +262,7 @@ bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return bpf_prog_has_trampoline(prog) ? &bpf_get_attach_cookie_proto : NULL;
 #ifdef CONFIG_NET
 	case BPF_FUNC_setsockopt:
-		if (prog->expected_attach_type != BPF_LSM_CGROUP)
+		if (atype != BPF_LSM_CGROUP)
 			return NULL;
 		if (btf_id_set_contains(&bpf_lsm_locked_sockopt_hooks,
 					prog->aux->attach_btf_id))
@@ -270,7 +272,7 @@ bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 			return &bpf_unlocked_sk_setsockopt_proto;
 		return NULL;
 	case BPF_FUNC_getsockopt:
-		if (prog->expected_attach_type != BPF_LSM_CGROUP)
+		if (atype != BPF_LSM_CGROUP)
 			return NULL;
 		if (btf_id_set_contains(&bpf_lsm_locked_sockopt_hooks,
 					prog->aux->attach_btf_id))

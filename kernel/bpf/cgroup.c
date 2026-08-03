@@ -2543,6 +2543,7 @@ static const struct bpf_func_proto *
 cg_sockopt_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
 	const struct bpf_func_proto *func_proto;
+	enum bpf_attach_type atype = resolve_attach_type(prog);
 
 	func_proto = cgroup_common_func_proto(func_id, prog);
 	if (func_proto)
@@ -2557,11 +2558,11 @@ cg_sockopt_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	case BPF_FUNC_sk_storage_delete:
 		return &bpf_sk_storage_delete_proto;
 	case BPF_FUNC_setsockopt:
-		if (prog->expected_attach_type == BPF_CGROUP_SETSOCKOPT)
+		if (atype == BPF_CGROUP_SETSOCKOPT)
 			return &bpf_sk_setsockopt_proto;
 		return NULL;
 	case BPF_FUNC_getsockopt:
-		if (prog->expected_attach_type == BPF_CGROUP_SETSOCKOPT)
+		if (atype == BPF_CGROUP_SETSOCKOPT)
 			return &bpf_sk_getsockopt_proto;
 		return NULL;
 #endif
@@ -2582,6 +2583,7 @@ static bool cg_sockopt_is_valid_access(int off, int size,
 				       struct bpf_insn_access_aux *info)
 {
 	const int size_default = sizeof(__u32);
+	enum bpf_attach_type atype = resolve_attach_type(prog);
 
 	if (off < 0 || off >= sizeof(struct bpf_sockopt))
 		return false;
@@ -2594,15 +2596,13 @@ static bool cg_sockopt_is_valid_access(int off, int size,
 		case offsetof(struct bpf_sockopt, retval):
 			if (size != size_default)
 				return false;
-			return prog->expected_attach_type ==
-				BPF_CGROUP_GETSOCKOPT;
+			return atype == BPF_CGROUP_GETSOCKOPT;
 		case offsetof(struct bpf_sockopt, optname):
 			fallthrough;
 		case offsetof(struct bpf_sockopt, level):
 			if (size != size_default)
 				return false;
-			return prog->expected_attach_type ==
-				BPF_CGROUP_SETSOCKOPT;
+			return atype == BPF_CGROUP_SETSOCKOPT;
 		case offsetof(struct bpf_sockopt, optlen):
 			return size == size_default;
 		default:
@@ -2629,7 +2629,7 @@ static bool cg_sockopt_is_valid_access(int off, int size,
 	case bpf_ctx_range(struct bpf_sockopt, retval):
 		if (size != size_default)
 			return false;
-		return prog->expected_attach_type == BPF_CGROUP_GETSOCKOPT;
+		return atype == BPF_CGROUP_GETSOCKOPT;
 	default:
 		if (size != size_default)
 			return false;
@@ -2751,11 +2751,13 @@ const struct bpf_prog_ops cg_sockopt_prog_ops = {
 const struct bpf_func_proto *
 cgroup_common_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
+	enum bpf_attach_type atype = resolve_attach_type(prog);
+
 	switch (func_id) {
 	case BPF_FUNC_get_local_storage:
 		return &bpf_get_local_storage_proto;
 	case BPF_FUNC_get_retval:
-		switch (prog->expected_attach_type) {
+		switch (atype) {
 		case BPF_CGROUP_INET_INGRESS:
 		case BPF_CGROUP_INET_EGRESS:
 		case BPF_CGROUP_SOCK_OPS:
@@ -2773,7 +2775,7 @@ cgroup_common_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 			return &bpf_get_retval_proto;
 		}
 	case BPF_FUNC_set_retval:
-		switch (prog->expected_attach_type) {
+		switch (atype) {
 		case BPF_CGROUP_INET_INGRESS:
 		case BPF_CGROUP_INET_EGRESS:
 		case BPF_CGROUP_SOCK_OPS:

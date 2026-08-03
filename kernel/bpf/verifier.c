@@ -19597,10 +19597,16 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 		prog->aux->saved_dst_attach_type = tgt_prog->expected_attach_type;
 	}
 
-	if (prog->expected_attach_type == BPF_TRACE_RAW_TP) {
+	/*
+	 * An extension's attach BTF ID identifies its BPF subprogram target,
+	 * not the attachment target of the program that contains the subprogram.
+	 */
+	if (prog->type == BPF_PROG_TYPE_TRACING &&
+	    prog->expected_attach_type == BPF_TRACE_RAW_TP) {
 		prog->aux->attach_btf_trace = true;
 		return 0;
-	} else if (prog->expected_attach_type == BPF_TRACE_ITER) {
+	} else if (prog->type == BPF_PROG_TYPE_TRACING &&
+		   prog->expected_attach_type == BPF_TRACE_ITER) {
 		return bpf_iter_prog_supported(prog);
 	}
 
@@ -19613,7 +19619,8 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 		verbose(env, "Attaching tracing programs to function '%s' is rejected.\n",
 			tgt_info.tgt_name);
 		return -EINVAL;
-	} else if ((prog->expected_attach_type == BPF_TRACE_FEXIT ||
+	} else if (prog->type == BPF_PROG_TYPE_TRACING &&
+		  (prog->expected_attach_type == BPF_TRACE_FEXIT ||
 		   prog->expected_attach_type == BPF_TRACE_FSESSION ||
 		   prog->expected_attach_type == BPF_TRACE_FSESSION_MULTI ||
 		   prog->expected_attach_type == BPF_MODIFY_RETURN) &&
@@ -19890,6 +19897,7 @@ static void __fixup_collection_insert_kfunc(struct bpf_insn_aux_data *insn_aux,
 int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		     struct bpf_insn *insn_buf, int insn_idx, int *cnt)
 {
+	enum bpf_attach_type atype = resolve_attach_type(env->prog);
 	struct bpf_kfunc_desc *desc;
 	int err;
 
@@ -19984,8 +19992,8 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn_buf[0] = BPF_MOV64_REG(BPF_REG_0, BPF_REG_1);
 		*cnt = 1;
 	} else if (desc->func_id == special_kfunc_list[KF_bpf_session_is_return] &&
-		   (env->prog->expected_attach_type == BPF_TRACE_FSESSION ||
-		    env->prog->expected_attach_type == BPF_TRACE_FSESSION_MULTI)) {
+		   (atype == BPF_TRACE_FSESSION ||
+		    atype == BPF_TRACE_FSESSION_MULTI)) {
 
 		/*
 		 * inline the bpf_session_is_return() for fsession:
@@ -19999,8 +20007,8 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn_buf[2] = BPF_ALU64_IMM(BPF_AND, BPF_REG_0, 1);
 		*cnt = 3;
 	} else if (desc->func_id == special_kfunc_list[KF_bpf_session_cookie] &&
-		   (env->prog->expected_attach_type == BPF_TRACE_FSESSION ||
-		    env->prog->expected_attach_type == BPF_TRACE_FSESSION_MULTI)) {
+		   (atype == BPF_TRACE_FSESSION ||
+		    atype == BPF_TRACE_FSESSION_MULTI)) {
 		/*
 		 * inline bpf_session_cookie() for fsession:
 		 *   __u64 *bpf_session_cookie(void *ctx)

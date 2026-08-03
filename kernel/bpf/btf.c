@@ -6616,12 +6616,15 @@ u32 btf_ctx_arg_idx(struct btf *btf, const struct btf_type *func_proto,
 
 static bool prog_args_trusted(const struct bpf_prog *prog)
 {
-	enum bpf_attach_type atype = prog->expected_attach_type;
+	enum bpf_attach_type atype = resolve_attach_type(prog);
+	enum bpf_prog_type ptype = resolve_prog_type(prog);
 
-	switch (prog->type) {
+	switch (ptype) {
 	case BPF_PROG_TYPE_TRACING:
 		return atype == BPF_TRACE_RAW_TP || atype == BPF_TRACE_ITER;
 	case BPF_PROG_TYPE_LSM:
+		if (prog->type == BPF_PROG_TYPE_EXT)
+			return false;
 		return bpf_lsm_is_trusted(prog);
 	case BPF_PROG_TYPE_STRUCT_OPS:
 		return true;
@@ -6855,16 +6858,24 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 		{ "user", MEM_USER },
 		{ "percpu", MEM_PERCPU },
 	};
-	const struct btf_type *t = prog->aux->attach_func_proto;
 	struct bpf_prog *tgt_prog = prog->aux->dst_prog;
-	struct btf *btf = bpf_prog_get_target_btf(prog);
-	const char *tname = prog->aux->attach_func_name;
+	const struct bpf_prog *ctx_prog = prog;
 	struct bpf_verifier_log *log = info->log;
 	struct btf_type_tag_walk_ctx ctx;
+	const struct btf_type *t;
 	const struct btf_param *args;
 	bool ptr_err_raw_tp = false;
+	enum bpf_attach_type atype = resolve_attach_type(prog);
+	const char *tname;
+	struct btf *btf;
 	u32 nr_args, arg;
 	int i, ret;
+
+	if (prog->type == BPF_PROG_TYPE_EXT && tgt_prog)
+		ctx_prog = tgt_prog;
+	t = ctx_prog->aux->attach_func_proto;
+	btf = bpf_prog_get_target_btf(ctx_prog);
+	tname = ctx_prog->aux->attach_func_name;
 
 	if (off % 8) {
 		bpf_log(log, "func '%s' offset %d is not multiple of 8\n",
@@ -6890,7 +6901,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	}
 
 	if (arg == nr_args) {
-		switch (prog->expected_attach_type) {
+		switch (atype) {
 		case BPF_LSM_MAC:
 			/* mark we are accessing the return value */
 			info->is_retval = true;
@@ -6964,8 +6975,8 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	}
 
 	/* check for PTR_TO_RDONLY_BUF_OR_NULL or PTR_TO_RDWR_BUF_OR_NULL */
-	for (i = 0; i < prog->aux->ctx_arg_info_size; i++) {
-		const struct bpf_ctx_arg_aux *ctx_arg_info = &prog->aux->ctx_arg_info[i];
+	for (i = 0; i < ctx_prog->aux->ctx_arg_info_size; i++) {
+		const struct bpf_ctx_arg_aux *ctx_arg_info = &ctx_prog->aux->ctx_arg_info[i];
 		u32 type, flag;
 
 		type = base_type(ctx_arg_info->reg_type);
@@ -6989,8 +7000,8 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 		return true;
 
 	/* this is a pointer to another type */
-	for (i = 0; i < prog->aux->ctx_arg_info_size; i++) {
-		const struct bpf_ctx_arg_aux *ctx_arg_info = &prog->aux->ctx_arg_info[i];
+	for (i = 0; i < ctx_prog->aux->ctx_arg_info_size; i++) {
+		const struct bpf_ctx_arg_aux *ctx_arg_info = &ctx_prog->aux->ctx_arg_info[i];
 
 		if (ctx_arg_info->offset == off) {
 			if (!ctx_arg_info->btf_id) {
@@ -7013,7 +7024,12 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	if (btf_param_match_suffix(btf, &args[arg], "__nullable"))
 		info->reg_type |= PTR_MAYBE_NULL;
 
-	if (prog->expected_attach_type == BPF_TRACE_RAW_TP) {
+	/*
+	 * An extension's attach BTF ID identifies its BPF subprogram target,
+	 * not the raw tracepoint of the program that contains that subprogram.
+	 */
+	if (prog->type == BPF_PROG_TYPE_TRACING &&
+	    prog->expected_attach_type == BPF_TRACE_RAW_TP) {
 		struct btf *btf = prog->aux->attach_btf;
 		const struct btf_type *t;
 		const char *tname;
@@ -7049,10 +7065,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	if (tgt_prog) {
 		enum bpf_prog_type tgt_type;
 
-		if (tgt_prog->type == BPF_PROG_TYPE_EXT)
-			tgt_type = tgt_prog->aux->saved_dst_prog_type;
-		else
-			tgt_type = tgt_prog->type;
+		tgt_type = resolve_prog_type(tgt_prog);
 
 		ret = btf_translate_to_vmlinux(log, btf, t, tgt_type, arg);
 		if (ret > 0) {
@@ -7985,7 +7998,8 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 	struct bpf_subprog_info *sub = subprog_info(env, subprog);
 	struct bpf_verifier_log *log = &env->log;
 	struct bpf_prog *prog = env->prog;
-	enum bpf_prog_type prog_type = prog->type;
+	enum bpf_attach_type attach_type = resolve_attach_type(prog);
+	enum bpf_prog_type prog_type = resolve_prog_type(prog);
 	struct btf *btf = prog->aux->btf;
 	const struct btf_param *args;
 	const struct btf_type *t, *ref_t, *fn_t;
@@ -8024,9 +8038,6 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 		verifier_bug(env, "unreliable BTF for function %s()", tname);
 		return -EFAULT;
 	}
-	if (prog_type == BPF_PROG_TYPE_EXT)
-		prog_type = prog->aux->dst_prog->type;
-
 	t = btf_type_by_id(btf, fn_t->type);
 	if (!t || !btf_type_is_func_proto(t)) {
 		bpf_log(log, "Invalid type of function %s()\n", tname);
@@ -8092,7 +8103,7 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 			}
 			if ((tags & ARG_TAG_CTX) &&
 			    btf_validate_prog_ctx_type(log, btf, t, i, prog_type,
-						       prog->expected_attach_type))
+						       attach_type))
 				return -EINVAL;
 			sub->args[i].arg_type = ARG_PTR_TO_CTX;
 			continue;
