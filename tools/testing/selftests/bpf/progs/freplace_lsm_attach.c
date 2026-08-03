@@ -13,7 +13,8 @@ int replacement(struct socket *sock __arg_trusted)
 	sk = sock->sk;
 	if (!sk)
 		return 1;
-	return bpf_getsockopt(sk, SOL_SOCKET, SO_PRIORITY, &prio, sizeof(prio));
+	return bpf_getsockopt(sk, SOL_SOCKET, SO_PRIORITY, &prio, sizeof(prio)) ?
+		0 : 1;
 }
 
 char _license[] SEC("license") = "GPL";
