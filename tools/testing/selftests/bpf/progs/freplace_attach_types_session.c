@@ -11,4 +11,12 @@ int replacement(struct pt_regs *ctx __arg_ctx)
 	return bpf_session_is_return(ctx);
 }
 
+SEC("freplace/replaceable_fsession")
+int replacement_fsession(__u64 *ctx __arg_ctx)
+{
+	__u64 ret;
+
+	return bpf_get_func_ret(ctx, &ret);
+}
+
 char _license[] SEC("license") = "GPL";

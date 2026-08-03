@@ -141,6 +141,44 @@ out:
 	freplace_attach_types_session_target__destroy(tgt_skel);
 }
 
+static void test_fsession_reject(void)
+{
+	struct freplace_attach_types_session_target *tgt_skel = NULL;
+	struct freplace_attach_types_session *skel = NULL;
+	struct bpf_program *prog;
+	int err, tgt_fd;
+
+	tgt_skel = freplace_attach_types_session_target__open();
+	if (!ASSERT_OK_PTR(tgt_skel, "target_open"))
+		return;
+
+	bpf_program__set_autoload(tgt_skel->progs.session_target, false);
+	err = freplace_attach_types_session_target__load(tgt_skel);
+	if (!ASSERT_OK(err, "target_load"))
+		goto out;
+
+	skel = freplace_attach_types_session__open();
+	if (!ASSERT_OK_PTR(skel, "freplace_open"))
+		goto out;
+
+	bpf_object__for_each_program(prog, skel->obj)
+		bpf_program__set_autoload(prog, false);
+	bpf_program__set_autoload(skel->progs.replacement_fsession, true);
+
+	tgt_fd = bpf_program__fd(tgt_skel->progs.fsession_target);
+	err = bpf_program__set_attach_target(skel->progs.replacement_fsession, tgt_fd,
+					     "replaceable_fsession");
+	if (!ASSERT_OK(err, "set_attach_target"))
+		goto out;
+
+	err = freplace_attach_types_session__load(skel);
+	ASSERT_EQ(err, -EINVAL, "freplace_load");
+
+out:
+	freplace_attach_types_session__destroy(skel);
+	freplace_attach_types_session_target__destroy(tgt_skel);
+}
+
 static void test_raw_tp(void)
 {
 	struct freplace_attach_types_raw_tp_target *tgt_skel = NULL;
@@ -252,6 +290,8 @@ void test_freplace_attach_types(void)
 		test_tcp_iter();
 	if (test__start_subtest("session"))
 		test_session();
+	if (test__start_subtest("fsession_reject"))
+		test_fsession_reject();
 	if (test__start_subtest("raw_tp"))
 		test_raw_tp();
 	if (test__start_subtest("xdp_devmap"))
