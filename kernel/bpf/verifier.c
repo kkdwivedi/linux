@@ -16695,7 +16695,7 @@ static int check_return_code(struct bpf_verifier_env *env, int regno, const char
 		 * not the destination program's struct_ops callback ABI.
 		 */
 		reg_type = reg->btf ? btf_type_by_id(reg->btf, reg->btf_id) : NULL;
-		ret_type = btf_type_resolve_ptr(prog->aux->attach_btf,
+		ret_type = btf_type_resolve_ptr(bpf_prog_get_target_btf(prog),
 						prog->aux->attach_func_proto->type,
 						NULL);
 		if (ret_type && ret_type == reg_type && reg_is_referenced(env, reg))
