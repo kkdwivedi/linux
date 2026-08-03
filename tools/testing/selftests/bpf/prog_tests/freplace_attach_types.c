@@ -187,6 +187,7 @@ static void test_session(void)
 {
 	struct freplace_attach_types_session_target *tgt_skel = NULL;
 	struct freplace_attach_types_session *skel = NULL;
+	struct bpf_program *prog;
 	int err, tgt_fd;
 
 	tgt_skel = freplace_attach_types_session_target__open_and_load();
@@ -196,6 +197,9 @@ static void test_session(void)
 	skel = freplace_attach_types_session__open();
 	if (!ASSERT_OK_PTR(skel, "freplace_open"))
 		goto out;
+	bpf_object__for_each_program(prog, skel->obj)
+		bpf_program__set_autoload(prog, false);
+	bpf_program__set_autoload(skel->progs.replacement, true);
 
 	tgt_fd = bpf_program__fd(tgt_skel->progs.session_target);
 	err = bpf_program__set_attach_target(skel->progs.replacement, tgt_fd,
