@@ -8349,6 +8349,7 @@ const struct bpf_func_proto bpf_sk_storage_get_cg_sock_proto __weak;
 static const struct bpf_func_proto *
 sock_filter_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
+	enum bpf_attach_type atype = resolve_attach_type(prog);
 	const struct bpf_func_proto *func_proto;
 
 	func_proto = cgroup_common_func_proto(func_id, prog);
@@ -8367,14 +8368,14 @@ sock_filter_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	case BPF_FUNC_ktime_get_coarse_ns:
 		return &bpf_ktime_get_coarse_ns_proto;
 	case BPF_FUNC_setsockopt:
-		switch (prog->expected_attach_type) {
+		switch (atype) {
 		case BPF_CGROUP_INET_SOCK_CREATE:
 			return &bpf_sock_create_setsockopt_proto;
 		default:
 			return NULL;
 		}
 	case BPF_FUNC_getsockopt:
-		switch (prog->expected_attach_type) {
+		switch (atype) {
 		case BPF_CGROUP_INET_SOCK_CREATE:
 			return &bpf_sock_create_getsockopt_proto;
 		default:
@@ -8388,6 +8389,7 @@ sock_filter_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 static const struct bpf_func_proto *
 sock_addr_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
+	enum bpf_attach_type atype = resolve_attach_type(prog);
 	const struct bpf_func_proto *func_proto;
 
 	func_proto = cgroup_common_func_proto(func_id, prog);
@@ -8396,7 +8398,7 @@ sock_addr_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 
 	switch (func_id) {
 	case BPF_FUNC_bind:
-		switch (prog->expected_attach_type) {
+		switch (atype) {
 		case BPF_CGROUP_INET4_CONNECT:
 		case BPF_CGROUP_INET6_CONNECT:
 			return &bpf_bind_proto;
@@ -8424,7 +8426,7 @@ sock_addr_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	case BPF_FUNC_sk_storage_delete:
 		return &bpf_sk_storage_delete_proto;
 	case BPF_FUNC_setsockopt:
-		switch (prog->expected_attach_type) {
+		switch (atype) {
 		case BPF_CGROUP_INET4_BIND:
 		case BPF_CGROUP_INET6_BIND:
 		case BPF_CGROUP_INET4_CONNECT:
@@ -8447,7 +8449,7 @@ sock_addr_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 			return NULL;
 		}
 	case BPF_FUNC_getsockopt:
-		switch (prog->expected_attach_type) {
+		switch (atype) {
 		case BPF_CGROUP_INET4_BIND:
 		case BPF_CGROUP_INET6_BIND:
 		case BPF_CGROUP_INET4_CONNECT:
@@ -9266,7 +9268,7 @@ static bool sock_filter_is_valid_access(int off, int size,
 	if (!bpf_sock_is_valid_access(off, size, type, info))
 		return false;
 	return __sock_filter_check_attach_type(off, type,
-					       prog->expected_attach_type);
+					       resolve_attach_type(prog));
 }
 
 static int bpf_noop_prologue(struct bpf_insn *insn_buf, bool direct_write,
@@ -9443,7 +9445,7 @@ static bool xdp_is_valid_access(int off, int size,
 				const struct bpf_prog *prog,
 				struct bpf_insn_access_aux *info)
 {
-	if (prog->expected_attach_type != BPF_XDP_DEVMAP) {
+	if (resolve_attach_type(prog) != BPF_XDP_DEVMAP) {
 		switch (off) {
 		case offsetof(struct xdp_md, egress_ifindex):
 			return false;
@@ -9513,6 +9515,7 @@ static bool sock_addr_is_valid_access(int off, int size,
 				      const struct bpf_prog *prog,
 				      struct bpf_insn_access_aux *info)
 {
+	enum bpf_attach_type atype = resolve_attach_type(prog);
 	const int size_default = sizeof(__u32);
 
 	if (off < 0 || off >= sizeof(struct bpf_sock_addr))
@@ -9525,7 +9528,7 @@ static bool sock_addr_is_valid_access(int off, int size,
 	 */
 	switch (off) {
 	case bpf_ctx_range(struct bpf_sock_addr, user_ip4):
-		switch (prog->expected_attach_type) {
+		switch (atype) {
 		case BPF_CGROUP_INET4_BIND:
 		case BPF_CGROUP_INET4_CONNECT:
 		case BPF_CGROUP_INET4_GETPEERNAME:
@@ -9538,7 +9541,7 @@ static bool sock_addr_is_valid_access(int off, int size,
 		}
 		break;
 	case bpf_ctx_range_till(struct bpf_sock_addr, user_ip6[0], user_ip6[3]):
-		switch (prog->expected_attach_type) {
+		switch (atype) {
 		case BPF_CGROUP_INET6_BIND:
 		case BPF_CGROUP_INET6_CONNECT:
 		case BPF_CGROUP_INET6_GETPEERNAME:
@@ -9551,7 +9554,7 @@ static bool sock_addr_is_valid_access(int off, int size,
 		}
 		break;
 	case bpf_ctx_range(struct bpf_sock_addr, msg_src_ip4):
-		switch (prog->expected_attach_type) {
+		switch (atype) {
 		case BPF_CGROUP_UDP4_SENDMSG:
 			break;
 		default:
@@ -9560,7 +9563,7 @@ static bool sock_addr_is_valid_access(int off, int size,
 		break;
 	case bpf_ctx_range_till(struct bpf_sock_addr, msg_src_ip6[0],
 				msg_src_ip6[3]):
-		switch (prog->expected_attach_type) {
+		switch (atype) {
 		case BPF_CGROUP_UDP6_SENDMSG:
 			break;
 		default:
@@ -12870,7 +12873,7 @@ BTF_KFUNCS_END(bpf_sk_iter_kfunc_ids)
 static int tracing_iter_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
 	if (btf_id_set8_contains(&bpf_sk_iter_kfunc_ids, kfunc_id) &&
-	    prog->expected_attach_type != BPF_TRACE_ITER)
+	    resolve_attach_type(prog) != BPF_TRACE_ITER)
 		return -EACCES;
 	return 0;
 }

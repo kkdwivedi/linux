@@ -6865,6 +6865,9 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	bool ptr_err_raw_tp = false;
 	enum bpf_attach_type atype = resolve_attach_type(prog);
 	enum bpf_prog_type ptype = resolve_prog_type(prog);
+	bool raw_tp_ext = prog->type == BPF_PROG_TYPE_EXT &&
+			  ptype == BPF_PROG_TYPE_TRACING &&
+			  atype == BPF_TRACE_RAW_TP;
 	const char *tname;
 	struct btf *btf;
 	u32 nr_args, arg;
@@ -6872,7 +6875,11 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 
 	if (prog->type == BPF_PROG_TYPE_EXT && tgt_prog)
 		ctx_prog = tgt_prog;
-	t = resolve_attach_func_proto(prog);
+	/* A raw tracepoint extension replaces a BPF subprogram which receives
+	 * the opaque raw tracepoint context, not a typed attachment argument.
+	 */
+	t = raw_tp_ext ? prog->aux->attach_func_proto :
+		resolve_attach_func_proto(prog);
 	btf = bpf_prog_get_target_btf(ctx_prog);
 	tname = ctx_prog->aux->attach_func_name;
 
@@ -6887,7 +6894,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	 * MAX_BPF_FUNC_REG_ARGS u64 arguments.
 	 */
 	nr_args = t ? btf_type_vlen(t) : MAX_BPF_FUNC_REG_ARGS;
-	if (ctx_prog->aux->attach_btf_trace) {
+	if (!raw_tp_ext && ctx_prog->aux->attach_btf_trace) {
 		/* skip first 'void *__data' argument in btf_trace_##name typedef */
 		args++;
 		nr_args--;

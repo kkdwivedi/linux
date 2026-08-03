@@ -1727,6 +1727,8 @@ raw_tp_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 const struct bpf_func_proto *
 tracing_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
+	enum bpf_attach_type atype = resolve_attach_type(prog);
+	enum bpf_prog_type ptype = resolve_prog_type(prog);
 	const struct bpf_func_proto *fn;
 
 	switch (func_id) {
@@ -1761,39 +1763,38 @@ tracing_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_xdp_get_buff_len_trace_proto;
 #endif
 	case BPF_FUNC_seq_printf:
-		return prog->expected_attach_type == BPF_TRACE_ITER ?
+		return atype == BPF_TRACE_ITER ?
 		       &bpf_seq_printf_proto :
 		       NULL;
 	case BPF_FUNC_seq_write:
-		return prog->expected_attach_type == BPF_TRACE_ITER ?
+		return atype == BPF_TRACE_ITER ?
 		       &bpf_seq_write_proto :
 		       NULL;
 	case BPF_FUNC_seq_printf_btf:
-		return prog->expected_attach_type == BPF_TRACE_ITER ?
+		return atype == BPF_TRACE_ITER ?
 		       &bpf_seq_printf_btf_proto :
 		       NULL;
 	case BPF_FUNC_d_path:
 		return &bpf_d_path_proto;
 	case BPF_FUNC_get_func_arg:
 		if (bpf_prog_has_trampoline(prog) ||
-		    prog->expected_attach_type == BPF_TRACE_RAW_TP)
+		    atype == BPF_TRACE_RAW_TP)
 			return &bpf_get_func_arg_proto;
 		return NULL;
 	case BPF_FUNC_get_func_ret:
 		return bpf_prog_has_trampoline(prog) ? &bpf_get_func_ret_proto : NULL;
 	case BPF_FUNC_get_func_arg_cnt:
 		if (bpf_prog_has_trampoline(prog) ||
-		    prog->expected_attach_type == BPF_TRACE_RAW_TP)
+		    atype == BPF_TRACE_RAW_TP)
 			return &bpf_get_func_arg_cnt_proto;
 		return NULL;
 	case BPF_FUNC_get_attach_cookie:
-		if (prog->type == BPF_PROG_TYPE_TRACING &&
-		    prog->expected_attach_type == BPF_TRACE_RAW_TP)
+		if (ptype == BPF_PROG_TYPE_TRACING && atype == BPF_TRACE_RAW_TP)
 			return &bpf_get_attach_cookie_proto_tracing;
 		return bpf_prog_has_trampoline(prog) ? &bpf_get_attach_cookie_proto_tracing : NULL;
 	default:
 		fn = raw_tp_prog_func_proto(func_id, prog);
-		if (!fn && prog->expected_attach_type == BPF_TRACE_ITER)
+		if (!fn && atype == BPF_TRACE_ITER)
 			fn = bpf_iter_get_func_proto(func_id, prog);
 		return fn;
 	}
@@ -3443,10 +3444,18 @@ BTF_KFUNCS_END(session_kfunc_set_ids)
 
 static int bpf_session_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
+	enum bpf_attach_type atype = resolve_attach_type(prog);
+	enum bpf_prog_type ptype = resolve_prog_type(prog);
+
 	if (!btf_id_set8_contains(&session_kfunc_set_ids, kfunc_id))
 		return 0;
 
-	if (!is_kprobe_session(prog) && !is_uprobe_session(prog) && !is_trace_fsession(prog))
+	if (!((ptype == BPF_PROG_TYPE_KPROBE &&
+	       (atype == BPF_TRACE_KPROBE_SESSION ||
+		atype == BPF_TRACE_UPROBE_SESSION)) ||
+	      (ptype == BPF_PROG_TYPE_TRACING &&
+	       (atype == BPF_TRACE_FSESSION ||
+		atype == BPF_TRACE_FSESSION_MULTI))))
 		return -EACCES;
 
 	return 0;
