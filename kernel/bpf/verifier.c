@@ -19073,6 +19073,15 @@ static int btf_id_allow_sleepable(u32 btf_id, unsigned long addr, const struct b
 		if (bpf_lsm_is_sleepable_hook(btf_id))
 			return 0;
 		break;
+	case BPF_PROG_TYPE_EXT:
+		/*
+		 * Do not resolve the program type here. For an extension, btf_id
+		 * identifies the replaced BPF subprogram rather than the outer
+		 * attachment hook. can_be_sleepable() validates the resolved hook,
+		 * while bpf_check_attach_target() compares the extension and target
+		 * subprograms' might_sleep summaries.
+		 */
+		return 0;
 	default:
 		break;
 	}
@@ -19523,8 +19532,11 @@ BTF_SET_END(noreturn_deny)
 
 static bool can_be_sleepable(struct bpf_prog *prog)
 {
-	if (prog->type == BPF_PROG_TYPE_TRACING) {
-		switch (prog->expected_attach_type) {
+	enum bpf_attach_type eatype = resolve_attach_type(prog);
+	enum bpf_prog_type prog_type = resolve_prog_type(prog);
+
+	if (prog_type == BPF_PROG_TYPE_TRACING) {
+		switch (eatype) {
 		case BPF_TRACE_FENTRY:
 		case BPF_TRACE_FEXIT:
 		case BPF_MODIFY_RETURN:
@@ -19539,13 +19551,13 @@ static bool can_be_sleepable(struct bpf_prog *prog)
 			return false;
 		}
 	}
-	if (prog->type == BPF_PROG_TYPE_LSM)
-		return prog->expected_attach_type != BPF_LSM_CGROUP;
+	if (prog_type == BPF_PROG_TYPE_LSM)
+		return eatype != BPF_LSM_CGROUP;
 
-	return prog->type == BPF_PROG_TYPE_KPROBE /* only for uprobes */ ||
-	       prog->type == BPF_PROG_TYPE_STRUCT_OPS ||
-	       prog->type == BPF_PROG_TYPE_RAW_TRACEPOINT ||
-	       prog->type == BPF_PROG_TYPE_TRACEPOINT;
+	return prog_type == BPF_PROG_TYPE_KPROBE /* only for uprobes */ ||
+	       prog_type == BPF_PROG_TYPE_STRUCT_OPS ||
+	       prog_type == BPF_PROG_TYPE_RAW_TRACEPOINT ||
+	       prog_type == BPF_PROG_TYPE_TRACEPOINT;
 }
 
 static int check_attach_btf_id(struct bpf_verifier_env *env)
