@@ -2,18 +2,19 @@
 
 #include <vmlinux.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 
 volatile int value;
 
-__noinline int replaceable(void *ctx __arg_ctx)
+__noinline int replaceable(struct pt_regs *ctx __arg_ctx)
 {
 	return value;
 }
 
 SEC("tp_btf/sys_enter")
-int raw_tp_target(void *ctx)
+int BPF_PROG(raw_tp_target, struct pt_regs *regs, long id)
 {
-	replaceable(ctx);
+	replaceable(regs);
 	return 0;
 }
 
