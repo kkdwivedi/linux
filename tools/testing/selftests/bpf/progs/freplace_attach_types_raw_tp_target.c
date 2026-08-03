@@ -5,13 +5,13 @@
 
 volatile int value;
 
-__noinline int replaceable(void *ctx __arg_ctx)
+__noinline int replaceable(struct bpf_raw_tracepoint_args *ctx __arg_ctx)
 {
 	return value;
 }
 
 SEC("tp_btf/sys_enter")
-int raw_tp_target(void *ctx)
+int raw_tp_target(struct bpf_raw_tracepoint_args *ctx)
 {
 	replaceable(ctx);
 	return 0;
