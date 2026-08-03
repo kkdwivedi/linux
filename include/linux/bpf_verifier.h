@@ -1308,6 +1308,12 @@ static inline enum bpf_prog_type resolve_prog_type(const struct bpf_prog *prog)
 		prog->aux->saved_dst_prog_type : prog->type;
 }
 
+static inline enum bpf_attach_type resolve_attach_type(const struct bpf_prog *prog)
+{
+	return (prog->type == BPF_PROG_TYPE_EXT && prog->aux->saved_dst_prog_type) ?
+		prog->aux->saved_dst_attach_type : prog->expected_attach_type;
+}
+
 static inline bool bpf_prog_check_recur(const struct bpf_prog *prog)
 {
 	switch (resolve_prog_type(prog)) {
