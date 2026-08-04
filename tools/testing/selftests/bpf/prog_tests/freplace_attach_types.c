@@ -283,6 +283,7 @@ static void test_raw_tp(void)
 					     "replaceable");
 	if (!ASSERT_OK(err, "set_attach_target"))
 		goto out;
+	skel->bss->target_pid = getpid();
 
 	err = freplace_attach_types_raw_tp__load(skel);
 	ASSERT_OK(err, "freplace_load");
@@ -303,6 +304,7 @@ static void test_raw_tp(void)
 	ASSERT_EQ(skel->bss->arg_cnt, 2, "arg_cnt");
 	ASSERT_EQ(skel->bss->arg_err, 0, "arg_err");
 	ASSERT_EQ(skel->bss->arg, SYS_getpid, "arg");
+	ASSERT_NEQ(skel->bss->ctx_arg, 0, "ctx_arg");
 
 out:
 	bpf_link__destroy(target_link);
