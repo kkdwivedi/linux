@@ -6,6 +6,7 @@
 long arg_cnt;
 long arg_err;
 __u64 arg;
+__u64 ctx_arg;
 
 struct {
 	__uint(type, BPF_MAP_TYPE_PROG_ARRAY);
@@ -17,6 +18,7 @@ struct {
 SEC("freplace/replaceable")
 int replacement(struct bpf_raw_tracepoint_args *ctx __arg_ctx)
 {
+	ctx_arg = ctx->args[0];
 	bpf_get_attach_cookie(ctx);
 	arg_cnt = bpf_get_func_arg_cnt(ctx);
 	arg_err = bpf_get_func_arg(ctx, 1, &arg);
