@@ -6875,13 +6875,14 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 
 	if (prog->type == BPF_PROG_TYPE_EXT && tgt_prog)
 		ctx_prog = tgt_prog;
-	/* A raw tracepoint extension replaces a BPF subprogram which receives
+	/*
+	 * A raw tracepoint extension replaces a BPF subprogram which receives
 	 * the opaque raw tracepoint context, not a typed attachment argument.
 	 */
 	t = raw_tp_ext ? prog->aux->attach_func_proto :
 		resolve_attach_func_proto(prog);
-	btf = bpf_prog_get_target_btf(ctx_prog);
-	tname = ctx_prog->aux->attach_func_name;
+	btf = raw_tp_ext ? ctx_prog->aux->btf : bpf_prog_get_target_btf(ctx_prog);
+	tname = raw_tp_ext ? prog->aux->attach_func_name : ctx_prog->aux->attach_func_name;
 
 	if (off % 8) {
 		bpf_log(log, "func '%s' offset %d is not multiple of 8\n",
