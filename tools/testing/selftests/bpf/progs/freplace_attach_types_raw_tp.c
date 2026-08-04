@@ -32,7 +32,10 @@ int replacement(struct bpf_raw_tracepoint_args *ctx __arg_ctx)
 SEC("freplace/replaceable_nonnull")
 int replacement_nonnull(struct bpf_raw_tracepoint_args *ctx __arg_ctx)
 {
-	return ctx->args[0];
+	struct bpf_raw_tracepoint_args *raw_ctx;
+
+	raw_ctx = (void *)ctx->args[0];
+	return raw_ctx->args[0];
 }
 
 char _license[] SEC("license") = "GPL";
