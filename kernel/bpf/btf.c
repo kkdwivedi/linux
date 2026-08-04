@@ -7064,7 +7064,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 			info->reg_type |= PTR_MAYBE_NULL;
 	}
 
-	if (tgt_prog) {
+	if (tgt_prog && !raw_tp_ext) {
 		enum bpf_prog_type tgt_type;
 
 		tgt_type = resolve_prog_type(tgt_prog);
