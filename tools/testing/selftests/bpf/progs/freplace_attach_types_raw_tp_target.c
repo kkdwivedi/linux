@@ -2,7 +2,6 @@
 
 #include <vmlinux.h>
 #include <bpf/bpf_helpers.h>
-#include <bpf/bpf_tracing.h>
 
 volatile int value;
 
@@ -26,18 +25,15 @@ int raw_tp_target(struct bpf_raw_tracepoint_args *ctx)
 	return 0;
 }
 
-__noinline int replaceable_nonnull(struct sock *sk __arg_trusted)
+__noinline int replaceable_nonnull(struct bpf_raw_tracepoint_args *ctx __arg_ctx)
 {
-	return value + sk->__sk_common.skc_state;
+	return value;
 }
 
 SEC("tp_btf/tcp_send_reset")
-int BPF_PROG(raw_tp_nullable_target, struct sock *sk, struct sk_buff *skb,
-	     enum sk_rst_reason reason)
+int raw_tp_nullable_target(struct bpf_raw_tracepoint_args *ctx)
 {
-	if (!sk)
-		return 0;
-	replaceable_nonnull(sk);
+	replaceable_nonnull(ctx);
 	return 0;
 }
 
