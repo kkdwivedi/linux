@@ -95,6 +95,126 @@ below a configured multiple of its no-pressure p99. Secondary objectives are
 to minimize service refaults and direct reclaim without unnecessarily reducing
 batch throughput or consuming reclaim CPU.
 
+## Relationship to existing reclaim policy
+
+The BPF policy does not introduce a page-selection or reclaim algorithm. Its
+workers call the existing memcg reclaim engine, which remains responsible for
+choosing pages and performing writeback, swap, and eviction. The new part is a
+topology-aware control policy that connects the health of one workload to the
+rate of proactive reclaim from another workload.
+
+The existing in-kernel policies have different triggers and objectives:
+
+- `kswapd` responds to node-level free-memory watermarks. It does not act when
+  a locally limited parent cgroup is under pressure while the node still has
+  ample free memory.
+- `memory.high` starts reclaim and throttling after a cgroup crosses its
+  boundary. Reclaim can therefore run in allocating task context instead of
+  maintaining headroom ahead of a burst.
+- `memory.low` changes the distribution of reclaim pressure once reclaim is
+  already occurring. It is static protection, not an active rate controller.
+- `memory.reclaim` and `bpf_try_to_free_mem_cgroup_pages()` are targeted
+  proactive-reclaim mechanisms, but neither decides when to invoke reclaim,
+  how much outstanding work to authorize, or how the health of one cgroup
+  should influence reclaim from another.
+- DAMON_RECLAIM can proactively reclaim cold memory and tune a quota using
+  system pressure. It does not by itself express the benchmark's relationship
+  between parent headroom, service refaults, and reclaim from a selected batch
+  sibling.
+
+The BPF controller periodically computes a parent headroom error and a service
+refault error. It turns those errors into bounded reclaim debt, estimates
+per-worker request capacity, and varies the number of active workers in a
+fixed pool. Scale-out is immediate and scale-in is delayed. The workers run in
+the batch cgroup so the CPU cost of reclaim is both constrained by and charged
+to the workload whose memory is reclaimed.
+
+The resulting policy can be summarized as: use the health of a protected
+service to control proactive reclaim against a batch workload inside a shared,
+locally constrained resource domain. The kernel contains all the underlying
+mechanisms, but does not contain this particular cross-cgroup feedback policy.
+
+This distinction is not yet proof that BPF is required. The current benchmark
+compares the policy with ordinary memcg enforcement and static `memory.low`,
+but does not include a tuned DAMON or DAMOS configuration. A claim that the
+policy outperforms the strongest kernel-only proactive alternative requires
+adding such a mode and applying the same validity criteria to it.
+
+### Comparison with Senpai
+
+[Senpai, as described by TMO](https://doi.org/10.1145/3503222.3507731), and the
+benchmark controller both use feedback to drive the kernel's existing reclaim
+algorithm, but they optimize different operating points.
+
+| Dimension | Senpai/TMO | Benchmark BPF policy |
+|---|---|---|
+| Objective | Safe footprint reduction | Short-burst service headroom |
+| Feedback | Workload PSI and I/O guards | Parent usage and service refaults |
+| Target | Workload being sized | Selected batch sibling |
+| Control | Reclaim volume per period | Reclaim debt and active slots |
+| Time scale | Six seconds in production | 200 ms epochs |
+| Execution | One `memory.reclaim` request | Fixed BPF kthread pool |
+
+Senpai calculates reclaim volume as a fraction of current memory, scaled down
+as memory PSI approaches its threshold. It therefore already adapts the amount
+requested: low observed pressure permits a larger probe, while pressure near
+the target reduces or stops reclaim. Its published production parameters are
+deliberately conservative so the controller can observe delayed refault and
+other pressure effects. Extreme contraction can consequently take minutes. In
+that deployment, proactive reclaim consumed only 0.05% of fleet CPU cycles, so
+executor CPU throughput was not shown to be a limiting factor. The
+[open-source implementation](https://github.com/facebookincubator/oomd/blob/main/src/oomd/plugins/Senpai.cpp)
+also checks memory and I/O pressure before driving reclaim.
+
+#### Would Senpai benefit from scaling reclaim into idle CPU capacity?
+
+> Would a proactive scheme such as Senpai benefit from scaling up its reclaim
+> rate by consuming more idle CPU cycles when they are available?
+
+Potentially, but only after separating the amount that policy has authorized
+from the concurrency used to execute it. If a controller has identified a safe
+reclaim volume, has urgent headroom debt, and has spare CPU capacity, multiple
+workers could finish that authorized work before a short burst reaches
+`memory.high`. This is most promising for large cgroups, fast offload backends,
+NUMA systems, and workloads whose pressure phases are shorter than Senpai's
+normal probing period.
+
+Idle CPU alone is not permission to reclaim either more memory or memory more
+quickly. Reclaim may instead be limited by memory bandwidth, LRU contention,
+writeback, swap I/O, or storage endurance. Parallel reclaim can also evict
+useful pages faster than delayed PSI or refault feedback can report the damage.
+Increasing the total authorized volume merely because CPUs are idle would
+change Senpai's safety policy and could overshoot its pressure target.
+
+A safe composition would therefore be:
+
+1. A Senpai-like policy determines the maximum reclaim volume from memory and
+   I/O PSI, refault or swap-in behavior, and storage constraints.
+2. That volume is represented as bounded shared debt with an explicit
+   completion horizon.
+3. A fixed pool activates the minimum number of workers predicted to drain the
+   debt within that horizon.
+4. Concurrency increases only while CPU slack exists, marginal reclaimed pages
+   per unit of CPU time remain useful, and memory, I/O, and service-health
+   guardrails remain below their limits.
+5. The pool scales in promptly when the debt is drained or any guardrail is
+   crossed; it never treats unused CPU as a reason to increase total volume.
+
+The current BPF prototype does not implement this CPU-slack policy. It derives
+active slots only from pending reclaim debt and an estimate of completed
+requests. The scheduler can naturally run its cgroup-scoped workers on idle
+CPUs, but the controller neither measures idle capacity nor uses CPU or I/O PSI
+as a scaling input. Opportunistically soaking up idle cycles is therefore a
+proposed extension, not a conclusion supported by the current benchmark run.
+
+An evaluation of the extension should hold authorized reclaim volume constant
+while varying executor concurrency. It should compare idle and CPU-saturated
+phases and record debt completion time, reclaimed pages per CPU microsecond,
+memory and I/O PSI, refaults, swap-ins, storage write rate, application tail
+latency, and overshoot past the requested volume. This distinguishes a benefit
+from completing safe work sooner from the unsafe effect of simply reclaiming
+more.
+
 ## Test topology
 
 The benchmark creates this cgroup-v2 hierarchy:
