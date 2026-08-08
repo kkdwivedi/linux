@@ -130,7 +130,7 @@ TEST_PROGS := test_kmod.sh \
 	test_xdp_features.sh
 
 TEST_PROGS_EXTENDED := \
-	ima_setup.sh verify_sig_setup.sh
+	ima_setup.sh verify_sig_setup.sh run_bench_memcg_reclaim.sh
 
 TEST_KMODS := bpf_testmod.ko bpf_test_no_cfi.ko bpf_test_modorder_x.ko \
 	bpf_test_modorder_y.ko bpf_test_rqspinlock.ko
@@ -139,6 +139,7 @@ TEST_KMOD_TARGETS = $(addprefix $(OUTPUT)/,$(TEST_KMODS))
 # Compile but not part of 'make run_tests'
 TEST_GEN_PROGS_EXTENDED = \
 	bench \
+	bench_memcg_reclaim \
 	flow_dissector_load \
 	test_cpp \
 	test_lirc_mode2_user \
@@ -340,6 +341,10 @@ $(OUTPUT)/test_sock_fields: $(CGROUP_HELPERS) $(TESTING_HELPERS)
 $(OUTPUT)/test_tag: $(TESTING_HELPERS)
 $(OUTPUT)/test_lirc_mode2_user: $(TESTING_HELPERS)
 $(OUTPUT)/flow_dissector_load: $(TESTING_HELPERS)
+$(OUTPUT)/bench_memcg_reclaim: bench_memcg_reclaim.c \
+				       $(OUTPUT)/bench_memcg_reclaim.skel.h $(BPFOBJ)
+	$(call msg,BINARY,,$@)
+	$(Q)$(CC) $(CFLAGS) $(filter %.c,$^) $(BPFOBJ) $(LDLIBS) -pthread -o $@
 $(OUTPUT)/test_maps: $(TESTING_HELPERS)
 $(OUTPUT)/test_verifier: $(TESTING_HELPERS) $(CAP_HELPERS) $(UNPRIV_HELPERS)
 $(OUTPUT)/xsk.o: $(BPFOBJ)
