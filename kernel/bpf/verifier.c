@@ -9652,7 +9652,7 @@ static int set_kthread_callback_state(struct bpf_verifier_env *env,
 
 	/*
 	 * bpf_kthread_create(struct bpf_kthread *kthread, struct bpf_map *map,
-	 *                    void *callback_fn, u64 flags);
+	 *                    u64 cgroup_id, void *callback_fn);
 	 * callback_fn(struct bpf_map *map, void *key, void *value);
 	 */
 	callee->regs[BPF_REG_1].type = CONST_PTR_TO_MAP;
