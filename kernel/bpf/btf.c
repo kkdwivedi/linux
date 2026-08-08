@@ -7743,7 +7743,7 @@ static int btf_check_func_type_match(struct bpf_verifier_log *log,
 	return 0;
 }
 
-/* Compare BTFs of given program with BTF of target program */
+/* Compare the program BTF with the target program BTF. */
 int btf_check_type_match(struct bpf_verifier_log *log, const struct bpf_prog *prog,
 			 struct btf *btf2, const struct btf_type *t2)
 {
