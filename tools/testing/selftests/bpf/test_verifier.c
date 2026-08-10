@@ -839,6 +839,7 @@ static int create_map_arena(void)
 {
 	LIBBPF_OPTS(bpf_map_create_opts, opts,
 		.map_flags = BPF_F_MMAPABLE,
+		.map_extra = 1ULL << 32,
 	);
 
 	return bpf_map_create(BPF_MAP_TYPE_ARENA, "test_arena", 0, 0, 1, &opts);
