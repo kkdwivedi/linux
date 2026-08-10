@@ -14947,9 +14947,10 @@ static int check_arena_type_cast(struct bpf_verifier_env *env,
 {
 	struct bpf_reg_state *regs = cur_regs(env);
 	struct bpf_reg_state *reg = &regs[insn->src_reg];
+	struct bpf_insn_aux_data *aux = cur_aux(env);
 	const struct btf_type *t;
 	struct btf *btf;
-	u32 btf_id;
+	u32 btf_id, src_btf_id;
 
 	if (!env->prog->aux->arena) {
 		verbose(env, "arena_type_cast insn requires an associated arena\n");
@@ -14961,6 +14962,13 @@ static int check_arena_type_cast(struct bpf_verifier_env *env,
 			insn->src_reg, reg_type_str(env, reg->type));
 		return -EACCES;
 	}
+	src_btf_id = type_is_ptr_arena_obj(reg->type) ? reg->btf_id : 0;
+	if (aux->arena_type_cast_seen && aux->arena_src_btf_id != src_btf_id) {
+		verbose(env, "arena_type_cast source type changes across verifier paths\n");
+		return -EINVAL;
+	}
+	aux->arena_src_btf_id = src_btf_id;
+	aux->arena_type_cast_seen = true;
 
 	btf = env->prog->aux->btf;
 	if (!btf) {
@@ -14980,6 +14988,7 @@ static int check_arena_type_cast(struct bpf_verifier_env *env,
 	reg->type = PTR_TO_BTF_ID | MEM_ARENA;
 	reg->btf = btf;
 	reg->btf_id = btf_id;
+	reg->id = ++env->id_gen;
 	return 0;
 }
 
@@ -20528,7 +20537,7 @@ skip_full_check:
 	}
 
 	if (ret == 0)
-		ret = bpf_opt_remove_arena_type_casts(env);
+		ret = bpf_lower_arena_type_casts(env);
 
 	if (ret == 0)
 		/* program is valid, convert *(u32*)(ctx + off) accesses */

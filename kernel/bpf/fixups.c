@@ -644,19 +644,70 @@ int bpf_opt_remove_nops(struct bpf_verifier_env *env)
 	return 0;
 }
 
-int bpf_opt_remove_arena_type_casts(struct bpf_verifier_env *env)
+static const struct bpf_arena_type *find_arena_type(const struct bpf_prog_aux *aux,
+						    u32 btf_id)
 {
-	int i, err;
+	u32 i;
+
+	for (i = 0; i < aux->arena_type_cnt; i++)
+		if (aux->arena_types[i].btf_id == btf_id)
+			return aux->arena_types[i].type;
+	return NULL;
+}
+
+int bpf_lower_arena_type_casts(struct bpf_verifier_env *env)
+{
+	const struct bpf_arena_type *src_type, *dst_type;
+	struct bpf_prog *new_prog;
+	int i;
 
 	for (i = 0; i < env->prog->len;) {
-		if (!insn_is_arena_type_cast(&env->prog->insnsi[i])) {
+		struct bpf_insn insn = env->prog->insnsi[i];
+		struct bpf_insn_aux_data *aux = &env->insn_aux_data[i];
+		u32 src_btf_id = aux->arena_src_btf_id;
+
+		if (!insn_is_arena_type_cast(&insn)) {
 			i++;
 			continue;
 		}
+		if (!aux->arena_type_cast_seen) {
+			verbose(env, "arena type cast was not checked\n");
+			return -EFAULT;
+		}
 
-		err = verifier_remove_insns(env, i, 1);
-		if (err)
-			return err;
+		dst_type = find_arena_type(env->prog->aux, (u32)insn.imm);
+		src_type = src_btf_id ? find_arena_type(env->prog->aux, src_btf_id) : NULL;
+		if (!dst_type || (src_btf_id && !src_type)) {
+			verbose(env, "arena type cast has no cage descriptor\n");
+			return -EFAULT;
+		}
+
+		if (src_type) {
+			struct bpf_insn patch[] = {
+				BPF_LD_IMM64(BPF_REG_AX, (long)src_type->cage_base),
+				BPF_ALU64_REG(BPF_SUB, insn.dst_reg, BPF_REG_AX),
+				BPF_ALU32_IMM(BPF_AND, insn.dst_reg, dst_type->slot_mask),
+				BPF_LD_IMM64(BPF_REG_AX, (long)dst_type->cage_base),
+				BPF_ALU64_REG(BPF_ADD, insn.dst_reg, BPF_REG_AX),
+			};
+
+			new_prog = bpf_patch_insn_data(env, i, patch, ARRAY_SIZE(patch));
+			if (!new_prog)
+				return -ENOMEM;
+			i += ARRAY_SIZE(patch);
+		} else {
+			struct bpf_insn patch[] = {
+				BPF_ALU32_IMM(BPF_AND, insn.dst_reg, dst_type->slot_mask),
+				BPF_LD_IMM64(BPF_REG_AX, (long)dst_type->cage_base),
+				BPF_ALU64_REG(BPF_ADD, insn.dst_reg, BPF_REG_AX),
+			};
+
+			new_prog = bpf_patch_insn_data(env, i, patch, ARRAY_SIZE(patch));
+			if (!new_prog)
+				return -ENOMEM;
+			i += ARRAY_SIZE(patch);
+		}
+		env->prog = new_prog;
 	}
 
 	return 0;
