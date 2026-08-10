@@ -11,6 +11,7 @@
 #include <linux/vmalloc.h>
 #include <linux/pagemap.h>
 #include <asm/tlbflush.h>
+#include "../tools/lib/bpf/relo_core.h"
 #include "range_tree.h"
 
 /*
@@ -55,6 +56,8 @@ struct bpf_arena {
 	struct vm_struct *kern_vm;
 	struct page *scratch_page;
 	struct range_tree rt;
+	struct list_head arena_types;
+	u64 arena_type_mem;
 	/* protects rt and nr_pages */
 	rqspinlock_t spinlock;
 	/* number of pages currently populated in the arena */
@@ -104,14 +107,149 @@ u64 bpf_arena_map_kern_vm_start(struct bpf_map *map)
  * @prog: a loaded BPF program
  *
  * The verifier enforces at most one arena per program and stores it in
- * prog->aux->arena. Return that arena's underlying bpf_map, or NULL if
- * @prog does not reference an arena.
+ * prog->aux->arena. The program's used_maps entry holds the arena map
+ * reference. Return that arena's underlying bpf_map, or NULL if @prog does not
+ * reference an arena.
  */
 struct bpf_map *bpf_prog_arena(struct bpf_prog *prog)
 {
 	struct bpf_arena *arena = prog->aux->arena;
 
 	return arena ? &arena->map : NULL;
+}
+
+static bool arena_type_btf_equal(const struct bpf_arena_type *type,
+				 const struct btf *btf, u32 btf_id)
+{
+	const struct btf_member *a_member, *b_member;
+	const struct btf_type *a, *b;
+	u32 i;
+
+	a = btf_type_by_id(type->btf, type->btf_id);
+	b = btf_type_by_id(btf, btf_id);
+	if (!a || !b || !__btf_type_is_struct(a) || !__btf_type_is_struct(b))
+		return false;
+	if (a->size != b->size || btf_vlen(a) != btf_vlen(b) ||
+	    BTF_INFO_KFLAG(a->info) != BTF_INFO_KFLAG(b->info))
+		return false;
+	if (strcmp(btf_name_by_offset(type->btf, a->name_off),
+		   btf_name_by_offset(btf, b->name_off)))
+		return false;
+
+	a_member = btf_members(a);
+	b_member = btf_members(b);
+	for (i = 0; i < btf_vlen(a); i++, a_member++, b_member++) {
+		if (a_member->offset != b_member->offset)
+			return false;
+		if (strcmp(btf_name_by_offset(type->btf, a_member->name_off),
+			   btf_name_by_offset(btf, b_member->name_off)))
+			return false;
+	}
+
+	return __bpf_core_types_match(type->btf, type->btf_id, btf, btf_id,
+				      false, 32) > 0 &&
+	       __bpf_core_types_match(btf, btf_id, type->btf, type->btf_id,
+				      false, 32) > 0;
+}
+
+static bool arena_type_equal(const struct bpf_arena_type *type,
+			     const struct btf *btf, u32 btf_id, u32 size,
+			     u32 slot_size, const struct btf_record *record)
+{
+	return type->size == size && type->slot_size == slot_size &&
+	       btf_record_equal(type->record, record) &&
+	       arena_type_btf_equal(type, btf, btf_id);
+}
+
+static void arena_type_free(struct bpf_arena *arena, struct bpf_arena_type *type)
+{
+	u64 off;
+
+	list_del(&type->node);
+	arena->arena_type_mem -= type->cage_size;
+	if (type->record) {
+		for (off = 0; off < type->cage_size; off += type->slot_size)
+			bpf_obj_free_fields(type->record, type->cage_base + off);
+	}
+	kvfree(type->cage_base);
+	btf_record_free(type->record);
+	btf_put(type->btf);
+	kfree(type);
+}
+
+/*
+ * TODO: Programs using one arena map can verify and release concurrently.
+ * Serialize registry lookup, cage creation, insertion, refcount acquisition,
+ * and last-reference removal before this interface is exposed as stable ABI.
+ * Allocation should happen outside the lock followed by a locked recheck.
+ * This function consumes @record on both success and failure.
+ */
+struct bpf_arena_type *bpf_arena_type_get(struct bpf_map *map, struct btf *btf,
+					  u32 btf_id, u32 size, u32 slot_size,
+					  struct btf_record *record)
+{
+	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
+	struct bpf_arena_type *type;
+	u64 arena_size, cage_size;
+
+	list_for_each_entry(type, &arena->arena_types, node) {
+		if (!arena_type_equal(type, btf, btf_id, size, slot_size, record))
+			continue;
+		refcount_inc(&type->refcnt);
+		btf_record_free(record);
+		return type;
+	}
+
+	arena_size = (u64)map->max_entries << PAGE_SHIFT;
+	cage_size = roundup_pow_of_two(arena_size);
+	if (slot_size > cage_size || cage_size > SIZE_MAX) {
+		type = ERR_PTR(-E2BIG);
+		goto free_record;
+	}
+
+	type = kzalloc(sizeof(*type), GFP_KERNEL_ACCOUNT);
+	if (!type) {
+		type = ERR_PTR(-ENOMEM);
+		goto free_record;
+	}
+	type->cage_base = kvzalloc(cage_size, GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
+	if (!type->cage_base) {
+		kfree(type);
+		type = ERR_PTR(-ENOMEM);
+		goto free_record;
+	}
+
+	refcount_set(&type->refcnt, 1);
+	type->btf = btf;
+	btf_get(btf);
+	type->btf_id = btf_id;
+	type->size = size;
+	type->slot_size = slot_size;
+	type->slot_mask = (u32)(cage_size - slot_size);
+	type->cage_size = cage_size;
+	type->record = record;
+	list_add_tail(&type->node, &arena->arena_types);
+	arena->arena_type_mem += cage_size;
+	return type;
+
+free_record:
+	btf_record_free(record);
+	return type;
+}
+
+void bpf_arena_types_put(struct bpf_map *map, struct bpf_arena_type_desc *types,
+			 u32 cnt)
+{
+	struct bpf_arena *arena;
+	u32 i;
+
+	if (!types)
+		return;
+	arena = container_of(map, struct bpf_arena, map);
+	for (i = 0; i < cnt; i++)
+		if (refcount_dec_and_test(&types[i].type->refcnt))
+			arena_type_free(arena, types[i].type);
+	kvfree(types);
 }
 
 static long arena_map_peek_elem(struct bpf_map *map, void *value)
@@ -306,6 +444,7 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 	if (arena->user_vm_start)
 		arena->user_vm_end = arena->user_vm_start + vm_range;
 
+	INIT_LIST_HEAD(&arena->arena_types);
 	INIT_LIST_HEAD(&arena->vma_list);
 	init_llist_head(&arena->free_spans);
 	init_irq_work(&arena->free_irq, arena_free_irq);
@@ -371,6 +510,8 @@ static void arena_map_free(struct bpf_map *map)
 {
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
 
+	WARN_ON_ONCE(!list_empty(&arena->arena_types));
+
 	/*
 	 * Check that user vma-s are not around when bpf map is freed.
 	 * mmap() holds vm_file which holds bpf_map refcnt.
@@ -419,7 +560,8 @@ static u64 arena_map_mem_usage(const struct bpf_map *map)
 {
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
 
-	return (u64)READ_ONCE(arena->nr_pages) << PAGE_SHIFT;
+	return ((u64)READ_ONCE(arena->nr_pages) << PAGE_SHIFT) +
+	       READ_ONCE(arena->arena_type_mem);
 }
 
 struct vma_list {

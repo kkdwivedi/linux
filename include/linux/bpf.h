@@ -270,11 +270,22 @@ struct btf_record {
 	struct btf_field fields[];
 };
 
-struct bpf_arena_type_desc {
+struct bpf_arena_type {
+	struct list_head node;
+	refcount_t refcnt;
+	struct btf *btf;
 	u32 btf_id;
 	u32 size;
 	u32 slot_size;
+	u32 slot_mask;
+	u64 cage_size;
+	void *cage_base;
 	struct btf_record *record;
+};
+
+struct bpf_arena_type_desc {
+	u32 btf_id;
+	struct bpf_arena_type *type;
 };
 
 /* Non-opaque version of bpf_rb_node in uapi/linux/bpf.h */
@@ -659,6 +670,11 @@ u64 bpf_arena_get_kern_vm_start(struct bpf_arena *arena);
 u64 bpf_arena_get_user_vm_start(struct bpf_arena *arena);
 u64 bpf_arena_map_kern_vm_start(struct bpf_map *map);
 struct bpf_map *bpf_prog_arena(struct bpf_prog *prog);
+struct bpf_arena_type *bpf_arena_type_get(struct bpf_map *map, struct btf *btf,
+					  u32 btf_id, u32 size, u32 slot_size,
+					  struct btf_record *record);
+void bpf_arena_types_put(struct bpf_map *map, struct bpf_arena_type_desc *types,
+			 u32 cnt);
 int bpf_obj_name_cpy(char *dst, const char *src, unsigned int size);
 
 struct bpf_offload_dev;
@@ -2731,7 +2747,6 @@ void bpf_map_free_id(struct bpf_map *map);
 struct btf_field *btf_record_find(const struct btf_record *rec,
 				  u32 offset, u32 field_mask);
 void btf_record_free(struct btf_record *rec);
-void bpf_arena_types_free(struct bpf_arena_type_desc *types, u32 cnt);
 void bpf_map_free_record(struct bpf_map *map);
 struct btf_record *btf_record_dup(const struct btf_record *rec);
 bool btf_record_equal(const struct btf_record *rec_a, const struct btf_record *rec_b);

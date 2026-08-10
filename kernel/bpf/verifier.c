@@ -15002,9 +15002,12 @@ static int cmp_arena_type_id(const void *a, const void *b)
 static int build_arena_type_desc(struct bpf_verifier_env *env, u32 btf_id,
 				 struct bpf_arena_type_desc *desc)
 {
+	struct bpf_map *arena_map = bpf_prog_arena(env->prog);
+	struct bpf_arena_type *arena_type;
 	const struct btf_type *t;
 	struct btf_record *record;
 	struct btf *btf = env->prog->aux->btf;
+	u32 slot_size;
 	u32 i;
 
 	t = btf_type_by_id(btf, btf_id);
@@ -15038,12 +15041,18 @@ static int build_arena_type_desc(struct bpf_verifier_env *env, u32 btf_id,
 		}
 	}
 
+	slot_size = roundup_pow_of_two(t->size);
+	arena_type = bpf_arena_type_get(arena_map, btf, btf_id, t->size, slot_size, record);
+	if (IS_ERR(arena_type)) {
+		verbose(env, "arena type ID %u cannot acquire a cage: %ld\n",
+			btf_id, PTR_ERR(arena_type));
+		return PTR_ERR(arena_type);
+	}
 	desc->btf_id = btf_id;
-	desc->size = t->size;
-	desc->slot_size = roundup_pow_of_two(t->size);
-	desc->record = record;
-	verbose(env, "arena type ID %u: size=%u slot_size=%u\n", btf_id,
-		desc->size, desc->slot_size);
+	desc->type = arena_type;
+	verbose(env, "arena type ID %u: size=%u slot_size=%u cage_size=%llu mask=0x%x\n",
+		btf_id, arena_type->size, arena_type->slot_size, arena_type->cage_size,
+		arena_type->slot_mask);
 	return 0;
 }
 
@@ -15104,7 +15113,7 @@ static int collect_arena_types(struct bpf_verifier_env *env)
 	return 0;
 
 free_types:
-	bpf_arena_types_free(types, type_cnt);
+	bpf_arena_types_put(bpf_prog_arena(env->prog), types, type_cnt);
 free_ids:
 	kvfree(type_ids);
 	return err;
@@ -18488,6 +18497,10 @@ next_insn:
 /* drop refcnt of maps used by the rejected program */
 static void release_maps(struct bpf_verifier_env *env)
 {
+	bpf_arena_types_put(bpf_prog_arena(env->prog), env->prog->aux->arena_types,
+			    env->prog->aux->arena_type_cnt);
+	env->prog->aux->arena_types = NULL;
+	env->prog->aux->arena_type_cnt = 0;
 	__bpf_free_used_maps(env->prog->aux, env->used_maps,
 			     env->used_map_cnt);
 }

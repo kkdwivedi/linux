@@ -698,15 +698,6 @@ void btf_record_free(struct btf_record *rec)
 	kfree(rec);
 }
 
-void bpf_arena_types_free(struct bpf_arena_type_desc *types, u32 cnt)
-{
-	u32 i;
-
-	for (i = 0; i < cnt; i++)
-		btf_record_free(types[i].record);
-	kvfree(types);
-}
-
 void bpf_map_free_record(struct bpf_map *map)
 {
 	btf_record_free(map->record);
@@ -2449,7 +2440,8 @@ static void __bpf_prog_put_rcu(struct rcu_head *rcu)
 static void __bpf_prog_put_noref(struct bpf_prog *prog, bool deferred)
 {
 	bpf_prog_kallsyms_del_all(prog);
-	bpf_arena_types_free(prog->aux->arena_types, prog->aux->arena_type_cnt);
+	bpf_arena_types_put(bpf_prog_arena(prog), prog->aux->arena_types,
+			    prog->aux->arena_type_cnt);
 	btf_put(prog->aux->btf);
 	module_put(prog->aux->mod);
 	kvfree(prog->aux->jited_linfo);
