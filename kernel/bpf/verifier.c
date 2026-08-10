@@ -368,7 +368,8 @@ static struct btf_record *reg_btf_record(const struct bpf_reg_state *reg)
 
 	if (reg->type == PTR_TO_MAP_VALUE) {
 		rec = reg->map_ptr->record;
-	} else if (type_is_ptr_alloc_obj(reg->type)) {
+	} else if (type_is_ptr_alloc_obj(reg->type) ||
+		   type_is_ptr_arena_obj(reg->type)) {
 		meta = btf_find_struct_meta(reg->btf, reg->btf_id);
 		if (meta)
 			rec = meta->record;
@@ -3297,6 +3298,8 @@ static bool is_pointer_regtype(enum bpf_reg_type type)
 static bool __is_pointer_value(bool allow_ptr_leaks,
 			       const struct bpf_reg_state *reg)
 {
+	if (type_is_ptr_arena_obj(reg->type))
+		return true;
 	if (allow_ptr_leaks)
 		return false;
 
@@ -3413,8 +3416,9 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 	/* caller checked that off % size == 0 and -MAX_BPF_STACK <= off < 0,
 	 * so it's aligned access and [off, off + size) are within stack limits
 	 */
-	if (!env->allow_ptr_leaks &&
-	    bpf_is_spilled_reg(&state->stack[spi]) &&
+	if (bpf_is_spilled_reg(&state->stack[spi]) &&
+	    (!env->allow_ptr_leaks ||
+	     type_is_ptr_arena_obj(state->stack[spi].spilled_ptr.type)) &&
 	    !bpf_is_spilled_scalar_reg(&state->stack[spi]) &&
 	    size != BPF_REG_SIZE) {
 		verbose(env, "attempt to corrupt spilled pointer on stack\n");
@@ -3574,7 +3578,9 @@ static int check_stack_write_var_off(struct bpf_verifier_env *env,
 		stype = &state->stack[spi].slot_type[slot % BPF_REG_SIZE];
 		mark_stack_slot_scratched(env, spi);
 
-		if (!env->allow_ptr_leaks && *stype != STACK_MISC && *stype != STACK_ZERO) {
+		if ((!env->allow_ptr_leaks ||
+		     type_is_ptr_arena_obj(state->stack[spi].spilled_ptr.type)) &&
+		    *stype != STACK_MISC && *stype != STACK_ZERO) {
 			/* Reject the write if range we may write to has not
 			 * been initialized beforehand. If we didn't reject
 			 * here, the ptr status would be erased below (even
@@ -5752,16 +5758,7 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 	u32 btf_id = 0;
 	int ret;
 
-	/*
-	 * The type cast is useful before typed arena address lowering exists,
-	 * but dereferencing it would still use the untyped arena mapping.
-	 */
-	if (type_is_ptr_arena_obj(reg->type)) {
-		verbose(env, "typed arena access is not supported yet\n");
-		return -EACCES;
-	}
-
-	if (!env->allow_ptr_leaks) {
+	if (!type_is_ptr_arena_obj(reg->type) && !env->allow_ptr_leaks) {
 		verbose(env,
 			"'struct %s' access is allowed only to CAP_PERFMON and CAP_SYS_ADMIN\n",
 			tname);
@@ -5812,7 +5809,8 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
-	if (env->ops->btf_struct_access && !type_is_alloc(reg->type) && atype == BPF_WRITE) {
+	if (env->ops->btf_struct_access && !type_is_alloc(reg->type) &&
+	    !type_is_ptr_arena_obj(reg->type) && atype == BPF_WRITE) {
 		if (!btf_is_kernel(reg->btf)) {
 			verifier_bug(env, "reg->btf must be kernel btf");
 			return -EFAULT;
@@ -5823,10 +5821,11 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 				"%s cannot write into ptr_%s at off=%d size=%d\n",
 				reg_arg_name(env, argno), tname, off, size);
 	} else {
-		/* Writes are permitted with default btf_struct_access for
-		 * program allocated objects (which always have id > 0).
+		/* Writes are permitted with default btf_struct_access for local
+		 * program-allocated and typed arena objects.
 		 */
-		if (atype != BPF_READ && !type_is_ptr_alloc_obj(reg->type)) {
+		if (atype != BPF_READ && !type_is_ptr_alloc_obj(reg->type) &&
+		    !type_is_ptr_arena_obj(reg->type)) {
 			verbose(env, "only read is supported\n");
 			return -EACCES;
 		}
@@ -6107,6 +6106,11 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 	size = bpf_size_to_bytes(bpf_size);
 	if (size < 0)
 		return size;
+	if (t == BPF_WRITE && value_regno >= 0 &&
+	    type_is_ptr_arena_obj(regs[value_regno].type) && reg->type != PTR_TO_STACK) {
+		verbose(env, "R%d leaks typed arena addr into mem\n", value_regno);
+		return -EACCES;
+	}
 
 	err = check_ptr_alignment(env, reg, off, size, strict_alignment_once);
 	if (err)
@@ -6710,7 +6714,8 @@ static int check_stack_range_initialized(
 
 		if (bpf_is_spilled_reg(&state->stack[spi]) &&
 		    (state->stack[spi].spilled_ptr.type == SCALAR_VALUE ||
-		     env->allow_ptr_leaks)) {
+		     (env->allow_ptr_leaks &&
+		      !type_is_ptr_arena_obj(state->stack[spi].spilled_ptr.type)))) {
 			if (clobber) {
 				__mark_reg_unknown(env, &state->stack[spi].spilled_ptr);
 				for (j = 0; j < BPF_REG_SIZE; j++)
@@ -13719,7 +13724,8 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 
 	if (BPF_CLASS(insn->code) != BPF_ALU64) {
 		/* 32-bit ALU ops on pointers produce (meaningless) scalars */
-		if (opcode == BPF_SUB && env->allow_ptr_leaks) {
+		if (opcode == BPF_SUB && env->allow_ptr_leaks &&
+		    !type_is_ptr_arena_obj(ptr_reg->type)) {
 			__mark_reg_unknown(env, dst_reg);
 			return 0;
 		}
@@ -14822,7 +14828,9 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 				 * an arbitrary scalar. Disallow all math except
 				 * pointer subtraction
 				 */
-				if (opcode == BPF_SUB && env->allow_ptr_leaks) {
+				if (opcode == BPF_SUB && env->allow_ptr_leaks &&
+				    !type_is_ptr_arena_obj(dst_reg->type) &&
+				    !type_is_ptr_arena_obj(src_reg->type)) {
 					mark_reg_unknown(env, regs, insn->dst_reg);
 					return 0;
 				}
