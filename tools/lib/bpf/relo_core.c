@@ -131,6 +131,13 @@ static bool core_relo_is_type_based(enum bpf_core_relo_kind kind)
 	}
 }
 
+static bool is_arena_type_cast_insn(const struct bpf_insn *insn)
+{
+	return insn->code == (BPF_ALU64 | BPF_MOV | BPF_X) &&
+	       insn->off == BPF_ARENA_TYPE_CAST &&
+	       insn->dst_reg == insn->src_reg;
+}
+
 static bool core_relo_is_enumval_based(enum bpf_core_relo_kind kind)
 {
 	switch (kind) {
@@ -1064,7 +1071,13 @@ poison:
 	switch (class) {
 	case BPF_ALU:
 	case BPF_ALU64:
-		if (BPF_SRC(insn->code) != BPF_K)
+		/*
+		 * Arena type casts use BPF_X for the pointer source while their
+		 * immediate carries a relocatable program-local BTF ID.
+		 */
+		if (BPF_SRC(insn->code) != BPF_K &&
+		    (relo->kind != BPF_CORE_TYPE_ID_LOCAL ||
+		     !is_arena_type_cast_insn(insn)))
 			return -EINVAL;
 		if (res->validate && insn->imm != orig_val) {
 			pr_warn("prog '%s': relo #%d: unexpected insn #%d (ALU/ALU64) value: got %d, exp %llu -> %llu\n",

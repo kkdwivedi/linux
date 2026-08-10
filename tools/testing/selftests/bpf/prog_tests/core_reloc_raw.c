@@ -11,8 +11,41 @@
 #include "test_progs.h"
 #include "test_btf.h"
 #include "bpf/libbpf_internal.h"
+#include "bpf/relo_core.h"
 
 static char log[16 * 1024];
+
+static void test_arena_type_cast_relo(void)
+{
+	struct bpf_core_relo local_relo = {
+		.kind = BPF_CORE_TYPE_ID_LOCAL,
+	};
+	struct bpf_core_relo target_relo = {
+		.kind = BPF_CORE_TYPE_ID_TARGET,
+	};
+	struct bpf_core_relo_res res = {
+		.new_val = 42,
+	};
+	struct bpf_insn insn;
+	int err;
+
+	insn = BPF_RAW_INSN(BPF_ALU64 | BPF_MOV | BPF_X,
+			    BPF_REG_1, BPF_REG_1, BPF_ARENA_TYPE_CAST, 2);
+	err = bpf_core_patch_insn("arena_type_cast", &insn, 0, &local_relo, 0, &res);
+	if (!ASSERT_OK(err, "patch_local_type_id"))
+		return;
+	ASSERT_EQ(insn.imm, 42, "local_type_id");
+
+	insn = BPF_RAW_INSN(BPF_ALU64 | BPF_MOV | BPF_X,
+			    BPF_REG_1, BPF_REG_2, BPF_ARENA_TYPE_CAST, 2);
+	err = bpf_core_patch_insn("arena_type_cast", &insn, 0, &local_relo, 0, &res);
+	ASSERT_EQ(err, -EINVAL, "reject_different_registers");
+
+	insn = BPF_RAW_INSN(BPF_ALU64 | BPF_MOV | BPF_X,
+			    BPF_REG_1, BPF_REG_1, BPF_ARENA_TYPE_CAST, 2);
+	err = bpf_core_patch_insn("arena_type_cast", &insn, 0, &target_relo, 0, &res);
+	ASSERT_EQ(err, -EINVAL, "reject_target_type_id");
+}
 
 /* Check that verifier rejects BPF program containing relocation
  * pointing to non-existent BTF type.
@@ -120,6 +153,8 @@ out:
 
 void test_core_reloc_raw(void)
 {
+	if (test__start_subtest("arena_type_cast"))
+		test_arena_type_cast_relo();
 	if (test__start_subtest("bad_local_id"))
 		test_bad_local_id();
 }
