@@ -270,6 +270,13 @@ struct btf_record {
 	struct btf_field fields[];
 };
 
+struct bpf_arena_type_desc {
+	u32 btf_id;
+	u32 size;
+	u32 slot_size;
+	struct btf_record *record;
+};
+
 /* Non-opaque version of bpf_rb_node in uapi/linux/bpf.h */
 struct bpf_rb_node_kern {
 	struct rb_node rb_node;
@@ -1744,6 +1751,7 @@ struct bpf_prog_aux {
 	atomic64_t refcnt;
 	u32 used_map_cnt;
 	u32 used_btf_cnt;
+	u32 arena_type_cnt;
 	u32 max_ctx_offset;
 	u32 max_pkt_offset;
 	u32 max_tp_access;
@@ -1790,6 +1798,7 @@ struct bpf_prog_aux {
 	u64 prog_array_member_cnt; /* counts how many times as member of prog_array */
 	struct mutex ext_mutex; /* mutex for is_extended and prog_array_member_cnt */
 	struct bpf_arena *arena;
+	struct bpf_arena_type_desc *arena_types;
 	void (*recursion_detected)(struct bpf_prog *prog); /* callback if recursion is detected */
 	/* BTF_KIND_FUNC_PROTO for valid attach_btf_id */
 	const struct btf_type *attach_func_proto;
@@ -2722,6 +2731,7 @@ void bpf_map_free_id(struct bpf_map *map);
 struct btf_field *btf_record_find(const struct btf_record *rec,
 				  u32 offset, u32 field_mask);
 void btf_record_free(struct btf_record *rec);
+void bpf_arena_types_free(struct bpf_arena_type_desc *types, u32 cnt);
 void bpf_map_free_record(struct bpf_map *map);
 struct btf_record *btf_record_dup(const struct btf_record *rec);
 bool btf_record_equal(const struct btf_record *rec_a, const struct btf_record *rec_b);

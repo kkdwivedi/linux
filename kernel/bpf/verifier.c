@@ -8,6 +8,7 @@
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/slab.h>
+#include <linux/sizes.h>
 #include <linux/bpf.h>
 #include <linux/btf.h>
 #include <linux/bpf_verifier.h>
@@ -14982,6 +14983,133 @@ static int check_arena_type_cast(struct bpf_verifier_env *env,
 	return 0;
 }
 
+#define BPF_ARENA_TYPE_FIELDS \
+	(BPF_SPIN_LOCK | BPF_RES_SPIN_LOCK | BPF_TIMER | BPF_KPTR | \
+	 BPF_LIST_HEAD | BPF_LIST_NODE | BPF_RB_ROOT | BPF_RB_NODE | \
+	 BPF_REFCOUNT | BPF_WORKQUEUE | BPF_UPTR | BPF_TASK_WORK)
+
+#define BPF_ARENA_TYPE_SUPPORTED_FIELDS \
+	(BPF_SPIN_LOCK | BPF_RES_SPIN_LOCK | BPF_KPTR)
+
+static int cmp_arena_type_id(const void *a, const void *b)
+{
+	u32 id_a = *(const u32 *)a;
+	u32 id_b = *(const u32 *)b;
+
+	return (id_a > id_b) - (id_a < id_b);
+}
+
+static int build_arena_type_desc(struct bpf_verifier_env *env, u32 btf_id,
+				 struct bpf_arena_type_desc *desc)
+{
+	const struct btf_type *t;
+	struct btf_record *record;
+	struct btf *btf = env->prog->aux->btf;
+	u32 i;
+
+	t = btf_type_by_id(btf, btf_id);
+	if (!t || !__btf_type_is_struct(t)) {
+		verbose(env, "arena_type_cast type ID %u is not a struct\n", btf_id);
+		return -EINVAL;
+	}
+	if (!t->size) {
+		verbose(env, "arena type ID %u has zero size\n", btf_id);
+		return -EINVAL;
+	}
+	if (t->size > SZ_2G) {
+		verbose(env, "arena type ID %u is too large: %u bytes\n", btf_id, t->size);
+		return -E2BIG;
+	}
+
+	record = btf_parse_fields(btf, t, BPF_ARENA_TYPE_FIELDS, t->size);
+	if (IS_ERR(record)) {
+		verbose(env, "arena type ID %u has invalid special fields\n", btf_id);
+		return PTR_ERR(record);
+	}
+
+	if (record) {
+		for (i = 0; i < record->cnt; i++) {
+			if (record->fields[i].type & BPF_ARENA_TYPE_SUPPORTED_FIELDS)
+				continue;
+			verbose(env, "arena type ID %u field %s is not supported\n", btf_id,
+				btf_field_type_name(record->fields[i].type));
+			btf_record_free(record);
+			return -EOPNOTSUPP;
+		}
+	}
+
+	desc->btf_id = btf_id;
+	desc->size = t->size;
+	desc->slot_size = roundup_pow_of_two(t->size);
+	desc->record = record;
+	verbose(env, "arena type ID %u: size=%u slot_size=%u\n", btf_id,
+		desc->size, desc->slot_size);
+	return 0;
+}
+
+static int collect_arena_types(struct bpf_verifier_env *env)
+{
+	struct bpf_arena_type_desc *types;
+	struct bpf_prog_aux *aux = env->prog->aux;
+	struct bpf_insn *insn;
+	u32 *type_ids;
+	u32 cast_cnt = 0, type_cnt = 0;
+	int err, i;
+
+	for (i = 0; i < env->prog->len; i++)
+		if (insn_is_arena_type_cast(&env->prog->insnsi[i]))
+			cast_cnt++;
+	if (!cast_cnt)
+		return 0;
+	if (!env->prog->aux->btf || !bpf_prog_arena(env->prog))
+		return 0;
+
+	type_ids = kvmalloc_array(cast_cnt, sizeof(*type_ids),
+				  GFP_KERNEL_ACCOUNT | __GFP_ZERO);
+	if (!type_ids)
+		return -ENOMEM;
+
+	cast_cnt = 0;
+	for (i = 0; i < env->prog->len; i++) {
+		insn = &env->prog->insnsi[i];
+		if (insn_is_arena_type_cast(insn))
+			type_ids[cast_cnt++] = (u32)insn->imm;
+	}
+	sort(type_ids, cast_cnt, sizeof(*type_ids), cmp_arena_type_id, NULL);
+
+	for (i = 0; i < cast_cnt; i++)
+		if (!i || type_ids[i] != type_ids[i - 1])
+			type_cnt++;
+
+	types = kvmalloc_array(type_cnt, sizeof(*types),
+			       GFP_KERNEL_ACCOUNT | __GFP_ZERO);
+	if (!types) {
+		err = -ENOMEM;
+		goto free_ids;
+	}
+
+	type_cnt = 0;
+	for (i = 0; i < cast_cnt; i++) {
+		if (i && type_ids[i] == type_ids[i - 1])
+			continue;
+		err = build_arena_type_desc(env, type_ids[i], &types[type_cnt]);
+		if (err)
+			goto free_types;
+		type_cnt++;
+	}
+
+	aux->arena_types = types;
+	aux->arena_type_cnt = type_cnt;
+	kvfree(type_ids);
+	return 0;
+
+free_types:
+	bpf_arena_types_free(types, type_cnt);
+free_ids:
+	kvfree(type_ids);
+	return err;
+}
+
 /* check validity of 32-bit and 64-bit arithmetic operations */
 static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 {
@@ -20345,6 +20473,10 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 		goto skip_full_check;
 
 	ret = mark_fastcall_patterns(env);
+	if (ret < 0)
+		goto skip_full_check;
+
+	ret = collect_arena_types(env);
 	if (ret < 0)
 		goto skip_full_check;
 
