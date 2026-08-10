@@ -361,15 +361,25 @@ static bool reg_not_null(struct bpf_verifier_env *env, const struct bpf_reg_stat
 		type == CONST_PTR_TO_MAP;
 }
 
-static struct btf_record *reg_btf_record(const struct bpf_reg_state *reg)
+static struct btf_record *reg_btf_record(const struct bpf_verifier_env *env,
+					 const struct bpf_reg_state *reg)
 {
 	struct btf_record *rec = NULL;
 	struct btf_struct_meta *meta;
+	u32 i;
 
 	if (reg->type == PTR_TO_MAP_VALUE) {
 		rec = reg->map_ptr->record;
-	} else if (type_is_ptr_alloc_obj(reg->type) ||
-		   type_is_ptr_arena_obj(reg->type)) {
+	} else if (type_is_ptr_arena_obj(reg->type)) {
+		for (i = 0; i < env->prog->aux->arena_type_cnt; i++) {
+			struct bpf_arena_type_desc *desc = &env->prog->aux->arena_types[i];
+
+			if (desc->btf_id == reg->btf_id) {
+				rec = desc->type->record;
+				break;
+			}
+		}
+	} else if (type_is_ptr_alloc_obj(reg->type)) {
 		meta = btf_find_struct_meta(reg->btf, reg->btf_id);
 		if (meta)
 			rec = meta->record;
@@ -432,9 +442,11 @@ static bool subprog_is_exc_cb(struct bpf_verifier_env *env, int subprog)
 	return subprog_info(env, subprog)->is_exception_cb;
 }
 
-static bool reg_may_point_to_spin_lock(const struct bpf_reg_state *reg)
+static bool reg_may_point_to_spin_lock(const struct bpf_verifier_env *env,
+				       const struct bpf_reg_state *reg)
 {
-	return btf_record_has_field(reg_btf_record(reg), BPF_SPIN_LOCK | BPF_RES_SPIN_LOCK);
+	return btf_record_has_field(reg_btf_record(env, reg),
+				    BPF_SPIN_LOCK | BPF_RES_SPIN_LOCK);
 }
 
 static bool type_is_rdonly_mem(u32 type)
@@ -7052,7 +7064,7 @@ static int process_spin_lock(struct bpf_verifier_env *env, struct bpf_reg_state 
 		btf = reg->btf;
 	}
 
-	rec = reg_btf_record(reg);
+	rec = reg_btf_record(env, reg);
 	if (!btf_record_has_field(rec, is_res_lock ? BPF_RES_SPIN_LOCK : BPF_SPIN_LOCK)) {
 		verbose(env, "%s '%s' has no valid %s_lock\n", map ? "map" : "local",
 			map ? map->name : "kptr", lock_str);
@@ -7210,8 +7222,8 @@ static int process_kptr_func(struct bpf_verifier_env *env, int regno,
 	struct btf_record *rec;
 	u32 kptr_off;
 
-	if (type_is_ptr_alloc_obj(reg->type)) {
-		rec = reg_btf_record(reg);
+	if (type_is_ptr_alloc_obj(reg->type) || type_is_ptr_arena_obj(reg->type)) {
+		rec = reg_btf_record(env, reg);
 	} else { /* PTR_TO_MAP_VALUE */
 		map_ptr = reg->map_ptr;
 		if (!map_ptr->btf) {
@@ -7801,6 +7813,7 @@ static const struct bpf_reg_types spin_lock_types = {
 	.types = {
 		PTR_TO_MAP_VALUE,
 		PTR_TO_BTF_ID | MEM_ALLOC,
+		PTR_TO_BTF_ID | MEM_ARENA,
 	}
 };
 
@@ -7833,6 +7846,7 @@ static const struct bpf_reg_types kptr_xchg_dest_types = {
 		PTR_TO_BTF_ID | MEM_ALLOC,
 		PTR_TO_BTF_ID | MEM_ALLOC | NON_OWN_REF,
 		PTR_TO_BTF_ID | MEM_ALLOC | NON_OWN_REF | MEM_RCU,
+		PTR_TO_BTF_ID | MEM_ARENA,
 	}
 };
 static const struct bpf_reg_types dynptr_types = {
@@ -8013,6 +8027,14 @@ found:
 				return -EACCES;
 		}
 		break;
+	case PTR_TO_BTF_ID | MEM_ARENA:
+		if (meta->func_id != BPF_FUNC_spin_lock &&
+		    meta->func_id != BPF_FUNC_spin_unlock &&
+		    meta->func_id != BPF_FUNC_kptr_xchg) {
+			verifier_bug(env, "unimplemented handling of MEM_ARENA");
+			return -EFAULT;
+		}
+		break;
 	case PTR_TO_BTF_ID | MEM_PERCPU:
 	case PTR_TO_BTF_ID | MEM_PERCPU | MEM_RCU:
 	case PTR_TO_BTF_ID | MEM_PERCPU | PTR_TRUSTED:
@@ -8026,12 +8048,13 @@ found:
 }
 
 static struct btf_field *
-reg_find_field_offset(const struct bpf_reg_state *reg, s32 off, u32 fields)
+reg_find_field_offset(const struct bpf_verifier_env *env,
+		      const struct bpf_reg_state *reg, s32 off, u32 fields)
 {
 	struct btf_field *field;
 	struct btf_record *rec;
 
-	rec = reg_btf_record(reg);
+	rec = reg_btf_record(env, reg);
 	if (!rec)
 		return NULL;
 
@@ -8100,6 +8123,7 @@ static int __check_func_arg_reg_off(struct bpf_verifier_env *env,
 	case PTR_TO_BTF_ID | MEM_RCU:
 	case PTR_TO_BTF_ID | MEM_ALLOC | NON_OWN_REF:
 	case PTR_TO_BTF_ID | MEM_ALLOC | NON_OWN_REF | MEM_RCU:
+	case PTR_TO_BTF_ID | MEM_ARENA:
 		/* When referenced PTR_TO_BTF_ID is passed to release function,
 		 * its fixed offset must be 0. In the other cases, fixed offset
 		 * can be non-zero unless the caller requires otherwise.
@@ -9681,7 +9705,7 @@ static int set_rbtree_add_callback_state(struct bpf_verifier_env *env,
 	 */
 	struct btf_field *field;
 
-	field = reg_find_field_offset(&caller->regs[BPF_REG_1],
+	field = reg_find_field_offset(env, &caller->regs[BPF_REG_1],
 				      caller->regs[BPF_REG_1].var_off.value,
 				      BPF_RB_ROOT);
 	if (!field || !field->graph_root.value_btf_id)
@@ -11601,7 +11625,7 @@ static int process_irq_flag(struct bpf_verifier_env *env, struct bpf_reg_state *
 
 static int ref_set_non_owning(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
 {
-	struct btf_record *rec = reg_btf_record(reg);
+	struct btf_record *rec = reg_btf_record(env, reg);
 
 	if (!env->cur_state->active_locks) {
 		verifier_bug(env, "%s w/o active lock", __func__);
@@ -11870,7 +11894,7 @@ __process_kf_arg_ptr_to_graph_root(struct bpf_verifier_env *env,
 		return -EINVAL;
 	}
 
-	rec = reg_btf_record(reg);
+	rec = reg_btf_record(env, reg);
 	head_off = reg->var_off.value;
 	field = btf_record_find(rec, head_off, head_field_type);
 	if (!field) {
@@ -11939,7 +11963,7 @@ __process_kf_arg_ptr_to_graph_node(struct bpf_verifier_env *env,
 	}
 
 	node_off = reg->var_off.value;
-	field = reg_find_field_offset(reg, node_off, node_field_type);
+	field = reg_find_field_offset(env, reg, node_off, node_field_type);
 	if (!field) {
 		verbose(env, "%s not found at offset=%u\n", node_type_name, node_off);
 		return -EINVAL;
@@ -12462,7 +12486,7 @@ check_ok:
 			if (!type_is_non_owning_ref(reg->type))
 				meta->arg_owning_ref = true;
 
-			rec = reg_btf_record(reg);
+			rec = reg_btf_record(env, reg);
 			if (!rec) {
 				verifier_bug(env, "Couldn't find btf_record");
 				return -EFAULT;
@@ -12531,8 +12555,10 @@ check_ok:
 		{
 			int flags = PROCESS_RES_LOCK;
 
-			if (reg->type != PTR_TO_MAP_VALUE && reg->type != (PTR_TO_BTF_ID | MEM_ALLOC)) {
-				verbose(env, "%s doesn't point to map value or allocated object\n",
+			if (reg->type != PTR_TO_MAP_VALUE &&
+			    reg->type != (PTR_TO_BTF_ID | MEM_ALLOC) &&
+			    reg->type != (PTR_TO_BTF_ID | MEM_ARENA)) {
+				verbose(env, "%s doesn't point to a lock-bearing object\n",
 					reg_arg_name(env, argno));
 				return -EINVAL;
 			}
@@ -13285,7 +13311,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			ref_set_non_owning(env, &regs[BPF_REG_0]);
 		}
 
-		if (reg_may_point_to_spin_lock(&regs[BPF_REG_0]) && !regs[BPF_REG_0].id)
+		if (reg_may_point_to_spin_lock(env, &regs[BPF_REG_0]) && !regs[BPF_REG_0].id)
 			regs[BPF_REG_0].id = ++env->id_gen;
 	} else if (btf_type_is_void(t)) {
 		if (meta.btf == btf_vmlinux) {
