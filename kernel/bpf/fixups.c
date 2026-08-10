@@ -644,6 +644,24 @@ int bpf_opt_remove_nops(struct bpf_verifier_env *env)
 	return 0;
 }
 
+int bpf_opt_remove_arena_type_casts(struct bpf_verifier_env *env)
+{
+	int i, err;
+
+	for (i = 0; i < env->prog->len;) {
+		if (!insn_is_arena_type_cast(&env->prog->insnsi[i])) {
+			i++;
+			continue;
+		}
+
+		err = verifier_remove_insns(env, i, 1);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
 int bpf_opt_subreg_zext_lo32_rnd_hi32(struct bpf_verifier_env *env,
 					 const union bpf_attr *attr)
 {
@@ -2657,4 +2675,3 @@ int bpf_remove_fastcall_spills_fills(struct bpf_verifier_env *env)
 
 	return 0;
 }
-

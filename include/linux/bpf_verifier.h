@@ -1340,6 +1340,11 @@ static inline bool type_is_ptr_alloc_obj(u32 type)
 	return base_type(type) == PTR_TO_BTF_ID && type_flag(type) & MEM_ALLOC;
 }
 
+static inline bool type_is_ptr_arena_obj(u32 type)
+{
+	return base_type(type) == PTR_TO_BTF_ID && type_flag(type) & MEM_ARENA;
+}
+
 static inline bool type_is_non_owning_ref(u32 type)
 {
 	return type_is_ptr_alloc_obj(type) && type_flag(type) & NON_OWN_REF;
@@ -1660,6 +1665,7 @@ int bpf_optimize_bpf_loop(struct bpf_verifier_env *env);
 void bpf_opt_hard_wire_dead_code_branches(struct bpf_verifier_env *env);
 int bpf_opt_remove_dead_code(struct bpf_verifier_env *env);
 int bpf_opt_remove_nops(struct bpf_verifier_env *env);
+int bpf_opt_remove_arena_type_casts(struct bpf_verifier_env *env);
 int bpf_opt_subreg_zext_lo32_rnd_hi32(struct bpf_verifier_env *env, const union bpf_attr *attr);
 int bpf_convert_ctx_accesses(struct bpf_verifier_env *env);
 int bpf_jit_subprogs(struct bpf_verifier_env *env);

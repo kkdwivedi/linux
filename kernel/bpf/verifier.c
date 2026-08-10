@@ -5751,6 +5751,15 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 	u32 btf_id = 0;
 	int ret;
 
+	/*
+	 * The type cast is useful before typed arena address lowering exists,
+	 * but dereferencing it would still use the untyped arena mapping.
+	 */
+	if (type_is_ptr_arena_obj(reg->type)) {
+		verbose(env, "typed arena access is not supported yet\n");
+		return -EACCES;
+	}
+
 	if (!env->allow_ptr_leaks) {
 		verbose(env,
 			"'struct %s' access is allowed only to CAP_PERFMON and CAP_SYS_ADMIN\n",
@@ -14932,6 +14941,47 @@ clear_id:
 	return 0;
 }
 
+static int check_arena_type_cast(struct bpf_verifier_env *env,
+				 struct bpf_insn *insn)
+{
+	struct bpf_reg_state *regs = cur_regs(env);
+	struct bpf_reg_state *reg = &regs[insn->src_reg];
+	const struct btf_type *t;
+	struct btf *btf;
+	u32 btf_id;
+
+	if (!env->prog->aux->arena) {
+		verbose(env, "arena_type_cast insn requires an associated arena\n");
+		return -EINVAL;
+	}
+
+	if (reg->type != PTR_TO_ARENA && !type_is_ptr_arena_obj(reg->type)) {
+		verbose(env, "R%d has type %s, expected arena or typed arena pointer\n",
+			insn->src_reg, reg_type_str(env, reg->type));
+		return -EACCES;
+	}
+
+	btf = env->prog->aux->btf;
+	if (!btf) {
+		verbose(env, "arena_type_cast insn requires program BTF\n");
+		return -EINVAL;
+	}
+
+	btf_id = (u32)insn->imm;
+	t = btf_type_by_id(btf, btf_id);
+	if (!t || !__btf_type_is_struct(t)) {
+		verbose(env, "arena_type_cast type ID %u is not a struct\n", btf_id);
+		return -EINVAL;
+	}
+
+	mark_reg_known_zero(env, regs, insn->dst_reg);
+	reg = &regs[insn->dst_reg];
+	reg->type = PTR_TO_BTF_ID | MEM_ARENA;
+	reg->btf = btf;
+	reg->btf_id = btf_id;
+	return 0;
+}
+
 /* check validity of 32-bit and 64-bit arithmetic operations */
 static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 {
@@ -14966,9 +15016,11 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	} else if (opcode == BPF_MOV) {
 
 		if (BPF_SRC(insn->code) == BPF_X) {
-			if (insn->off == BPF_ADDR_SPACE_CAST) {
+			if (insn->off == BPF_ADDR_SPACE_CAST ||
+			    insn->off == BPF_ARENA_TYPE_CAST) {
 				if (!env->prog->aux->arena) {
-					verbose(env, "addr_space_cast insn can only be used in a program that has an associated arena\n");
+					verbose(env,
+						"special arena cast insn requires an associated arena\n");
 					return -EINVAL;
 				}
 			}
@@ -14989,7 +15041,9 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 			struct bpf_reg_state *dst_reg = regs + insn->dst_reg;
 
 			if (BPF_CLASS(insn->code) == BPF_ALU64) {
-				if (insn->imm) {
+				if (insn->off == BPF_ARENA_TYPE_CAST) {
+					return check_arena_type_cast(env, insn);
+				} else if (insn->imm) {
 					/* off == BPF_ADDR_SPACE_CAST */
 					mark_reg_unknown(env, regs, insn->dst_reg);
 					if (insn->imm == 1) /* cast from as(1) to as(0) */
@@ -17996,6 +18050,12 @@ static int check_alu_fields(struct bpf_verifier_env *env, struct bpf_insn *insn)
 					verbose(env, "addr_space_cast insn can only convert between address space 1 and 0\n");
 					return -EINVAL;
 				}
+			} else if (insn->off == BPF_ARENA_TYPE_CAST) {
+				if (insn->dst_reg != insn->src_reg || insn->imm <= 0) {
+					verbose(env,
+						"arena_type_cast requires dst == src and imm > 0\n");
+					return -EINVAL;
+				}
 			} else if ((insn->off != 0 && insn->off != 8 &&
 				    insn->off != 16 && insn->off != 32) || insn->imm) {
 				verbose(env, "BPF_MOV uses reserved fields\n");
@@ -20321,6 +20381,9 @@ skip_full_check:
 		if (ret == 0)
 			sanitize_dead_code(env);
 	}
+
+	if (ret == 0)
+		ret = bpf_opt_remove_arena_type_casts(env);
 
 	if (ret == 0)
 		/* program is valid, convert *(u32*)(ctx + off) accesses */
