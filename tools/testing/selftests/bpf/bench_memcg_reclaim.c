@@ -2,6 +2,7 @@
 
 #define _GNU_SOURCE
 
+#include <arpa/inet.h>
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 #include <errno.h>
@@ -19,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
 #include <sys/sysinfo.h>
@@ -31,8 +33,9 @@
 #include "bench_memcg_reclaim.skel.h"
 
 #define LATENCY_BUCKETS 64
-#define MAX_MODES 4
+#define MAX_MODES 6
 #define MAX_WORKERS 4
+#define MAX_BATCH_THREADS 16
 #define MISSING UINT64_MAX
 #define NS_PER_SEC 1000000000ULL
 #define NS_PER_MSEC 1000000ULL
@@ -42,7 +45,9 @@ enum bench_mode {
 	MODE_KERNEL,
 	MODE_MEMORY_LOW,
 	MODE_USERSPACE,
+	MODE_BPF_FIXED_ONE,
 	MODE_BPF,
+	MODE_BPF_FIXED_MAX,
 };
 
 enum phase {
@@ -58,11 +63,20 @@ struct config {
 	char service_file[PATH_MAX];
 	char batch_file[PATH_MAX];
 	bool keep_files;
+	bool reuse_batch_file;
 	bool verbose;
+	bool memcached;
 	int repeat;
 	int pool_size;
 	int service_threads;
+	int batch_threads;
+	int memcached_port;
+	int memcached_threads;
+	int memtier_threads;
+	int memtier_clients;
 	double duration_scale;
+	char memcached_binary[PATH_MAX];
+	char memtier_binary[PATH_MAX];
 	uint64_t page_size;
 	uint64_t host_memory;
 	uint64_t parent_max;
@@ -80,6 +94,11 @@ struct config {
 	uint32_t recovery_epochs;
 	uint32_t scalein_epochs;
 	uint64_t service_rate;
+	uint64_t memcached_memory;
+	uint64_t memcached_data_size;
+	uint64_t memcached_value_size;
+	uint64_t memcached_key_count;
+	uint64_t memtier_rate;
 	uint64_t phase_ns[4];
 	uint64_t batch_rate[4];
 	enum bench_mode modes[MAX_MODES];
@@ -90,6 +109,7 @@ struct cgroup_paths {
 	char parent[PATH_MAX];
 	char service[PATH_MAX];
 	char batch[PATH_MAX];
+	char loadgen[PATH_MAX];
 };
 
 struct shared_state {
@@ -290,10 +310,20 @@ static const char *mode_name(enum bench_mode mode)
 		return "memory-low";
 	case MODE_USERSPACE:
 		return "userspace";
+	case MODE_BPF_FIXED_ONE:
+		return "bpf-fixed-1";
 	case MODE_BPF:
 		return "bpf";
+	case MODE_BPF_FIXED_MAX:
+		return "bpf-fixed-max";
 	}
 	return "unknown";
+}
+
+static bool mode_uses_bpf(enum bench_mode mode)
+{
+	return mode == MODE_BPF_FIXED_ONE || mode == MODE_BPF ||
+	       mode == MODE_BPF_FIXED_MAX;
 }
 
 static const char *phase_name(enum phase phase)
@@ -454,8 +484,12 @@ static int parse_modes(struct config *cfg, const char *arg)
 			mode = MODE_MEMORY_LOW;
 		else if (!strcmp(token, "userspace"))
 			mode = MODE_USERSPACE;
+		else if (!strcmp(token, "bpf-fixed-1"))
+			mode = MODE_BPF_FIXED_ONE;
 		else if (!strcmp(token, "bpf"))
 			mode = MODE_BPF;
+		else if (!strcmp(token, "bpf-fixed-max"))
+			mode = MODE_BPF_FIXED_MAX;
 		else {
 			free(copy);
 			return -EINVAL;
@@ -481,11 +515,26 @@ static void usage(FILE *out, const char *prog)
 {
 	fprintf(out,
 		"Usage: %s [OPTIONS]\n"
-		"  --modes LIST          kernel,memory-low,userspace,bpf\n"
+		"  --modes LIST          kernel,memory-low,userspace,bpf-fixed-1,bpf,"
+		"bpf-fixed-max\n"
 		"  --repeat N            repetitions (default 1)\n"
 		"  --duration-scale N    scale all phase durations\n"
 		"  --pool-size N         fixed controller worker count (1-4)\n"
 		"  --parent-max BYTES    override derived parent memory.max\n"
+		"  --batch-rate BYTES    steady-phase batch fault rate per second\n"
+		"  --batch-threads N     parallel batch file scanners (default 1 or 4)\n"
+		"  --batch-file PATH     reuse a preallocated batch file\n"
+		"  --workload NAME       synthetic or memcached\n"
+		"  --memcached-bin PATH  memcached executable\n"
+		"  --memtier-bin PATH    memtier_benchmark executable\n"
+		"  --memcached-memory N  memcached item-cache limit\n"
+		"  --memcached-data N    payload bytes populated before each trial\n"
+		"  --memcached-value N   value size in bytes (default 1024)\n"
+		"  --memcached-port N    loopback TCP port (default 11213)\n"
+		"  --memcached-threads N server worker threads (default 8)\n"
+		"  --memtier-threads N   load-generator threads (default 4)\n"
+		"  --memtier-clients N   clients per load-generator thread (default 4)\n"
+		"  --memtier-rate N      total open-loop operations per second\n"
 		"  --output DIR          result directory\n"
 		"  --work-dir DIR        regular-filesystem scratch directory\n"
 		"  --seed N              deterministic workload seed\n"
@@ -496,12 +545,42 @@ static void usage(FILE *out, const char *prog)
 
 static int parse_options(struct config *cfg, int argc, char **argv, uint64_t *seed)
 {
+	enum {
+		OPT_BATCH_RATE = 256,
+		OPT_BATCH_FILE,
+		OPT_BATCH_THREADS,
+		OPT_WORKLOAD,
+		OPT_MEMCACHED_BIN,
+		OPT_MEMTIER_BIN,
+		OPT_MEMCACHED_MEMORY,
+		OPT_MEMCACHED_DATA,
+		OPT_MEMCACHED_VALUE,
+		OPT_MEMCACHED_PORT,
+		OPT_MEMCACHED_THREADS,
+		OPT_MEMTIER_THREADS,
+		OPT_MEMTIER_CLIENTS,
+		OPT_MEMTIER_RATE,
+	};
 	static const struct option options[] = {
 		{ "modes", required_argument, NULL, 'm' },
 		{ "repeat", required_argument, NULL, 'r' },
 		{ "duration-scale", required_argument, NULL, 'd' },
 		{ "pool-size", required_argument, NULL, 'p' },
 		{ "parent-max", required_argument, NULL, 'M' },
+		{ "batch-rate", required_argument, NULL, OPT_BATCH_RATE },
+		{ "batch-file", required_argument, NULL, OPT_BATCH_FILE },
+		{ "batch-threads", required_argument, NULL, OPT_BATCH_THREADS },
+		{ "workload", required_argument, NULL, OPT_WORKLOAD },
+		{ "memcached-bin", required_argument, NULL, OPT_MEMCACHED_BIN },
+		{ "memtier-bin", required_argument, NULL, OPT_MEMTIER_BIN },
+		{ "memcached-memory", required_argument, NULL, OPT_MEMCACHED_MEMORY },
+		{ "memcached-data", required_argument, NULL, OPT_MEMCACHED_DATA },
+		{ "memcached-value", required_argument, NULL, OPT_MEMCACHED_VALUE },
+		{ "memcached-port", required_argument, NULL, OPT_MEMCACHED_PORT },
+		{ "memcached-threads", required_argument, NULL, OPT_MEMCACHED_THREADS },
+		{ "memtier-threads", required_argument, NULL, OPT_MEMTIER_THREADS },
+		{ "memtier-clients", required_argument, NULL, OPT_MEMTIER_CLIENTS },
+		{ "memtier-rate", required_argument, NULL, OPT_MEMTIER_RATE },
 		{ "output", required_argument, NULL, 'o' },
 		{ "work-dir", required_argument, NULL, 'w' },
 		{ "seed", required_argument, NULL, 's' },
@@ -532,6 +611,72 @@ static int parse_options(struct config *cfg, int argc, char **argv, uint64_t *se
 			if (!cfg->parent_max)
 				return -EINVAL;
 			break;
+		case OPT_BATCH_RATE:
+			cfg->batch_rate[PHASE_STEADY] = parse_size(optarg);
+			if (!cfg->batch_rate[PHASE_STEADY])
+				return -EINVAL;
+			break;
+		case OPT_BATCH_FILE:
+			if (snprintf(cfg->batch_file, sizeof(cfg->batch_file), "%s", optarg) >=
+			    sizeof(cfg->batch_file))
+				return -ENAMETOOLONG;
+			cfg->reuse_batch_file = true;
+			break;
+		case OPT_BATCH_THREADS:
+			cfg->batch_threads = atoi(optarg);
+			if (cfg->batch_threads < 1 || cfg->batch_threads > MAX_BATCH_THREADS)
+				return -EINVAL;
+			break;
+		case OPT_WORKLOAD:
+			if (!strcmp(optarg, "memcached"))
+				cfg->memcached = true;
+			else if (!strcmp(optarg, "synthetic"))
+				cfg->memcached = false;
+			else
+				return -EINVAL;
+			break;
+		case OPT_MEMCACHED_BIN:
+			if (snprintf(cfg->memcached_binary, sizeof(cfg->memcached_binary),
+				     "%s", optarg) >= sizeof(cfg->memcached_binary))
+				return -ENAMETOOLONG;
+			break;
+		case OPT_MEMTIER_BIN:
+			if (snprintf(cfg->memtier_binary, sizeof(cfg->memtier_binary),
+				     "%s", optarg) >= sizeof(cfg->memtier_binary))
+				return -ENAMETOOLONG;
+			break;
+		case OPT_MEMCACHED_MEMORY:
+			cfg->memcached_memory = parse_size(optarg);
+			if (!cfg->memcached_memory)
+				return -EINVAL;
+			break;
+		case OPT_MEMCACHED_DATA:
+			cfg->memcached_data_size = parse_size(optarg);
+			if (!cfg->memcached_data_size)
+				return -EINVAL;
+			break;
+		case OPT_MEMCACHED_VALUE:
+			cfg->memcached_value_size = parse_size(optarg);
+			if (!cfg->memcached_value_size)
+				return -EINVAL;
+			break;
+		case OPT_MEMCACHED_PORT:
+			cfg->memcached_port = atoi(optarg);
+			break;
+		case OPT_MEMCACHED_THREADS:
+			cfg->memcached_threads = atoi(optarg);
+			break;
+		case OPT_MEMTIER_THREADS:
+			cfg->memtier_threads = atoi(optarg);
+			break;
+		case OPT_MEMTIER_CLIENTS:
+			cfg->memtier_clients = atoi(optarg);
+			break;
+		case OPT_MEMTIER_RATE:
+			cfg->memtier_rate = strtoull(optarg, NULL, 0);
+			if (!cfg->memtier_rate)
+				return -EINVAL;
+			break;
 		case 'o':
 			if (snprintf(cfg->output, sizeof(cfg->output), "%s", optarg) >=
 			    sizeof(cfg->output))
@@ -559,7 +704,10 @@ static int parse_options(struct config *cfg, int argc, char **argv, uint64_t *se
 		}
 	}
 	if (optind != argc || cfg->repeat < 1 || cfg->duration_scale <= 0 ||
-	    cfg->pool_size < 1 || cfg->pool_size > MAX_WORKERS)
+	    cfg->pool_size < 1 || cfg->pool_size > MAX_WORKERS ||
+	    cfg->memcached_port < 1 || cfg->memcached_port > 65535 ||
+	    cfg->memcached_threads < 1 || cfg->memtier_threads < 1 ||
+	    cfg->memtier_clients < 1)
 		return -EINVAL;
 	return 0;
 }
@@ -576,6 +724,7 @@ static uint64_t clamp_u64(uint64_t value, uint64_t minimum, uint64_t maximum)
 static int resolve_config(struct config *cfg)
 {
 	struct statfs fs;
+	uint64_t batch_rate_bytes = cfg->batch_rate[PHASE_STEADY];
 	long cpus;
 	int i;
 
@@ -591,9 +740,29 @@ static int resolve_config(struct config *cfg)
 	cfg->parent_max -= cfg->parent_max % cfg->page_size;
 	cfg->parent_high = cfg->parent_max * 70 / 100;
 	cfg->parent_target = cfg->parent_max * 65 / 100;
-	cfg->service_file_size = cfg->parent_max * 60 / 100;
-	cfg->service_hot_size = cfg->parent_max * 45 / 100;
-	cfg->batch_file_size = cfg->parent_max * 150 / 100;
+	if (cfg->memcached) {
+		if (!cfg->memcached_memory)
+			cfg->memcached_memory = cfg->parent_max * 40 / 100;
+		if (!cfg->memcached_data_size)
+			cfg->memcached_data_size = cfg->memcached_memory * 75 / 100;
+		cfg->memcached_memory -= cfg->memcached_memory % cfg->page_size;
+		cfg->memcached_data_size -= cfg->memcached_data_size %
+			cfg->memcached_value_size;
+		if (!cfg->memcached_data_size ||
+		    cfg->memcached_data_size > cfg->memcached_memory * 85 / 100)
+			return -EINVAL;
+		cfg->memcached_key_count = cfg->memcached_data_size /
+			cfg->memcached_value_size;
+		cfg->service_file_size = 0;
+		cfg->service_hot_size = cfg->parent_max * 45 / 100;
+		cfg->batch_file_size = cfg->parent_max * 125 / 100;
+		if (access(cfg->memcached_binary, X_OK) || access(cfg->memtier_binary, X_OK))
+			return -ENOENT;
+	} else {
+		cfg->service_file_size = cfg->parent_max * 60 / 100;
+		cfg->service_hot_size = cfg->parent_max * 45 / 100;
+		cfg->batch_file_size = cfg->parent_max * 150 / 100;
+	}
 	cfg->epoch_ns = DEFAULT_EPOCH_NS;
 	cfg->quantum_pages = (16ULL << 20) / cfg->page_size;
 	cfg->max_pending_pages = cfg->parent_max / cfg->page_size;
@@ -609,14 +778,22 @@ static int resolve_config(struct config *cfg)
 	cfg->phase_ns[PHASE_BURST] = 4 * NS_PER_SEC * cfg->duration_scale;
 	cfg->phase_ns[PHASE_RECOVERY] = 6 * NS_PER_SEC * cfg->duration_scale;
 	cfg->batch_rate[PHASE_IDLE] = 0;
-	cfg->batch_rate[PHASE_STEADY] = cfg->parent_max / cfg->page_size / 20;
-	cfg->batch_rate[PHASE_BURST] = cfg->batch_rate[PHASE_STEADY] * 6;
+	if (batch_rate_bytes)
+		cfg->batch_rate[PHASE_STEADY] = batch_rate_bytes / cfg->page_size;
+	else if (cfg->memcached)
+		cfg->batch_rate[PHASE_STEADY] = cfg->parent_max / cfg->page_size / 40;
+	else
+		cfg->batch_rate[PHASE_STEADY] = cfg->parent_max / cfg->page_size / 20;
+	cfg->batch_rate[PHASE_BURST] = cfg->batch_rate[PHASE_STEADY] *
+		(cfg->memcached ? 4 : 6);
 	cfg->batch_rate[PHASE_RECOVERY] = cfg->batch_rate[PHASE_STEADY] / 2;
 	cpus = sysconf(_SC_NPROCESSORS_ONLN);
 	if (cfg->pool_size > cpus - 1 && cpus > 1)
 		cfg->pool_size = cpus - 1;
 	if (cfg->pool_size < 1)
 		cfg->pool_size = 1;
+	if (!cfg->batch_threads)
+		cfg->batch_threads = cfg->memcached ? 4 : 1;
 	if (statfs(cfg->work_dir, &fs))
 		return -errno;
 	if (fs.f_type == TMPFS_MAGIC || fs.f_type == RAMFS_MAGIC)
@@ -644,7 +821,8 @@ static int setup_cgroups(struct cgroup_paths *cgs, const struct config *cfg)
 	snprintf(cgs->parent, sizeof(cgs->parent), "/sys/fs/cgroup/memcg_reclaim_bench.%d",
 		 getpid());
 	if (path_join(cgs->service, sizeof(cgs->service), cgs->parent, "service") ||
-	    path_join(cgs->batch, sizeof(cgs->batch), cgs->parent, "batch"))
+	    path_join(cgs->batch, sizeof(cgs->batch), cgs->parent, "batch") ||
+	    path_join(cgs->loadgen, sizeof(cgs->loadgen), cgs->parent, "loadgen"))
 		return -ENAMETOOLONG;
 	err = enable_controllers("/sys/fs/cgroup");
 	if (err && err != -EBUSY)
@@ -668,10 +846,16 @@ static int setup_cgroups(struct cgroup_paths *cgs, const struct config *cfg)
 	err = mkdir_one(cgs->batch);
 	if (err)
 		return err;
+	err = mkdir_one(cgs->loadgen);
+	if (err)
+		return err;
 	err = write_number(cgs->service, "cpu.weight", 800);
 	if (err)
 		return err;
 	err = write_number(cgs->batch, "cpu.weight", 200);
+	if (err)
+		return err;
+	err = write_number(cgs->loadgen, "cpu.weight", 800);
 	if (err)
 		return err;
 	err = write_number(cgs->service, "memory.low", 0);
@@ -684,6 +868,7 @@ static void cleanup_cgroups(const struct cgroup_paths *cgs)
 {
 	rmdir(cgs->service);
 	rmdir(cgs->batch);
+	rmdir(cgs->loadgen);
 	rmdir(cgs->parent);
 }
 
@@ -751,6 +936,23 @@ static int prepare_file(const char *path, uint64_t size, uint64_t seed)
 out:
 	close(fd);
 	return err;
+}
+
+static int validate_prepared_file(const char *path, uint64_t size)
+{
+	struct stat stat;
+	int fd;
+
+	if (lstat(path, &stat))
+		return -errno;
+	if (!S_ISREG(stat.st_mode) || stat.st_size < size)
+		return -EINVAL;
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+	posix_fadvise(fd, 0, size, POSIX_FADV_DONTNEED);
+	close(fd);
+	return 0;
 }
 
 static void reset_file_cache(const char *path)
@@ -847,6 +1049,156 @@ static int reap_child(struct child_proc *child, int timeout_ms)
 	}
 	child->pid = 0;
 	return -ETIMEDOUT;
+}
+
+struct memcached_args {
+	const struct config *cfg;
+	const char *log_path;
+};
+
+struct memtier_args {
+	const struct config *cfg;
+	const char *json_path;
+	const char *log_path;
+	uint64_t duration_seconds;
+	bool prefill;
+};
+
+static int redirect_child_log(const char *path)
+{
+	int fd;
+
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+	if (fd < 0)
+		return -errno;
+	if (dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) {
+		int err = -errno;
+
+		close(fd);
+		return err;
+	}
+	close(fd);
+	return 0;
+}
+
+static int memcached_main(void *data)
+{
+	struct memcached_args *args = data;
+	const struct config *cfg = args->cfg;
+	char memory[32], port[16], threads[16];
+	char *const argv[] = {
+		(char *)cfg->memcached_binary,
+		"-l", "127.0.0.1",
+		"-p", port,
+		"-U", "0",
+		"-m", memory,
+		"-t", threads,
+		"-u", "root",
+		NULL,
+	};
+	int err;
+
+	snprintf(memory, sizeof(memory), "%" PRIu64, cfg->memcached_memory >> 20);
+	snprintf(port, sizeof(port), "%d", cfg->memcached_port);
+	snprintf(threads, sizeof(threads), "%d", cfg->memcached_threads);
+	err = redirect_child_log(args->log_path);
+	if (err)
+		return err;
+	execv(cfg->memcached_binary, argv);
+	return -errno;
+}
+
+static int memtier_main(void *data)
+{
+	struct memtier_args *args = data;
+	const struct config *cfg = args->cfg;
+	uint64_t connections = cfg->memtier_threads * cfg->memtier_clients;
+	uint64_t rate = (cfg->memtier_rate + connections - 1) / connections;
+	char port[16], threads[16], clients[16], value_size[32], keys[32];
+	char duration[32], rate_arg[64];
+	char *argv[40];
+	int argc = 0, err;
+
+	snprintf(port, sizeof(port), "%d", cfg->memcached_port);
+	snprintf(threads, sizeof(threads), "%d", cfg->memtier_threads);
+	snprintf(clients, sizeof(clients), "%d", cfg->memtier_clients);
+	snprintf(value_size, sizeof(value_size), "%" PRIu64, cfg->memcached_value_size);
+	snprintf(keys, sizeof(keys), "%" PRIu64, cfg->memcached_key_count);
+	snprintf(duration, sizeof(duration), "%" PRIu64, args->duration_seconds);
+	snprintf(rate_arg, sizeof(rate_arg), "--rate-limiting=%" PRIu64, rate);
+
+	argv[argc++] = (char *)cfg->memtier_binary;
+	argv[argc++] = "--server=127.0.0.1";
+	argv[argc++] = "--port";
+	argv[argc++] = port;
+	argv[argc++] = "--protocol=memcache_binary";
+	argv[argc++] = "--threads";
+	argv[argc++] = threads;
+	argv[argc++] = "--clients";
+	argv[argc++] = clients;
+	argv[argc++] = "--data-size";
+	argv[argc++] = value_size;
+	argv[argc++] = "--key-minimum=1";
+	argv[argc++] = "--key-maximum";
+	argv[argc++] = keys;
+	argv[argc++] = "--key-prefix=bpf-reclaim-";
+	argv[argc++] = "--hide-histogram";
+	if (args->prefill) {
+		argv[argc++] = "--ratio=1:0";
+		argv[argc++] = "--key-pattern=P:P";
+		argv[argc++] = "--requests=allkeys";
+		argv[argc++] = "--pipeline=8";
+	} else {
+		argv[argc++] = "--ratio=1:499";
+		argv[argc++] = "--key-pattern=R:R";
+		argv[argc++] = "--key-zipf-exp=0.99";
+		argv[argc++] = "--pipeline=1";
+		argv[argc++] = "--distinct-client-seed";
+		argv[argc++] = "--test-time";
+		argv[argc++] = duration;
+		argv[argc++] = rate_arg;
+		argv[argc++] = "--print-percentiles=50,95,99,99.9,99.99";
+	}
+	argv[argc++] = "--json-out-file";
+	argv[argc++] = (char *)args->json_path;
+	argv[argc] = NULL;
+
+	err = redirect_child_log(args->log_path);
+	if (err)
+		return err;
+	execv(cfg->memtier_binary, argv);
+	return -errno;
+}
+
+static int wait_for_memcached(const struct config *cfg)
+{
+	struct sockaddr_in address = {
+		.sin_family = AF_INET,
+		.sin_port = htons(cfg->memcached_port),
+	};
+	uint64_t deadline = now_ns() + 30 * NS_PER_SEC;
+
+	inet_pton(AF_INET, "127.0.0.1", &address.sin_addr);
+	while (now_ns() < deadline) {
+		int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+
+		if (fd >= 0) {
+			if (!connect(fd, (struct sockaddr *)&address, sizeof(address))) {
+				close(fd);
+				return 0;
+			}
+			close(fd);
+		}
+		usleep(50000);
+	}
+	return -ETIMEDOUT;
+}
+
+static int stop_external_child(struct child_proc *child, int timeout_ms)
+{
+	if (child->pid > 0)
+		kill(child->pid, SIGTERM);
+	return reap_child(child, timeout_ms);
 }
 
 static uint64_t xorshift64(uint64_t *state)
@@ -1005,6 +1357,7 @@ out:
 struct batch_args {
 	const struct config *cfg;
 	struct shared_state *shared;
+	unsigned int worker;
 };
 
 static uint64_t phase_target(const struct config *cfg, enum phase phase, uint64_t offset)
@@ -1023,7 +1376,7 @@ static int batch_main(void *data)
 	struct shared_state *shared = arg->shared;
 	unsigned char *mapping;
 	unsigned int sink = 0;
-	uint64_t done[4] = {}, file_pages, page = 0;
+	uint64_t done[4] = {}, file_pages, first_page, last_page, page;
 	int fd;
 
 	fd = open(cfg->batch_file, O_RDONLY | O_CLOEXEC);
@@ -1033,9 +1386,12 @@ static int batch_main(void *data)
 	close(fd);
 	if (mapping == MAP_FAILED)
 		return -errno;
-	madvise(mapping, cfg->batch_file_size, MADV_RANDOM);
+	madvise(mapping, cfg->batch_file_size, MADV_NORMAL);
 	file_pages = cfg->batch_file_size / cfg->page_size;
-	store_u32(&shared->batch_ready, 1);
+	first_page = file_pages * arg->worker / cfg->batch_threads;
+	last_page = file_pages * (arg->worker + 1) / cfg->batch_threads;
+	page = first_page;
+	fetch_add_u32(&shared->batch_ready, 1);
 	while (!load_u32(&shared->start) && !load_u32(&shared->stop))
 		sched_yield();
 	if (load_u64(&shared->start_ns) > now_ns())
@@ -1049,10 +1405,13 @@ static int batch_main(void *data)
 
 		if (phase >= 4)
 			break;
-		target = phase_target(cfg, phase, offset);
+		target = phase_target(cfg, phase, offset) / cfg->batch_threads;
+		if (arg->worker < phase_target(cfg, phase, offset) % cfg->batch_threads)
+			target++;
 		while (done[phase] < target && chunk++ < 4096 && !load_u32(&shared->stop)) {
 			sink += mapping[page * cfg->page_size];
-			page = (page + 1) % file_pages;
+			if (++page == last_page)
+				page = first_page;
 			done[phase]++;
 			fetch_add_u64(&shared->batch_pages, 1);
 		}
@@ -1070,6 +1429,18 @@ static int wait_ready(const uint32_t *word, unsigned int timeout_sec)
 	uint64_t deadline = now_ns() + timeout_sec * NS_PER_SEC;
 
 	while (!load_u32(word)) {
+		if (now_ns() >= deadline)
+			return -ETIMEDOUT;
+		usleep(1000);
+	}
+	return 0;
+}
+
+static int wait_ready_count(const uint32_t *word, uint32_t count, unsigned int timeout_sec)
+{
+	uint64_t deadline = now_ns() + timeout_sec * NS_PER_SEC;
+
+	while (load_u32(word) < count) {
 		if (now_ns() >= deadline)
 			return -ETIMEDOUT;
 		usleep(1000);
@@ -1212,8 +1583,10 @@ static int snapshot_raw_metrics(const char *raw_dir, const char *prefix,
 	static const char * const files[] = {
 		"memory.events", "memory.stat", "memory.pressure", "cpu.stat",
 	};
-	const char * const dirs[] = { cgs->parent, cgs->service, cgs->batch };
-	const char * const names[] = { "parent", "service", "batch" };
+	const char * const dirs[] = {
+		cgs->parent, cgs->service, cgs->batch, cgs->loadgen,
+	};
+	const char * const names[] = { "parent", "service", "batch", "loadgen" };
 	char src[PATH_MAX], dst[PATH_MAX], leaf[128];
 	int i, j, err;
 
@@ -1615,7 +1988,8 @@ static int run_bpf_syscall(struct bpf_program *program)
 }
 
 static int start_bpf_controller(struct bench_memcg_reclaim **skel_out,
-				const struct config *cfg, const struct cgroup_paths *cgs)
+				const struct config *cfg, const struct cgroup_paths *cgs,
+				enum bench_mode mode)
 {
 	struct bench_memcg_reclaim *skel;
 	uint64_t parent_id, service_id, batch_id;
@@ -1644,6 +2018,10 @@ static int start_bpf_controller(struct bench_memcg_reclaim **skel_out,
 	skel->bss->recovery_epochs = cfg->recovery_epochs;
 	skel->bss->scalein_epochs = cfg->scalein_epochs;
 	skel->bss->pool_size = cfg->pool_size;
+	if (mode == MODE_BPF_FIXED_ONE)
+		skel->bss->fixed_concurrency = 1;
+	else if (mode == MODE_BPF_FIXED_MAX)
+		skel->bss->fixed_concurrency = cfg->pool_size;
 	err = bench_memcg_reclaim__load(skel);
 	if (err)
 		goto out;
@@ -1880,21 +2258,28 @@ static int run_trial(const struct config *cfg, const struct cgroup_paths *cgs,
 	struct controller_metrics controller = {}, previous_controller = {};
 	struct bench_memcg_reclaim *skel = NULL;
 	struct child_proc service = { .release_fd = -1 };
-	struct child_proc batch = { .release_fd = -1 };
+	struct child_proc batch[MAX_BATCH_THREADS] = {};
 	struct child_proc userspace = { .release_fd = -1 };
+	struct child_proc prefill = { .release_fd = -1 };
+	struct child_proc memtier = { .release_fd = -1 };
 	struct system_metrics initial, previous, current, final;
 	struct shared_state *shared = NULL;
 	struct controller_args controller_args;
 	struct service_args service_args;
-	struct batch_args batch_args;
+	struct batch_args batch_args[MAX_BATCH_THREADS];
+	struct memcached_args memcached_args;
+	struct memtier_args prefill_args, memtier_args;
 	uint64_t previous_hist[LATENCY_BUCKETS] = {};
 	uint64_t histogram[LATENCY_BUCKETS], previous_ops = 0, previous_batch = 0;
 	uint64_t previous_slo = 0, start, deadline, duration;
-	char raw_prefix[64];
+	char raw_prefix[64], memcached_log[PATH_MAX], prefill_log[PATH_MAX];
+	char prefill_json[PATH_MAX], memtier_log[PATH_MAX], memtier_json[PATH_MAX];
 	int err = 0, child_err, i;
 	bool workloads_started = false;
 	bool have_initial_metrics = false;
 
+	for (i = 0; i < MAX_BATCH_THREADS; i++)
+		batch[i].release_fd = -1;
 	memset(result, 0, sizeof(*result));
 	result->mode = mode;
 	result->repetition = repetition;
@@ -1902,7 +2287,8 @@ static int run_trial(const struct config *cfg, const struct cgroup_paths *cgs,
 	result->slo_ns = slo_ns;
 	write_number(cgs->service, "memory.low",
 		     mode == MODE_MEMORY_LOW ? cfg->service_hot_size : 0);
-	reset_file_cache(cfg->service_file);
+	if (!cfg->memcached)
+		reset_file_cache(cfg->service_file);
 	reset_file_cache(cfg->batch_file);
 	wait_memory_drain(cgs, 64ULL << 20);
 
@@ -1916,33 +2302,86 @@ static int run_trial(const struct config *cfg, const struct cgroup_paths *cgs,
 		.shared = shared,
 		.seed = seed,
 	};
-	batch_args = (struct batch_args) {
-		.cfg = cfg,
-		.shared = shared,
-	};
 	controller_args = (struct controller_args) {
 		.cfg = cfg,
 		.cgs = cgs,
 		.shared = shared,
 	};
 
-	if (mode == MODE_BPF) {
-		err = start_bpf_controller(&skel, cfg, cgs);
+	if (mode_uses_bpf(mode)) {
+		err = start_bpf_controller(&skel, cfg, cgs, mode);
 		if (err)
 			goto out;
 	}
-	err = spawn_child(&service, cgs->service, service_main, &service_args);
-	if (err)
-		goto stop;
-	err = release_child(&service);
-	if (err)
-		goto stop;
-	err = spawn_child(&batch, cgs->batch, batch_main, &batch_args);
-	if (err)
-		goto stop;
-	err = release_child(&batch);
-	if (err)
-		goto stop;
+	if (cfg->memcached) {
+		snprintf(memcached_log, sizeof(memcached_log), "%s/logs/rep%d-%s-memcached.log",
+			 cfg->output, repetition, mode_name(mode));
+		snprintf(prefill_log, sizeof(prefill_log), "%s/logs/rep%d-%s-prefill.log",
+			 cfg->output, repetition, mode_name(mode));
+		snprintf(prefill_json, sizeof(prefill_json),
+			 "%s/memtier/rep%d-%s-prefill.json", cfg->output, repetition,
+			 mode_name(mode));
+		snprintf(memtier_log, sizeof(memtier_log), "%s/logs/rep%d-%s-memtier.log",
+			 cfg->output, repetition, mode_name(mode));
+		snprintf(memtier_json, sizeof(memtier_json), "%s/memtier/rep%d-%s.json",
+			 cfg->output, repetition, mode_name(mode));
+		memcached_args = (struct memcached_args) {
+			.cfg = cfg,
+			.log_path = memcached_log,
+		};
+		prefill_args = (struct memtier_args) {
+			.cfg = cfg,
+			.json_path = prefill_json,
+			.log_path = prefill_log,
+			.prefill = true,
+		};
+		memtier_args = (struct memtier_args) {
+			.cfg = cfg,
+			.json_path = memtier_json,
+			.log_path = memtier_log,
+			.duration_seconds = (total_duration(cfg) + NS_PER_SEC - 1) /
+				NS_PER_SEC,
+		};
+		err = spawn_child(&service, cgs->service, memcached_main, &memcached_args);
+		if (err)
+			goto stop;
+		err = release_child(&service);
+		if (err)
+			goto stop;
+		err = wait_for_memcached(cfg);
+		if (err)
+			goto stop;
+		err = spawn_child(&prefill, cgs->loadgen, memtier_main, &prefill_args);
+		if (err)
+			goto stop;
+		err = release_child(&prefill);
+		if (err)
+			goto stop;
+		err = reap_child(&prefill, 20 * 60 * 1000);
+		if (err)
+			goto stop;
+		store_u32(&shared->service_ready, 1);
+	} else {
+		err = spawn_child(&service, cgs->service, service_main, &service_args);
+		if (err)
+			goto stop;
+		err = release_child(&service);
+		if (err)
+			goto stop;
+	}
+	for (i = 0; i < cfg->batch_threads; i++) {
+		batch_args[i] = (struct batch_args) {
+			.cfg = cfg,
+			.shared = shared,
+			.worker = i,
+		};
+		err = spawn_child(&batch[i], cgs->batch, batch_main, &batch_args[i]);
+		if (err)
+			goto stop;
+		err = release_child(&batch[i]);
+		if (err)
+			goto stop;
+	}
 	if (mode == MODE_USERSPACE) {
 		err = spawn_child(&userspace, cgs->batch, userspace_controller_main,
 				  &controller_args);
@@ -1952,10 +2391,15 @@ static int run_trial(const struct config *cfg, const struct cgroup_paths *cgs,
 		if (err)
 			goto stop;
 	}
+	if (cfg->memcached) {
+		err = spawn_child(&memtier, cgs->loadgen, memtier_main, &memtier_args);
+		if (err)
+			goto stop;
+	}
 	err = wait_ready(&shared->service_ready, 120);
 	if (err)
 		goto stop;
-	err = wait_ready(&shared->batch_ready, 30);
+	err = wait_ready_count(&shared->batch_ready, cfg->batch_threads, 30);
 	if (err)
 		goto stop;
 	if (mode == MODE_USERSPACE) {
@@ -1968,16 +2412,21 @@ static int run_trial(const struct config *cfg, const struct cgroup_paths *cgs,
 		goto stop;
 	have_initial_metrics = true;
 	previous = initial;
-	if (mode == MODE_BPF)
+	if (mode_uses_bpf(mode))
 		read_bpf_controller(skel, &previous_controller);
 	else if (mode == MODE_USERSPACE)
 		read_shared_controller(shared, &previous_controller);
 	else
 		previous_controller.reclaimed = MISSING;
 
-	start = now_ns() + 100 * NS_PER_MSEC;
+	start = now_ns() + (cfg->memcached ? 500 : 100) * NS_PER_MSEC;
 	store_u64(&shared->start_ns, start);
 	store_u32(&shared->start, 1);
+	if (cfg->memcached) {
+		err = release_child(&memtier);
+		if (err)
+			goto stop;
+	}
 	if (skel) {
 		sleep_until(start);
 		err = run_bpf_syscall(skel->progs.enable_pool);
@@ -2010,7 +2459,7 @@ static int run_trial(const struct config *cfg, const struct cgroup_paths *cgs,
 		previous_slo = load_u64(&shared->service_slo_violations);
 		maximum = __atomic_exchange_n(&shared->service_epoch_max_ns, 0,
 					      __ATOMIC_RELAXED);
-		if (mode == MODE_BPF)
+		if (mode_uses_bpf(mode))
 			read_bpf_controller(skel, &controller);
 		else if (mode == MODE_USERSPACE)
 			read_shared_controller(shared, &controller);
@@ -2034,17 +2483,34 @@ stop:
 		skel->bss->control_enabled = 0;
 	if (userspace.release_fd >= 0)
 		close(userspace.release_fd);
+	if (prefill.release_fd >= 0)
+		close(prefill.release_fd);
+	if (memtier.release_fd >= 0)
+		close(memtier.release_fd);
 	if (service.release_fd >= 0)
 		close(service.release_fd);
-	if (batch.release_fd >= 0)
-		close(batch.release_fd);
+	for (i = 0; i < cfg->batch_threads; i++) {
+		if (batch[i].release_fd >= 0)
+			close(batch[i].release_fd);
+	}
 	child_err = reap_child(&userspace, 10000);
 	if (child_err && !err && mode == MODE_USERSPACE)
 		err = child_err;
-	child_err = reap_child(&batch, 10000);
+	for (i = 0; i < cfg->batch_threads; i++) {
+		child_err = reap_child(&batch[i], 10000);
+		if (child_err && !err)
+			err = child_err;
+	}
+	child_err = reap_child(&prefill, 10000);
 	if (child_err && !err)
 		err = child_err;
-	child_err = reap_child(&service, 10000);
+	child_err = reap_child(&memtier, 60000);
+	if (child_err && !err)
+		err = child_err;
+	if (cfg->memcached)
+		child_err = stop_external_child(&service, 10000);
+	else
+		child_err = reap_child(&service, 10000);
 	if (child_err && !err)
 		err = child_err;
 	if (skel) {
@@ -2080,7 +2546,7 @@ stop:
 		result->inconclusive = true;
 		snprintf(result->warning, sizeof(result->warning),
 			 "kernel baseline never crossed memory.high");
-	} else if ((mode == MODE_USERSPACE || mode == MODE_BPF) &&
+	} else if ((mode == MODE_USERSPACE || mode_uses_bpf(mode)) &&
 		   controller.authorized != controller.requested + controller.pending) {
 		result->inconclusive = true;
 		snprintf(result->warning, sizeof(result->warning),
@@ -2118,7 +2584,8 @@ out:
 	signal_shared = NULL;
 	if (shared)
 		munmap(shared, sizeof(*shared));
-	reset_file_cache(cfg->service_file);
+	if (!cfg->memcached)
+		reset_file_cache(cfg->service_file);
 	reset_file_cache(cfg->batch_file);
 	wait_memory_drain(cgs, 64ULL << 20);
 	if (err && workloads_started && cfg->verbose)
@@ -2143,6 +2610,21 @@ static int write_config_json(const struct config *cfg, uint64_t seed)
 		"  \"seed\": %" PRIu64 ",\n"
 		"  \"repeat\": %d,\n"
 		"  \"duration_scale\": %.3f,\n"
+		"  \"batch_threads\": %d,\n"
+		"  \"batch_file\": \"%s\",\n"
+		"  \"reuse_batch_file\": %s,\n"
+		"  \"workload\": \"%s\",\n"
+		"  \"memcached_binary\": \"%s\",\n"
+		"  \"memtier_binary\": \"%s\",\n"
+		"  \"memcached_port\": %d,\n"
+		"  \"memcached_threads\": %d,\n"
+		"  \"memtier_threads\": %d,\n"
+		"  \"memtier_clients\": %d,\n"
+		"  \"memtier_rate\": %" PRIu64 ",\n"
+		"  \"memcached_memory\": %" PRIu64 ",\n"
+		"  \"memcached_data_size\": %" PRIu64 ",\n"
+		"  \"memcached_value_size\": %" PRIu64 ",\n"
+		"  \"memcached_key_count\": %" PRIu64 ",\n"
 		"  \"page_size\": %" PRIu64 ",\n"
 		"  \"host_memory\": %" PRIu64 ",\n"
 		"  \"parent_max\": %" PRIu64 ",\n"
@@ -2166,7 +2648,14 @@ static int write_config_json(const struct config *cfg, uint64_t seed)
 		"  \"batch_rate_pages_per_sec\": [%" PRIu64 ", %" PRIu64 ", %" PRIu64
 		", %" PRIu64 "],\n"
 		"  \"modes\": [",
-		seed, cfg->repeat, cfg->duration_scale, cfg->page_size, cfg->host_memory,
+		seed, cfg->repeat, cfg->duration_scale, cfg->batch_threads, cfg->batch_file,
+		cfg->reuse_batch_file ? "true" : "false",
+		cfg->memcached ? "memcached" : "synthetic",
+		cfg->memcached_binary, cfg->memtier_binary, cfg->memcached_port,
+		cfg->memcached_threads, cfg->memtier_threads, cfg->memtier_clients,
+		cfg->memtier_rate, cfg->memcached_memory, cfg->memcached_data_size,
+		cfg->memcached_value_size, cfg->memcached_key_count,
+		cfg->page_size, cfg->host_memory,
 		cfg->parent_max, cfg->parent_high, cfg->parent_target,
 		cfg->service_file_size, cfg->service_hot_size, cfg->batch_file_size,
 		cfg->epoch_ns, cfg->pool_size, cfg->quantum_pages, cfg->max_pending_pages,
@@ -2366,12 +2855,19 @@ int main(int argc, char **argv)
 		.repeat = 1,
 		.pool_size = MAX_WORKERS,
 		.duration_scale = 1.0,
+		.memcached_port = 11213,
+		.memcached_threads = 8,
+		.memtier_threads = 4,
+		.memtier_clients = 4,
+		.memcached_value_size = 1024,
+		.memtier_rate = 600000,
 		.modes = { MODE_KERNEL, MODE_MEMORY_LOW, MODE_USERSPACE, MODE_BPF },
 		.mode_count = 4,
 	};
 	struct cgroup_paths cgs = {};
 	struct trial_result *results = NULL;
 	char raw_dir[PATH_MAX], samples_path[PATH_MAX], status_detail[256] = {};
+	char logs_dir[PATH_MAX], memtier_dir[PATH_MAX];
 	char service_leaf[64], batch_leaf[64];
 	uint64_t seed = 1, calibration_p99, slo_ns;
 	FILE *samples = NULL;
@@ -2386,6 +2882,9 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	snprintf(cfg.work_dir, sizeof(cfg.work_dir), "/var/tmp");
+	snprintf(cfg.memcached_binary, sizeof(cfg.memcached_binary), "/usr/bin/memcached");
+	snprintf(cfg.memtier_binary, sizeof(cfg.memtier_binary),
+		 "/usr/local/bin/memtier_benchmark");
 	err = parse_options(&cfg, argc, argv, &seed);
 	if (err) {
 		usage(stderr, argv[0]);
@@ -2410,9 +2909,17 @@ int main(int argc, char **argv)
 	if (!err)
 		err = mkdir_one(raw_dir);
 	if (!err)
+		err = path_join(logs_dir, sizeof(logs_dir), cfg.output, "logs");
+	if (!err)
+		err = mkdir_one(logs_dir);
+	if (!err)
+		err = path_join(memtier_dir, sizeof(memtier_dir), cfg.output, "memtier");
+	if (!err)
+		err = mkdir_one(memtier_dir);
+	if (!err)
 		err = path_join(cfg.service_file, sizeof(cfg.service_file), cfg.work_dir,
 				service_leaf);
-	if (!err)
+	if (!err && !cfg.reuse_batch_file)
 		err = path_join(cfg.batch_file, sizeof(cfg.batch_file), cfg.work_dir,
 				batch_leaf);
 	if (err) {
@@ -2437,8 +2944,11 @@ int main(int argc, char **argv)
 		fprintf(stderr, "preparing %" PRIu64 " MiB service and %" PRIu64
 			" MiB batch files\n", cfg.service_file_size >> 20,
 			cfg.batch_file_size >> 20);
-	err = prepare_file(cfg.service_file, cfg.service_file_size, seed);
-	if (!err)
+	err = cfg.memcached ? 0 :
+		prepare_file(cfg.service_file, cfg.service_file_size, seed);
+	if (!err && cfg.reuse_batch_file)
+		err = validate_prepared_file(cfg.batch_file, cfg.batch_file_size);
+	else if (!err)
 		err = prepare_file(cfg.batch_file, cfg.batch_file_size, seed ^ 0x5bd1e995);
 	if (err) {
 		fprintf(stderr, "cannot prepare workload files: %s\n", strerror(-err));
@@ -2467,15 +2977,22 @@ int main(int argc, char **argv)
 		if (cfg.verbose)
 			fprintf(stderr, "repetition %d: calibrating service latency\n",
 				repetition);
-		err = calibrate_service(&cfg, &cgs, seed + repetition, &calibration_p99);
-		if (err) {
-			fprintf(stderr, "service calibration failed: %s\n", strerror(-err));
-			failures++;
-			break;
+		if (cfg.memcached) {
+			calibration_p99 = 0;
+			slo_ns = 0;
+		} else {
+			err = calibrate_service(&cfg, &cgs, seed + repetition,
+						&calibration_p99);
+			if (err) {
+				fprintf(stderr, "service calibration failed: %s\n",
+					strerror(-err));
+				failures++;
+				break;
+			}
+			slo_ns = calibration_p99 * 3;
+			if (slo_ns < 100000)
+				slo_ns = 100000;
 		}
-		slo_ns = calibration_p99 * 3;
-		if (slo_ns < 100000)
-			slo_ns = 100000;
 		for (mode_index = 0; mode_index < cfg.mode_count && !interrupted;
 		     mode_index++) {
 			enum bench_mode mode =
@@ -2533,8 +3050,10 @@ out:
 		fclose(samples);
 	free(results);
 	if (!cfg.keep_files) {
-		unlink(cfg.service_file);
-		unlink(cfg.batch_file);
+		if (!cfg.memcached)
+			unlink(cfg.service_file);
+		if (!cfg.reuse_batch_file)
+			unlink(cfg.batch_file);
 	}
 	if (cgroups_created)
 		cleanup_cgroups(&cgs);

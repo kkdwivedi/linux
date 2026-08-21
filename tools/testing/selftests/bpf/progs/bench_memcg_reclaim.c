@@ -74,6 +74,7 @@ __u32 refault_gain;
 __u32 recovery_epochs;
 __u32 scalein_epochs;
 __u32 pool_size;
+__u32 fixed_concurrency;
 __u32 control_enabled;
 
 /* Counters sampled by the userspace benchmark. */
@@ -321,25 +322,34 @@ static int reclaim_controller(void *map, int *key, void *value)
 						      max_pending_pages), max_pending_pages);
 
 	pending = enqueue_work(queue, new_work, &old_pending);
-	desired = pending ? (pending + capacity_pages - 1) / capacity_pages : 0;
-	if (desired > pool_size)
-		desired = pool_size;
-
-	current_limit = queue->concurrency_limit;
-	if (desired > current_limit) {
+	if (fixed_concurrency) {
+		desired = pending ? fixed_concurrency : 0;
+		if (desired > pool_size)
+			desired = pool_size;
 		current_limit = desired;
 		healthy_epochs = 0;
-	} else if (desired < current_limit) {
-		if (!parent_error && refault_delta <= refault_budget && pending <= old_pending)
-			healthy_epochs++;
-		else
+	} else {
+		desired = pending ? (pending + capacity_pages - 1) / capacity_pages : 0;
+		if (desired > pool_size)
+			desired = pool_size;
+
+		current_limit = queue->concurrency_limit;
+		if (desired > current_limit) {
+			current_limit = desired;
 			healthy_epochs = 0;
-		if (healthy_epochs >= (scalein_epochs ? scalein_epochs : 1)) {
-			current_limit--;
+		} else if (desired < current_limit) {
+			if (!parent_error && refault_delta <= refault_budget &&
+			    pending <= old_pending)
+				healthy_epochs++;
+			else
+				healthy_epochs = 0;
+			if (healthy_epochs >= (scalein_epochs ? scalein_epochs : 1)) {
+				current_limit--;
+				healthy_epochs = 0;
+			}
+		} else {
 			healthy_epochs = 0;
 		}
-	} else {
-		healthy_epochs = 0;
 	}
 
 	queue->concurrency_limit = current_limit;

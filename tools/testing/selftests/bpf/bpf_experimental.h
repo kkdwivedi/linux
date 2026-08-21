@@ -351,12 +351,14 @@ extern void bpf_iter_css_destroy(struct bpf_iter_css *it) __weak __ksym;
 extern int bpf_wq_init(struct bpf_wq *wq, void *p__map, unsigned int flags) __weak __ksym;
 extern int bpf_wq_start(struct bpf_wq *wq, unsigned int flags) __weak __ksym;
 
+struct bpf_waitq;
 extern int bpf_waitq_init(struct bpf_waitq *waitq, void *p__map,
 			  unsigned int flags) __weak __ksym;
 extern int bpf_waitq_wait(struct bpf_waitq *waitq, const __u32 *word, __u32 expected,
 			  __u64 timeout_ns, __u64 flags) __weak __ksym;
 extern int bpf_waitq_wake(struct bpf_waitq *waitq, __u32 nr, __u64 flags) __weak __ksym;
 
+struct bpf_kthread;
 extern int bpf_kthread_create(struct bpf_kthread *kthread, void *p__map,
 			      __u64 cgroup_id,
 			      int (callback_fn)(void *map, int *key, void *value)) __weak __ksym;
