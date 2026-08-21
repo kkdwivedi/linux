@@ -1,0 +1,21 @@
+Adaptive memcg reclaim benchmark
+
+rep mode         status        p99-us max-us svc-ops batch-pages high refault direct-scan kswapd-scan peak-slots reclaim-pages
+  0 kernel       complete           0      0       0    33815468 58189       0    57311475           0            0 n/a
+  0 memory-low   complete           0      0       0    33815385 58116       0    57314324           0            0 n/a
+  0 userspace    complete           0      0       0    33815364 17617       0    14236338           0            4 n/a
+  0 bpf-fixed-1  complete           0      0       0    33815445 17675       0    24416680           0            1 19783680
+  0 bpf          complete           0      0       0    33815597 17622       0    23617685           0            4 19824794
+  0 bpf-fixed-max complete           0      0       0    33815315 17620       0    24635811           0            4 19811020
+  1 memory-low   complete           0      0       0    33815253 58330       0    57308948           0            0 n/a
+  1 userspace    complete           0      0       0    33815288 17621       1    14349005           0            4 n/a
+  1 bpf-fixed-1  complete           0      0       0    33815420 17651       0    23899188           0            1 19798528
+  1 bpf          complete           0      0       0    33815550 17603       0    21019363           0            4 19827657
+  1 bpf-fixed-max complete           0      0       0    33815546 17615       0    24139926           0            4 19815479
+  1 kernel       complete           0      0       0    33815461 58050       0    57308183           0            0 n/a
+  2 userspace    complete           0      0       0    33815445 17633       0    14250654           0            4 n/a
+  2 bpf-fixed-1  complete           0      0       0    33815425 17648       0    23979145           0            1 19797504
+  2 bpf          complete           0      0       0    33815357 17584       0    23339758           0            4 19835319
+  2 bpf-fixed-max complete           0      0       0    33815239 17629       1    21551953           0            4 19816923
+  2 kernel       complete           0      0       0    33815424 58492       0    57318604           0            0 n/a
+  2 memory-low   complete           0      0       0    33815163 58513       0    57318366           0            0 n/a

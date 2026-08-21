@@ -1,0 +1,384 @@
+<h1>Dynamic memcg reclaim with Memcached at a 64 GiB limit</h1>
+<h2>Technical summary</h2>
+<p>The experiment finds a strong benefit from <strong>proactive targeted reclaim</strong>, but it does not
+find a worthwhile benefit from scaling the BPF reclaim pool from one to four workers for
+this workload.</p>
+<ul>
+<li>Compared with kernel reclaim, dynamic BPF reclaim reduced median <code>memory.high</code> events by
+  69.7%, direct-reclaim scanning by 59.3%, batch PSI <code>some</code> time by 83.9%, and batch-cgroup
+  CPU time by 16.2% in matched trials.</li>
+<li>Memcached held the 120,000 operations/s open-loop target in every policy. Median GET p99
+  remained 0.175 ms; median p99.99 was 0.391 ms for the kernel and 0.399 ms for dynamic BPF.
+  The reclaim improvement therefore preserved service performance but did not improve it at
+  this offered load.</li>
+<li>Dynamic BPF versus BPF fixed-one reduced direct scanning by only 3.27% at the median. It
+  increased batch PSI by 61.3%, batch CPU by 3.1%, and desired reclaim-worker slot-seconds by
+  316%. Throughput changed by 0.011% and p99.99 did not change at the median.</li>
+<li>Dynamic BPF behaved like fixed-four through nearly the entire pressure interval. Its short
+  4 -&gt; 3 -&gt; 2 -&gt; 1 recovery staircase did not save worker capacity relative to fixed-four;
+  it used 134.8 versus 129.6 desired-worker slot-seconds.</li>
+<li>The userspace <code>memory.reclaim</code> controller was the strongest on direct scanning (75.1% less)
+  and batch PSI (93.9% less). Its reclaim-caller CPU is outside the batch cgroup, so its
+  batch-CPU number is not directly comparable with the BPF modes.</li>
+<li><code>memory.low</code> alone did not help this hierarchy: its direct scanning and <code>memory.high</code>
+  events were effectively identical to the kernel baseline.</li>
+</ul>
+<p>The supported claim is therefore: <strong>BPF-driven proactive reclaim provides substantial value,
+but the current pending/capacity-based concurrency scaler does not provide incremental value
+on this Memcached-plus-clean-cache workload.</strong></p>
+<p><img alt="Policy comparison" src="policy_comparison.png" /></p>
+<h2>Final policy results</h2>
+<p>Values are medians across three repetitions. Bracketed values are the full observed range.</p>
+<table>
+<thead>
+<tr>
+<th>Policy</th>
+<th style="text-align: right;">Operations/s</th>
+<th style="text-align: right;">GET p99.99 (ms)</th>
+<th style="text-align: right;"><code>memory.high</code> events</th>
+<th style="text-align: right;">Direct scan (GiB)</th>
+<th style="text-align: right;">Batch PSI some (s)</th>
+<th style="text-align: right;">Batch CPU (s)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Kernel</td>
+<td style="text-align: right;">119,731 [119,647-119,818]</td>
+<td style="text-align: right;">0.391 [0.375-0.415]</td>
+<td style="text-align: right;">58,189 [58,050-58,492]</td>
+<td style="text-align: right;">218.63 [218.61-218.65]</td>
+<td style="text-align: right;">1.861 [1.803-1.884]</td>
+<td style="text-align: right;">157.0 [153.0-160.8]</td>
+</tr>
+<tr>
+<td><code>memory.low</code></td>
+<td style="text-align: right;">119,725 [119,688-119,757]</td>
+<td style="text-align: right;">0.495 [0.407-0.527]</td>
+<td style="text-align: right;">58,330 [58,116-58,513]</td>
+<td style="text-align: right;">218.64 [218.62-218.65]</td>
+<td style="text-align: right;">1.883 [1.662-1.896]</td>
+<td style="text-align: right;">154.8 [149.1-158.1]</td>
+</tr>
+<tr>
+<td>Userspace</td>
+<td style="text-align: right;">119,740 [119,732-119,854]</td>
+<td style="text-align: right;">0.423 [0.383-0.439]</td>
+<td style="text-align: right;">17,621 [17,617-17,633]</td>
+<td style="text-align: right;">54.36 [54.31-54.74]</td>
+<td style="text-align: right;">0.110 [0.108-0.123]</td>
+<td style="text-align: right;">127.2 [121.0-127.6]</td>
+</tr>
+<tr>
+<td>BPF fixed-one</td>
+<td style="text-align: right;">119,743 [119,711-119,778]</td>
+<td style="text-align: right;">0.399 [0.399-0.415]</td>
+<td style="text-align: right;">17,651 [17,648-17,675]</td>
+<td style="text-align: right;">91.47 [91.17-93.14]</td>
+<td style="text-align: right;">0.172 [0.160-0.180]</td>
+<td style="text-align: right;">125.5 [123.3-133.4]</td>
+</tr>
+<tr>
+<td>BPF dynamic</td>
+<td style="text-align: right;">119,726 [119,724-119,760]</td>
+<td style="text-align: right;">0.399 [0.391-0.479]</td>
+<td style="text-align: right;">17,603 [17,584-17,622]</td>
+<td style="text-align: right;">89.03 [80.18-90.09]</td>
+<td style="text-align: right;">0.290 [0.225-0.309]</td>
+<td style="text-align: right;">134.7 [127.1-135.5]</td>
+</tr>
+<tr>
+<td>BPF fixed-four</td>
+<td style="text-align: right;">119,738 [119,726-119,743]</td>
+<td style="text-align: right;">0.407 [0.399-0.431]</td>
+<td style="text-align: right;">17,620 [17,615-17,629]</td>
+<td style="text-align: right;">92.09 [82.21-93.98]</td>
+<td style="text-align: right;">0.316 [0.193-0.317]</td>
+<td style="text-align: right;">132.3 [124.8-133.5]</td>
+</tr>
+</tbody>
+</table>
+<p>All policies had a median GET p99 of 0.175 ms except fixed-four, whose median was 0.167 ms.
+Every trial had zero Memcached misses and zero connection errors.</p>
+<p>The BPF kthreads run in the batch cgroup, so their CPU is included in BPF batch CPU. The
+userspace controller threads remain in the benchmark's cgroup; CPU spent by their synchronous
+<code>memory.reclaim</code> calls is not included in userspace batch CPU. CPU comparisons among kernel and
+BPF modes are meaningful, but the userspace CPU reduction in the table is not an end-to-end CPU
+reduction.</p>
+<h3>Matched comparisons</h3>
+<p>Percentage reductions are calculated within each repetition before taking the median. A
+negative reduction is a regression.</p>
+<table>
+<thead>
+<tr>
+<th>Candidate versus baseline</th>
+<th style="text-align: right;">Throughput change</th>
+<th style="text-align: right;">High-event reduction</th>
+<th style="text-align: right;">Direct-scan reduction</th>
+<th style="text-align: right;">Batch-PSI reduction</th>
+<th style="text-align: right;">Batch-CPU reduction</th>
+<th style="text-align: right;">p99.99 reduction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Userspace vs kernel</td>
+<td style="text-align: right;">+0.078%</td>
+<td style="text-align: right;">69.72%</td>
+<td style="text-align: right;">75.14%</td>
+<td style="text-align: right;">93.88%</td>
+<td style="text-align: right;">20.91%</td>
+<td style="text-align: right;">-12.28%</td>
+</tr>
+<tr>
+<td>BPF fixed-one vs kernel</td>
+<td style="text-align: right;">+0.010%</td>
+<td style="text-align: right;">69.62%</td>
+<td style="text-align: right;">58.17%</td>
+<td style="text-align: right;">90.74%</td>
+<td style="text-align: right;">17.95%</td>
+<td style="text-align: right;">-2.05%</td>
+</tr>
+<tr>
+<td>BPF dynamic vs kernel</td>
+<td style="text-align: right;">+0.024%</td>
+<td style="text-align: right;">69.72%</td>
+<td style="text-align: right;">59.28%</td>
+<td style="text-align: right;">83.92%</td>
+<td style="text-align: right;">16.21%</td>
+<td style="text-align: right;">-6.40%</td>
+</tr>
+<tr>
+<td>BPF dynamic vs fixed-one</td>
+<td style="text-align: right;">+0.011%</td>
+<td style="text-align: right;">0.30%</td>
+<td style="text-align: right;">3.27%</td>
+<td style="text-align: right;">-61.25%</td>
+<td style="text-align: right;">-3.11%</td>
+<td style="text-align: right;">0.00%</td>
+</tr>
+<tr>
+<td>BPF dynamic vs fixed-four</td>
+<td style="text-align: right;">-0.002%</td>
+<td style="text-align: right;">0.07%</td>
+<td style="text-align: right;">4.13%</td>
+<td style="text-align: right;">2.17%</td>
+<td style="text-align: right;">-1.84%</td>
+<td style="text-align: right;">1.97%</td>
+</tr>
+</tbody>
+</table>
+<p>For dynamic versus fixed-four, the paired direct-scan reduction ranged from -8.30% to 12.93%,
+and the PSI reduction ranged from -16.21% to 8.60%. Three repetitions do not support a claim
+that either policy is better on those metrics.</p>
+<h2>Scale-up and scale-down behavior</h2>
+<p>The policies authorized closely matched reclaim volume: fixed-one authorized 74.89 GiB,
+dynamic authorized 74.82 GiB, and fixed-four authorized 74.83 GiB at the median. BPF reclaim
+returned about 75.5-75.6 GiB for each policy. The comparison is therefore primarily about how
+the same work is scheduled, not about allowing dynamic BPF to reclaim more memory.</p>
+<p><img alt="Controller scaling" src="controller_scaling.png" /></p>
+<p>The controller remained at zero workers through idle and most of steady state. When the
+parent crossed the control threshold at about 19.6 seconds:</p>
+<ul>
+<li>fixed-one selected one worker;</li>
+<li>fixed-four selected four workers;</li>
+<li>dynamic immediately selected four workers because pending work exceeded its measured
+  per-worker capacity;</li>
+<li>dynamic stayed at four through burst and most of recovery, then took three 600 ms
+  hysteresis steps to reach zero;</li>
+<li>fixed-four went directly to zero when pending work drained.</li>
+</ul>
+<p>Dynamic used 134.8 desired-worker slot-seconds, fixed-four used 129.6, and fixed-one used 32.4.
+The extra concurrency did consistently reduce direct scanning versus fixed-one by 2.67-12.05%
+per repetition, but the median saving was small and came with worse PSI and CPU. Fixed-four
+showed the same pattern, which points to limited marginal scaling in memcg reclaim rather than
+a failure to wake the BPF kthreads.</p>
+<p>The pending-work graph is a 200 ms point sample. Workers can drain a queue between samples, so
+it is useful for timing but not a reliable measure of the true peak queue depth.</p>
+<h2>Memcached performance</h2>
+<p><img alt="Memcached time series" src="service_timeseries.png" /></p>
+<p>The service ran at a fixed open-loop target rather than maximum throughput. This makes latency
+comparable across reclaim policies and prevents a policy from appearing faster merely because
+it completed fewer requests. All six policies delivered 99.7-99.9% of the 120,000 operations/s
+target. No phase shows a sustained throughput collapse or a latency step associated with the
+burst.</p>
+<p>The experiment therefore demonstrates that proactive reclaim improves sibling progress and
+reduces reclaim work <strong>without hurting Memcached</strong>. It does not demonstrate a Memcached latency
+benefit at this load. A separate offered-load sweep near service saturation is required before
+claiming a tail-latency improvement.</p>
+<h2>Experimental design</h2>
+<p>The workload design borrows the Memcached request mix used by
+<a href="https://www.usenix.org/conference/nsdi23/presentation/qiao">Hermit</a>: a Facebook-like 99.8%
+GET / 0.2% SET mix and Zipf 0.99 key distribution. Hermit is an important positive reference
+because its adaptive reclaimer normally used at most two cores, scaled to four during bursts,
+and beat fixed reclaim-core counts. This experiment deliberately adds fixed-one and fixed-four
+controls to test whether the same scaling claim holds for the branch's memcg helper.</p>
+<p>The memory scale also follows public systems-memory examples rather than the original 1 GiB
+selftest. <a href="https://arxiv.org/abs/2109.02922">Hermes</a> evaluates proactive reclamation on services
+with tens of GiB of memory, while the
+<a href="https://github.com/IntelLabs/tierscape">TierScape artifact</a> includes a 40 GiB Memcached setup.
+<a href="https://www.cs.cmu.edu/~dskarlat/publications/tmo_asplos22.pdf">TMO</a> and
+<a href="https://www.kernel.org/doc/html/v5.17/admin-guide/mm/damon/reclaim.html">DAMON_RECLAIM</a> provide
+additional examples of proactive, feedback-controlled memory reclamation.</p>
+<h3>System and software</h3>
+<ul>
+<li>Host: dual-socket AMD EPYC 7773X, 256 logical CPUs, 251 GiB RAM.</li>
+<li>Guest: QEMU/virtme-ng, 48 vCPUs, 96 GiB configured RAM, one virtual NUMA node.</li>
+<li>Kernel: <code>7.2.0-rc6-00638-g02201107f4d6-dirty</code>, commit <code>02201107f4d6</code>, built with clang/LLD
+  23; <code>CONFIG_MEMCG=y</code>, <code>CONFIG_PSI=y</code>, and MGLRU disabled.</li>
+<li>Branch: <code>codex/bpf-waitq-memcached-eval</code>, based on
+  <code>origin/bpf-waitq-kthread-reclaim-v1</code>.</li>
+<li>Memcached: 1.6.40, 12 worker threads, binary protocol.</li>
+<li>Load generator: <a href="https://github.com/redis/memtier_benchmark">memtier_benchmark</a> 2.5.1 at
+  commit <code>5f634d171b83efca9640c5a87606c47b34d3d330</code>, 16 threads and one connection per thread.</li>
+</ul>
+<h3>Memory hierarchy and data</h3>
+<ul>
+<li>Parent <code>memory.max</code>: 64 GiB.</li>
+<li>Parent <code>memory.high</code>: 44.8 GiB.</li>
+<li>Controller parent target: 41.6 GiB.</li>
+<li>Memcached item-cache limit: 25.6 GiB.</li>
+<li>Prefill: 20,132,659 keys with 1 KiB values, 19.2 GiB of payload; observed service-cgroup
+  memory was about 22.4 GiB.</li>
+<li><code>memory.low</code> policy: service protection of 28.8 GiB.</li>
+<li>Batch source: an 80 GiB preallocated, unwritten ext4 file, scanned by 16 threads with
+  disjoint ranges.</li>
+</ul>
+<p>The unwritten ext4 extents produce clean page-cache pressure without storage reads. Each trial
+faulted about 129 GiB by wrapping over the 80 GiB file. This removes device latency and isolates
+reclaim scheduling, but it is not a model of remote-memory, swap, or SSD I/O.</p>
+<h3>Trial phases and policies</h3>
+<p>Each trial used a fresh Memcached process and a fresh prefill, then ran for 60 seconds:</p>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th style="text-align: right;">Duration</th>
+<th style="text-align: right;">Batch fault rate</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Idle</td>
+<td style="text-align: right;">7.5 s</td>
+<td style="text-align: right;">0 GiB/s</td>
+</tr>
+<tr>
+<td>Steady</td>
+<td style="text-align: right;">15 s</td>
+<td style="text-align: right;">1.6 GiB/s</td>
+</tr>
+<tr>
+<td>Burst</td>
+<td style="text-align: right;">15 s</td>
+<td style="text-align: right;">6.4 GiB/s</td>
+</tr>
+<tr>
+<td>Recovery</td>
+<td style="text-align: right;">22.5 s</td>
+<td style="text-align: right;">0.8 GiB/s for the first half, then idle</td>
+</tr>
+</tbody>
+</table>
+<p>The six policies were kernel reclaim, service <code>memory.low</code>, a four-thread userspace
+<code>memory.reclaim</code> controller, BPF fixed-one, BPF dynamic 1-4, and BPF fixed-four. The proactive
+policies used the same 200 ms control epoch, 16 MiB reclaim quantum, parent target, refault
+budget, and authorization formula. Trial order was cyclically rotated for each of three
+repetitions.</p>
+<h2>Measurement and data quality</h2>
+<p>The result uses median and full range because three repetitions are enough to reject the large
+scaling effect hypothesized here, but not enough for a precise confidence interval. The paired
+tables compare policies within the same repetition.</p>
+<p>The automated quality gate passed:</p>
+<ul>
+<li>18 of 18 trials completed and each supplied exactly 300 200 ms samples;</li>
+<li>18 prefill and 18 measurement Memtier JSON files parsed successfully;</li>
+<li>every trial stayed within 1% of the offered-load target;</li>
+<li>zero cache misses, connection errors, <code>memory.max</code> events, OOM events, or OOM kills;</li>
+<li>batch fault volume differed by less than 0.01 GiB;</li>
+<li>zero failed BPF reclaim pages and valid controller debt accounting;</li>
+<li>all adaptive trials scaled above one worker and returned to zero;</li>
+<li>no kernel crash, lockup, hung-task, or sanitizer signature in dmesg.</li>
+</ul>
+<p>The VM boot log has a QEMU CPU-feature dependency notice and an ACPI <code>_OSC</code> message. Neither
+appeared during the workload or correlated with a trial failure.</p>
+<p>See <a href="QA.md">QA.md</a>, <a href="trial_metrics.csv">trial_metrics.csv</a>,
+<a href="policy_summary.csv">policy_summary.csv</a>, <a href="paired_comparisons.csv">paired_comparisons.csv</a>, and
+the executed <a href="analysis.ipynb">analysis.ipynb</a> for the auditable calculations.</p>
+<h2>Interpretation</h2>
+<h3>Why proactive reclaim helped</h3>
+<p>The controller starts reclaiming the batch cgroup before the shared parent forces faulting
+threads into direct reclaim. That moves reclaim work away from the allocation path. The effect
+is visible in lower <code>memory.high</code> events, less direct scanning, less batch PSI, and less batch
+CPU. Targeting the batch cgroup also avoids reclaiming Memcached's anonymous item cache.</p>
+<p><code>memory.low</code> protects the service cgroup, but it does not create free memory or proactively
+reclaim the batch cgroup. In this setup Memcached was already below its protected allowance;
+the parent still crossed <code>memory.high</code>, so batch faulting threads performed essentially the
+same direct reclaim as the unprotected kernel baseline.</p>
+<h3>Why dynamic concurrency did not add value</h3>
+<p>The dynamic controller estimates capacity from pages requested per epoch. Pending work exceeded
+that estimate as soon as control activated, so it jumped directly to four and remained there.
+The fixed controls show weak marginal scaling from additional BPF workers: direct scanning fell
+slightly, but PSI and CPU got worse. Plausible causes include shared memcg/LRU serialization,
+repeated scans of the same reclaimable population, and synchronization overhead around a single
+target memcg. The present data identifies the scalability symptom but does not isolate which
+kernel lock or scan path dominates.</p>
+<p>The userspace controller writes synchronously to <code>memory.reclaim</code>, while the BPF workers call
+<code>bpf_try_to_free_mem_cgroup_pages()</code> directly. Their similar authorization volume but different
+direct-scanning outcome suggests that API completion semantics, retry behavior, or timing also
+deserve investigation. The userspace reclaim caller is also accounted outside the batch cgroup,
+so a future comparison needs whole-guest CPU accounting. These are inferences from the results,
+not proven root causes.</p>
+<h3>Memcached-specific policy gap</h3>
+<p>The controller's service feedback is <code>workingset_refault_file</code>. Memcached's item cache is
+anonymous memory, so this signal stayed at zero. The experiment primarily exercised parent
+error feedback, not workload-hotness feedback. A production Memcached policy should incorporate
+anonymous refault/activity, PSI, or a service SLO signal rather than relying on file refaults.</p>
+<h2>Recommendations and next experiments</h2>
+<ol>
+<li>Use proactive targeted reclaim, but default this workload to one BPF worker. Scale out only
+   when measured reclaimed pages per unit CPU increase with concurrency.</li>
+<li>Change the capacity estimator from requested pages to actual reclaimed pages and track
+   per-worker reclaim latency, scan efficiency, and CPU. Stop scaling when marginal efficiency
+   falls.</li>
+<li>Add fixed-two and a concurrency sweep. The current 1-versus-4 controls bound the result but
+   do not locate the best point.</li>
+<li>Compare <code>memory.reclaim</code> and the BPF helper with the same single worker and trace
+   <code>try_to_free_mem_cgroup_pages()</code> retries, LRU locks, scan/steal ratio, and reclaim duration.</li>
+<li>Run a Memcached offered-load sweep at roughly 60%, 80%, 90%, and 95% of measured capacity to
+   determine whether reduced reclaim work turns into a service tail-latency benefit near
+   saturation.</li>
+<li>Add an anonymous-memory pressure workload and a real cold-storage tier. This clean-cache test
+   intentionally excludes swap/SSD/remote-memory I/O and hot/cold classification.</li>
+<li>Repeat with NUMA pinning and MGLRU enabled. The current guest has one virtual NUMA node and
+   does not evaluate topology-sensitive reclaim or modern LRU generation behavior.</li>
+</ol>
+<h2>Reproduction</h2>
+<p>The exact benchmark configuration is in <a href="config.json">config.json</a>, and guest provenance is in
+<a href="environment.txt">environment.txt</a>. The run used:</p>
+<pre><code class="language-sh">BPF_MEMCG_VM_CPUS=48 \
+BPF_MEMCG_VM_MEMORY=96G \
+BPF_MEMCG_VM_DISK_IMAGE=.kdev/bench-work/memcg-reclaim-96g.img \
+BPF_MEMCG_VM_BATCH_FILE=batch.dat \
+tools/testing/selftests/bpf/run_bench_memcg_reclaim_vm.sh \
+  --workload memcached \
+  --modes kernel,memory-low,userspace,bpf-fixed-1,bpf,bpf-fixed-max \
+  --repeat 3 \
+  --duration-scale 3.75 \
+  --parent-max 64G \
+  --batch-threads 16 \
+  --memcached-value 1024 \
+  --memcached-threads 12 \
+  --memtier-threads 16 \
+  --memtier-clients 1 \
+  --memtier-rate 120000 \
+  --memtier-bin &quot;$PWD/.kdev/tools/memtier-benchmark-2.5.1/memtier_benchmark&quot; \
+  --output &quot;$PWD/tools/testing/selftests/bpf/results/memcg-reclaim-memcached-64g-20260821&quot; \
+  --seed 20260821 \
+  --verbose
+</code></pre>
+<p>The disk image contained a preallocated 80 GiB <code>batch.dat</code>. The checked-in analyzer can be run
+with:</p>
+<pre><code class="language-sh">python3 tools/testing/selftests/bpf/analyze_memcg_reclaim_memcached.py \
+  tools/testing/selftests/bpf/results/memcg-reclaim-memcached-64g-20260821
+</code></pre>
