@@ -1,0 +1,40 @@
+fentry:vmlinux:try_to_free_mem_cgroup_pages
+/pid == $1/
+{
+	@start[tid] = nsecs;
+	@count = @count + 1;
+	@thread_calls[tid] = count();
+	@requested_pages = @requested_pages + args.nr_pages;
+}
+
+fexit:vmlinux:try_to_free_mem_cgroup_pages
+/pid == $1 && @start[tid]/
+{
+	$elapsed = nsecs - @start[tid];
+	@total_ns = @total_ns + $elapsed;
+	@thread_ns[tid] = sum($elapsed);
+	@reclaimed_pages = @reclaimed_pages + retval;
+	delete(@start[tid]);
+}
+
+interval:s:$2
+{
+	printf("direct_reclaim_count,%llu\n", @count);
+	printf("direct_reclaim_total_ns,%llu\n", @total_ns);
+	printf("direct_reclaim_requested_pages,%llu\n", @requested_pages);
+	printf("direct_reclaim_reclaimed_pages,%llu\n", @reclaimed_pages);
+	print(@thread_calls);
+	print(@thread_ns);
+	exit();
+}
+
+END
+{
+	clear(@start);
+	clear(@count);
+	clear(@total_ns);
+	clear(@requested_pages);
+	clear(@reclaimed_pages);
+	clear(@thread_calls);
+	clear(@thread_ns);
+}
